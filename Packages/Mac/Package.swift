@@ -12,7 +12,7 @@ import PackageDescription
 
 let package = Package(
     name: "MeetMac",
-    platforms: [.macOS("14.2")],
+    platforms: [.macOS("14.4")],
     products: [
         .library(name: "Capture", targets: ["Capture"]),
         .library(name: "Permissions", targets: ["Permissions"]),
