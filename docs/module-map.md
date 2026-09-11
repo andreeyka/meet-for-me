@@ -1,6 +1,9 @@
 # Карта модулей
 
-Версия 1.1. Утверждена пользователем (MEE-1). Источник: `docs/architecture.md` v0.6.
+Версия 1.2. Утверждена пользователем (MEE-1). Источник: `docs/architecture.md` v0.7.
+Изменение против v1.1: назван владелец каталога эталонных файлов форматов
+`Packages/Core/Tests/DomainCoreTests/Fixtures/` (см. §1) — решение из приёмки MEE-26, до этого оно
+жило только в комментарии Linear.
 Изменение против v1: модули разложены по двум пакетам SwiftPM (`Packages/Core`, `Packages/Mac`) —
 следствие принятого ограничения «модули DEV-2 собираются без macOS-фреймворков»: в одном пакете
 `swift test` в облачной сессии падал бы на первом же таргете с CoreAudio.
@@ -19,6 +22,7 @@
 Packages/Core/Package.swift   ← архитектор: модули без macOS-фреймворков
 Packages/Core/Sources/<Модуль>/      код модуля
 Packages/Core/Tests/<Модуль>Tests/   тесты модуля
+Packages/Core/Tests/DomainCoreTests/Fixtures/  ← архитектор: эталонные файлы форматов (исключение, см. ниже)
 Packages/Mac/Package.swift    ← архитектор: модули, которым нужны CoreAudio, EventKit, XPC
 Packages/Mac/Sources/<Модуль>/       код модуля
 Packages/Mac/Tests/<Модуль>Tests/    тесты модуля
@@ -39,6 +43,17 @@ spikes/<имя>/                 ← спайки: код вне модулей,
 Файлы сборки (`Package.swift`, `project.yml`, `.github/`, `.swiftlint.yml`, `Makefile`) принадлежат **архитектору**:
 они по природе перечисляют все модули сразу, и их правка разработчиком — это изменение границ, то есть
 `interface-request`, а не коммит.
+
+**Единственное исключение из правила «каталог тестов принадлежит владельцу модуля» —**
+`Packages/Core/Tests/DomainCoreTests/Fixtures/`. Каталог принадлежит **архитектору**: в нём лежат эталонные
+файлы форматов (`manifest.json` по C-002, `transcript.v1.json` по C-003) — байты, которые контракт предписывает.
+DEV-2 читает эти файлы из своих тестов, но **не изменяет** их; нужна правка эталона — `interface-request`, как
+на любой контрактный артефакт.
+
+Смысл исключения в том, что эталон пишет не реализатор. Если бы его писал DEV-2, проверка «файл, записанный
+другой стороной, читается» проверяла бы совместимость кода с самим собой и была бы зелёной всегда. Ровно поэтому
+эталон нельзя подогнать под собственную реализацию — его нельзя изменить, не пройдя через контракт.
+Решение принято при приёмке MEE-26.
 
 ## 2. Владельцы и среда
 
@@ -63,6 +78,8 @@ Foundation, `storage` — Foundation + GRDB, `engine-xpc`/`gigaam` — код и
 - Слой: домен
 - Процесс: App
 - Каталоги: `Packages/Core/Sources/DomainCore/`, `Packages/Core/Sources/DomainTestKit/`, `Packages/Core/Tests/DomainCoreTests/`
+  — **кроме** `Packages/Core/Tests/DomainCoreTests/Fixtures/`: каталог эталонных файлов форматов принадлежит
+  архитектору, DEV-2 читает его из тестов, но не изменяет (§1)
 - Владелец: DEV-2
 - Реализует контракты: DTO (`MeetingEvent`, `RecordingManifest`, `Transcript`, `JoinInfo`, `MeetingSignal`), определения портов
   (`AudioCapturePort`, `CalendarPort`, `PermissionsPort`, `ProcessMonitorPort`, `PowerPort`), машина состояний
