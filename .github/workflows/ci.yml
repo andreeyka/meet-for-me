@@ -54,16 +54,10 @@ jobs:
           swiftlint --strict --reporter github-actions-logging 2>&1 | tee "$RUNNER_TEMP/swiftlint.log"
           status=$?
           verdict=$(grep -m1 'Done linting' "$RUNNER_TEMP/swiftlint.log" || echo "линт завершился с кодом $status")
-          # Вердикт дублируется в аннотацию и в сводку прогона: доказательство
-          # того, что линтер отработал, не должно требовать раскопок в журнале.
+          # Версия и вердикт выносятся отдельной аннотацией: «линтер отработал»
+          # должно подтверждаться, не открывая журнал работы. Сами нарушения
+          # репортер github-actions-logging вешает аннотациями на строки диффа.
           echo "::notice title=SwiftLint::$version — $verdict"
-          {
-            echo "### SwiftLint $version"
-            echo ''
-            echo '```'
-            cat "$RUNNER_TEMP/swiftlint.log"
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
           exit $status
 
       - run: swift --version
