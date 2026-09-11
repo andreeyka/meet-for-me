@@ -1,0 +1,15 @@
+# Владелец файла — архитектор.
+excluded:
+  - Packages/Core/.build
+  - Packages/Mac/.build
+  - spikes
+
+line_length:
+  warning: 120
+  error: 160
+
+identifier_name:
+  min_length: 2
+
+disabled_rules:
+  - todo

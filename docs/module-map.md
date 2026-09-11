@@ -1,6 +1,9 @@
 # Карта модулей
 
-Версия 1 (черновик, ожидает утверждения). Источник: `docs/architecture.md` v0.6.
+Версия 1.1. Утверждена пользователем (MEE-1). Источник: `docs/architecture.md` v0.6.
+Изменение против v1: модули разложены по двум пакетам SwiftPM (`Packages/Core`, `Packages/Mac`) —
+следствие принятого ограничения «модули DEV-2 собираются без macOS-фреймворков»: в одном пакете
+`swift test` в облачной сессии падал бы на первом же таргете с CoreAudio.
 Точка утверждения и обсуждения — issue с меткой `design` в Linear (проект «Срез 1: запись → транскрипт»).
 
 Карта отвечает на один вопрос: **какой файл кому принадлежит**. Разработчик изменяет только файлы каталогов своего
@@ -13,18 +16,25 @@
 (бинарный `.xcodeproj` в репозиторий не коммитится — он неразрешимо конфликтует между тремя сессиями).
 
 ```
-Package.swift              ← архитектор: список таргетов и зависимостей между модулями
-project.yml                ← архитектор: App и XPC-таргеты, entitlements, подпись (XcodeGen)
-.swiftlint.yml, Makefile   ← архитектор
-.github/workflows/         ← архитектор: сборка и тесты на macos-14
-docs/                      ← архитектор: архитектурный документ, карта модулей, журнал решений
-Sources/<Модуль>/          ← код модуля (см. таблицу)
-Tests/<Модуль>Tests/       ← тесты модуля, принадлежат владельцу модуля
-App/                       ← app-ui: App-таргет, меню-бар, окна, composition root
+Packages/Core/Package.swift   ← архитектор: модули без macOS-фреймворков
+Packages/Core/Sources/<Модуль>/      код модуля
+Packages/Core/Tests/<Модуль>Tests/   тесты модуля
+Packages/Mac/Package.swift    ← архитектор: модули, которым нужны CoreAudio, EventKit, XPC
+Packages/Mac/Sources/<Модуль>/       код модуля
+Packages/Mac/Tests/<Модуль>Tests/    тесты модуля
+project.yml                   ← архитектор: App и XPC-таргеты, entitlements, подпись (XcodeGen)
+.swiftlint.yml, Makefile      ← архитектор
+.github/workflows/            ← архитектор: Core на Linux, Core + Mac на macos-14
+docs/                         ← архитектор: архитектурный документ, карта модулей, журнал решений
+App/                          ← app-ui: App-таргет, меню-бар, окна, composition root
 Services/TranscriptionEngineXPC/  ← engine-xpc: точка входа XPC-сервиса
-Plugins/graph/             ← plugin-graph: внешний процесс-коннектор Outlook
-spikes/<имя>/              ← спайки: код вне модулей, в продукт не переезжает без отдельной задачи
+Plugins/graph/                ← plugin-graph: внешний процесс-коннектор Outlook
+spikes/<имя>/                 ← спайки: код вне модулей, в продукт не переезжает без отдельной задачи
 ```
+
+Почему два пакета, а не один: `Packages/Core` собирается и тестируется где угодно, поэтому облачная
+сессия DEV-2 прогоняет свои тесты у себя, а не ждёт CI; работа `Core (Linux)` в CI ловит случайный
+импорт системного фреймворка в кроссплатформенный модуль в тот же день, а не на первой сборке App.
 
 Файлы сборки (`Package.swift`, `project.yml`, `.github/`, `.swiftlint.yml`, `Makefile`) принадлежат **архитектору**:
 они по природе перечисляют все модули сразу, и их правка разработчиком — это изменение границ, то есть
@@ -52,7 +62,7 @@ Foundation, `storage` — Foundation + GRDB, `engine-xpc`/`gigaam` — код и
 ### МОДУЛЬ: domain-core
 - Слой: домен
 - Процесс: App
-- Каталоги: `Sources/DomainCore/`, `Sources/DomainTestKit/`, `Tests/DomainCoreTests/`
+- Каталоги: `Packages/Core/Sources/DomainCore/`, `Packages/Core/Sources/DomainTestKit/`, `Packages/Core/Tests/DomainCoreTests/`
 - Владелец: DEV-2
 - Реализует контракты: DTO (`MeetingEvent`, `RecordingManifest`, `Transcript`, `JoinInfo`, `MeetingSignal`), определения портов
   (`AudioCapturePort`, `CalendarPort`, `PermissionsPort`, `ProcessMonitorPort`, `PowerPort`), машина состояний
@@ -67,7 +77,7 @@ Foundation, `storage` — Foundation + GRDB, `engine-xpc`/`gigaam` — код и
 ### МОДУЛЬ: capture
 - Слой: адаптер системного API
 - Процесс: App
-- Каталоги: `Sources/Capture/`, `Tests/CaptureTests/`
+- Каталоги: `Packages/Mac/Sources/Capture/`, `Packages/Mac/Tests/CaptureTests/`
 - Владелец: DEV-1
 - Реализует контракты: `AudioCapturePort` (process tap + микрофон в aggregate device, чанкованный CAF, `RecordingManifest` на выходе)
 - Потребляет контракты: `PowerPort`, DTO домена
@@ -77,7 +87,7 @@ Foundation, `storage` — Foundation + GRDB, `engine-xpc`/`gigaam` — код и
 ### МОДУЛЬ: permissions
 - Слой: адаптер системного API
 - Процесс: App
-- Каталоги: `Sources/Permissions/`, `Tests/PermissionsTests/`
+- Каталоги: `Packages/Mac/Sources/Permissions/`, `Packages/Mac/Tests/PermissionsTests/`
 - Владелец: DEV-1
 - Реализует контракты: `PermissionsPort` (микрофон, System Audio Recording, календарь, уведомления, login item), `PowerPort` (сон, App Nap, тепловое состояние)
 - Потребляет контракты: —
@@ -86,7 +96,7 @@ Foundation, `storage` — Foundation + GRDB, `engine-xpc`/`gigaam` — код и
 ### МОДУЛЬ: detector
 - Слой: адаптер системного API + таблицы правил
 - Процесс: App
-- Каталоги: `Sources/Detector/`, `Tests/DetectorTests/`
+- Каталоги: `Packages/Mac/Sources/Detector/`, `Packages/Mac/Tests/DetectorTests/`
 - Владелец: DEV-1
 - Реализует контракты: `ProcessMonitorPort` (процессы, аудиоактивность, PID для тапа), `PlatformResolver` (разбор ссылки → `JoinInfo`)
 - Потребляет контракты: DTO домена; таблицы правил — данные в ресурсах модуля, не код
@@ -95,7 +105,7 @@ Foundation, `storage` — Foundation + GRDB, `engine-xpc`/`gigaam` — код и
 ### МОДУЛЬ: calendar-eventkit
 - Слой: плагин (адаптер системного API)
 - Процесс: App (in-process, подписан тем же Team ID)
-- Каталоги: `Sources/CalendarEventKit/`, `Tests/CalendarEventKitTests/`
+- Каталоги: `Packages/Mac/Sources/CalendarEventKit/`, `Packages/Mac/Tests/CalendarEventKitTests/`
 - Владелец: DEV-1
 - Реализует контракты: протокол плагина календаря (Swift-зеркало), выдаёт `MeetingEvent`
 - Потребляет контракты: `PermissionsPort`, сервисы хоста (secrets, log, notify)
@@ -104,17 +114,17 @@ Foundation, `storage` — Foundation + GRDB, `engine-xpc`/`gigaam` — код и
 ### МОДУЛЬ: calendar-hub
 - Слой: домен
 - Процесс: App
-- Каталоги: `Sources/CalendarHub/`, `Tests/CalendarHubTests/`
+- Каталоги: `Packages/Core/Sources/CalendarHub/`, `Packages/Core/Tests/CalendarHubTests/`
 - Владелец: DEV-2
 - Реализует контракты: `CalendarPort`, хост плагинов (in-process и stdio JSON-RPC), нормализация и дедуп
   (ключ: join-URL → ICS UID → организатор+время), расписание опроса
-- Потребляет контракты: протокол плагина календаря, репозитории `storage`
+- Потребляет контракты: протокол плагина календаря, порты репозиториев из `domain-core`
 - Запрещено: импорт EventKit и любых Apple-фреймворков сверх Foundation; знание о конкретных коннекторах
 
 ### МОДУЛЬ: storage
 - Слой: хранилище
 - Процесс: App
-- Каталоги: `Sources/Storage/`, `Tests/StorageTests/`
+- Каталоги: `Packages/Core/Sources/Storage/`, `Packages/Core/Tests/StorageTests/`
 - Владелец: DEV-2
 - Реализует контракты: схема SQLite и миграции, репозитории по DTO, FTS5, раскладка файлов записей
 - Потребляет контракты: DTO домена
@@ -124,7 +134,7 @@ Foundation, `storage` — Foundation + GRDB, `engine-xpc`/`gigaam` — код и
 ### МОДУЛЬ: engine-xpc
 - Слой: движок
 - Процесс: XPC-сервис
-- Каталоги: `Sources/EngineKit/`, `Services/TranscriptionEngineXPC/`, `Tests/EngineKitTests/`
+- Каталоги: `Packages/Core/Sources/EngineKit/`, `Packages/Core/Tests/EngineKitTests/`, `Packages/Mac/Sources/EngineXPCClient/`, `Packages/Mac/Tests/EngineXPCClientTests/`, `Services/TranscriptionEngineXPC/`
 - Владелец: DEV-2
 - Реализует контракты: протоколы `TranscriptionEngine`, `DiarizationEngine`, `EmbeddingEngine`, `PostProcessor`;
   XPC-контракт (сообщения, прогресс, отмена); реализации на FluidAudio (VAD, диаризация, эмбеддинги, Parakeet);
@@ -135,7 +145,7 @@ Foundation, `storage` — Foundation + GRDB, `engine-xpc`/`gigaam` — код и
 ### МОДУЛЬ: gigaam
 - Слой: движок
 - Процесс: XPC-сервис
-- Каталоги: `Sources/GigaAM/`, `Tests/GigaAMTests/`
+- Каталоги: `Packages/Core/Sources/GigaAM/`, `Packages/Core/Tests/GigaAMTests/`
 - Владелец: DEV-2
 - Реализует контракты: `TranscriptionEngine` для роли ASR-ru (этап 1 — sherpa-onnx на CPU; этап 2, вне Среза 1 — CoreML на ANE):
   mel, CTC-декодер, пословные таймстампы, нарезка по VAD, уверенность по токенам
@@ -145,26 +155,26 @@ Foundation, `storage` — Foundation + GRDB, `engine-xpc`/`gigaam` — код и
 ### МОДУЛЬ: model-manager
 - Слой: домен + адаптер сети
 - Процесс: App
-- Каталоги: `Sources/ModelManager/`, `Tests/ModelManagerTests/`
+- Каталоги: `Packages/Core/Sources/ModelManager/`, `Packages/Core/Tests/ModelManagerTests/`
 - Владелец: DEV-2
 - Реализует контракты: интерфейс каталога моделей (манифест, роли, состояния, sha256, профили транскрибации)
-- Потребляет контракты: репозитории `storage`
+- Потребляет контракты: порты репозиториев из `domain-core`
 - Запрещено: загружать модели в память и исполнять инференс; знать внутренности движков
 
 ### МОДУЛЬ: attribution
 - Слой: домен
 - Процесс: App
-- Каталоги: `Sources/Attribution/`, `Tests/AttributionTests/`
+- Каталоги: `Packages/Core/Sources/Attribution/`, `Packages/Core/Tests/AttributionTests/`
 - Владелец: DEV-2
 - Реализует контракты: интерфейс атрибуции (кластеры → участники, `confidence` и `source` на каждое назначение),
   словарь имён и постправка
-- Потребляет контракты: DTO `Transcript`, репозитории `storage`, `EmbeddingEngine`
+- Потребляет контракты: DTO `Transcript`, порты репозиториев из `domain-core`, `EmbeddingEngine`
 - Запрещено: импорт UI; молчаливая перезапись правок пользователя
 
 ### МОДУЛЬ: app-ui
 - Слой: UI
 - Процесс: App
-- Каталоги: `App/`, `Tests/AppUITests/`
+- Каталоги: `App/`
 - Владелец: DEV-3
 - Реализует контракты: composition root (связывание портов с реализациями), меню-бар, окно встреч,
   просмотр транскрипта, настройки, мастер прав
@@ -185,16 +195,22 @@ Foundation, `storage` — Foundation + GRDB, `engine-xpc`/`gigaam` — код и
 
 Стрелка — «потребляет контракт». Ни одной стрелки против слоя: адаптеры и UI зависят от домена, домен — ни от кого.
 
+Граф — фан из `domain-core`, и это проверяет компилятор: в `Package.swift` ни один модуль не объявлен
+зависимостью другого, кроме перечисленных ниже. Реализации связываются в composition root (`app-ui`).
+
 ```
-app-ui ──► domain-core ◄── calendar-hub ──► storage
-   │            ▲                ▲              ▲
-   │            │                │              │
-   └────────────┘         calendar-eventkit     ├── attribution ──► engine-xpc ──► gigaam
-                                                └── model-manager        ▲
-capture ──► domain-core                                                  │
-permissions ──► domain-core                            engine-xpc ◄── model-manager (пути к моделям)
-detector ──► domain-core
+                        ┌── storage            (реализует порты репозиториев)
+                        ├── calendar-hub
+                        ├── model-manager
+     domain-core ◄──────┼── capture, permissions, detector, calendar-eventkit
+     (DTO и порты)      ├── engine-kit ◄── gigaam
+                        │        ▲
+                        ├── attribution ───────┘  (нужны DTO Transcript и EmbeddingEngine)
+                        └── app-ui             (плюс фасад C-016 и связывание всех реализаций)
 ```
+
+Пути к моделям приходят в движок снаружи (C-014): `model-manager` движком не импортируется,
+их связывает composition root.
 
 ## 5. Планируемые контракты Среза 1
 
