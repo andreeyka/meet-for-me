@@ -11,6 +11,13 @@ jobs:
     # Модули DEV-2 обязаны собираться без macOS-фреймворков — эта работа проверяет
     # именно это: если в Packages/Core просочился импорт AppKit или AVFoundation,
     # облачная сессия DEV-2 перестанет собирать свои тесты, и увидим мы это здесь.
+    #
+    # Стиль здесь НЕ проверяется, и это сказано вслух намеренно. Причина: линтует
+    # работа «Core + Mac» всё дерево репозитория целиком, включая Packages/Core —
+    # то есть ровно те же файлы, что собираются здесь. Второй прогон на Linux дал
+    # бы дубль тех же файлов более слабым набором правил (сборка swiftlint под
+    # Linux идёт без SourceKit, часть правил в ней недоступна) и завёл бы риск
+    # расхождения вердиктов между работами. Барьер по стилю — один, и он на macOS.
     name: Core (Linux)
     runs-on: ubuntu-latest
     container: swift:5.10-jammy
@@ -25,13 +32,38 @@ jobs:
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
+
+      # Линтера в образе macos-14 нет, поэтому он ставится явно. Раньше на его
+      # отсутствие была ветка «шаг пропущен», и шаг зеленел, ничего не проверив:
+      # .swiftlint.yml выглядел барьером, не будучи им. Теперь возможных исходов
+      # два — линтер отработал либо работа красная (MEE-91).
+      - name: Установка SwiftLint
+        run: |
+          set -euo pipefail
+          brew install swiftlint
+          swiftlint version
+
+      # Линт идёт до тестов намеренно. Стоял он последним, и падение любого
+      # swift test уносило его с собой — проверка стиля просто не доходила до
+      # исполнения. Линт ничего не собирает и стоит секунды, так что здесь он
+      # и дешевле, и его вердикт нельзя заслонить чужим падением.
+      - name: SwiftLint
+        run: |
+          set -o pipefail
+          swiftlint --strict --reporter github-actions-logging 2>&1 | tee "$RUNNER_TEMP/swiftlint.log"
+          status=$?
+          # Итог линта дублируется в сводку прогона и в аннотацию, чтобы он был
+          # виден, не открывая журнал работы.
+          {
+            echo "### SwiftLint $(swiftlint version)"
+            echo ''
+            echo '```'
+            cat "$RUNNER_TEMP/swiftlint.log"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "::notice title=SwiftLint::$(grep -m1 'Done linting' "$RUNNER_TEMP/swiftlint.log" || echo 'линт завершился с ошибкой, подробности в журнале работы')"
+          exit $status
+
       - run: swift --version
       - run: swift test --package-path Packages/Core
       - run: swift test --package-path Packages/Mac
-      - name: SwiftLint
-        run: |
-          if command -v swiftlint >/dev/null 2>&1; then
-            swiftlint --strict
-          else
-            echo "swiftlint на раннере нет — шаг пропущен"
-          fi
