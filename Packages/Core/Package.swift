@@ -37,7 +37,14 @@ let package = Package(
         .target(name: "ModelManager", dependencies: ["DomainCore"]),
         .target(name: "Attribution", dependencies: ["DomainCore", "EngineKit"]),
 
-        .testTarget(name: "DomainCoreTests", dependencies: ["DomainCore", "DomainTestKit"]),
+        // resources: эталонные manifest.json и transcript.v1.json — экземпляры спецификации
+        // форматов C-002 и C-003, а не оснастка теста (решение по IR-003, MEE-17).
+        // Каталог Fixtures/ принадлежит архитектору; тест читает его через Bundle.module в Data.
+        .testTarget(
+            name: "DomainCoreTests",
+            dependencies: ["DomainCore", "DomainTestKit"],
+            resources: [.copy("Fixtures")]
+        ),
         .testTarget(name: "StorageTests", dependencies: ["Storage", "DomainTestKit"]),
         .testTarget(name: "CalendarHubTests", dependencies: ["CalendarHub", "DomainTestKit"]),
         .testTarget(name: "EngineKitTests", dependencies: ["EngineKit", "DomainTestKit"]),
