@@ -50,18 +50,20 @@ jobs:
       - name: SwiftLint
         run: |
           set -o pipefail
+          version=$(swiftlint version)
           swiftlint --strict --reporter github-actions-logging 2>&1 | tee "$RUNNER_TEMP/swiftlint.log"
           status=$?
-          # Итог линта дублируется в сводку прогона и в аннотацию, чтобы он был
-          # виден, не открывая журнал работы.
+          verdict=$(grep -m1 'Done linting' "$RUNNER_TEMP/swiftlint.log" || echo "линт завершился с кодом $status")
+          # Вердикт дублируется в аннотацию и в сводку прогона: доказательство
+          # того, что линтер отработал, не должно требовать раскопок в журнале.
+          echo "::notice title=SwiftLint::$version — $verdict"
           {
-            echo "### SwiftLint $(swiftlint version)"
+            echo "### SwiftLint $version"
             echo ''
             echo '```'
             cat "$RUNNER_TEMP/swiftlint.log"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
-          echo "::notice title=SwiftLint::$(grep -m1 'Done linting' "$RUNNER_TEMP/swiftlint.log" || echo 'линт завершился с ошибкой, подробности в журнале работы')"
           exit $status
 
       - run: swift --version
