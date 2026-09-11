@@ -13,7 +13,7 @@ import PackageDescription
 
 let package = Package(
     name: "MeetCore",
-    platforms: [.macOS("14.2")],
+    platforms: [.macOS("14.4")],
     products: [
         .library(name: "DomainCore", targets: ["DomainCore"]),
         .library(name: "DomainTestKit", targets: ["DomainTestKit"]),
