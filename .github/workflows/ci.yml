@@ -11,11 +11,18 @@ jobs:
     # Модули DEV-2 обязаны собираться без macOS-фреймворков — эта работа проверяет
     # именно это: если в Packages/Core просочился импорт AppKit или AVFoundation,
     # облачная сессия DEV-2 перестанет собирать свои тесты, и увидим мы это здесь.
+    #
+    # Стиль здесь НЕ проверяется, и это сказано вслух намеренно. Причина: линтует
+    # работа «Core + Mac» всё дерево репозитория целиком, включая Packages/Core —
+    # то есть ровно те же файлы, что собираются здесь. Второй прогон на Linux дал
+    # бы дубль тех же файлов более слабым набором правил (сборка swiftlint под
+    # Linux идёт без SourceKit, часть правил в ней недоступна) и завёл бы риск
+    # расхождения вердиктов между работами. Барьер по стилю — один, и он на macOS.
     name: Core (Linux)
     runs-on: ubuntu-latest
     container: swift:5.10-jammy
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - run: swift --version
       - run: swift build --package-path Packages/Core
       - run: swift test --package-path Packages/Core
@@ -24,14 +31,40 @@ jobs:
     name: Core + Mac (macos-14)
     runs-on: macos-14
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
+
+      # Линтера в образе macos-14 нет, поэтому он ставится явно. Раньше на его
+      # отсутствие была ветка «шаг пропущен», и шаг зеленел, ничего не проверив:
+      # .swiftlint.yml выглядел барьером, не будучи им. Теперь возможных исходов
+      # два — линтер отработал либо работа красная (MEE-91).
+      - name: Установка SwiftLint
+        run: |
+          set -euo pipefail
+          brew install swiftlint
+          swiftlint version
+
+      # Линт идёт до тестов намеренно. Стоял он последним, и падение любого
+      # swift test уносило его с собой — проверка стиля просто не доходила до
+      # исполнения. Линт ничего не собирает и стоит секунды, так что здесь он
+      # и дешевле, и его вердикт нельзя заслонить чужим падением.
+      - name: SwiftLint
+        run: |
+          set -o pipefail
+          version=$(swiftlint version)
+          # `|| status=$?` здесь несущий, а не украшение. Шаг run без явного shell:
+          # исполняется как `bash -e`, и раньше упавший конвейер обрывал шаг прямо на
+          # этой строке: работа краснела верно, но вердикт ниже не выводился ровно тогда,
+          # когда он нужнее всего, а `exit $status` был недостижим. Теперь оба исхода
+          # доходят до аннотации, а код возврата линтера доезжает до вердикта шага.
+          status=0
+          swiftlint --strict --reporter github-actions-logging 2>&1 | tee "$RUNNER_TEMP/swiftlint.log" || status=$?
+          verdict=$(grep -m1 'Done linting' "$RUNNER_TEMP/swiftlint.log" || echo "линт завершился с кодом $status")
+          # Версия и вердикт выносятся отдельной аннотацией: «линтер отработал»
+          # должно подтверждаться, не открывая журнал работы. Сами нарушения
+          # репортер github-actions-logging вешает аннотациями на строки диффа.
+          echo "::notice title=SwiftLint::$version — $verdict"
+          exit $status
+
       - run: swift --version
       - run: swift test --package-path Packages/Core
       - run: swift test --package-path Packages/Mac
-      - name: SwiftLint
-        run: |
-          if command -v swiftlint >/dev/null 2>&1; then
-            swiftlint --strict
-          else
-            echo "swiftlint на раннере нет — шаг пропущен"
-          fi

@@ -10,6 +10,7 @@
 
 import PackageDescription
 
+// swiftlint:disable trailing_comma
 let package = Package(
     name: "MeetMac",
     platforms: [.macOS("14.4")],
@@ -58,3 +59,4 @@ let package = Package(
         ),
     ]
 )
+// swiftlint:enable trailing_comma
