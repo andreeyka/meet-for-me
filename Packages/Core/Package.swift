@@ -11,6 +11,7 @@
 
 import PackageDescription
 
+// swiftlint:disable trailing_comma
 let package = Package(
     name: "MeetCore",
     platforms: [.macOS("14.4")],
@@ -53,3 +54,4 @@ let package = Package(
         .testTarget(name: "AttributionTests", dependencies: ["Attribution", "DomainTestKit"]),
     ]
 )
+// swiftlint:enable trailing_comma
