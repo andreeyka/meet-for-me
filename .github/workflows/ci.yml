@@ -22,7 +22,7 @@ jobs:
     runs-on: ubuntu-latest
     container: swift:5.10-jammy
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - run: swift --version
       - run: swift build --package-path Packages/Core
       - run: swift test --package-path Packages/Core
@@ -31,7 +31,7 @@ jobs:
     name: Core + Mac (macos-14)
     runs-on: macos-14
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       # Линтера в образе macos-14 нет, поэтому он ставится явно. Раньше на его
       # отсутствие была ветка «шаг пропущен», и шаг зеленел, ничего не проверив:
@@ -51,8 +51,13 @@ jobs:
         run: |
           set -o pipefail
           version=$(swiftlint version)
-          swiftlint --strict --reporter github-actions-logging 2>&1 | tee "$RUNNER_TEMP/swiftlint.log"
-          status=$?
+          # `|| status=$?` здесь несущий, а не украшение. Шаг run без явного shell:
+          # исполняется как `bash -e`, и раньше упавший конвейер обрывал шаг прямо на
+          # этой строке: работа краснела верно, но вердикт ниже не выводился ровно тогда,
+          # когда он нужнее всего, а `exit $status` был недостижим. Теперь оба исхода
+          # доходят до аннотации, а код возврата линтера доезжает до вердикта шага.
+          status=0
+          swiftlint --strict --reporter github-actions-logging 2>&1 | tee "$RUNNER_TEMP/swiftlint.log" || status=$?
           verdict=$(grep -m1 'Done linting' "$RUNNER_TEMP/swiftlint.log" || echo "линт завершился с кодом $status")
           # Версия и вердикт выносятся отдельной аннотацией: «линтер отработал»
           # должно подтверждаться, не открывая журнал работы. Сами нарушения
