@@ -24,37 +24,37 @@ let package = Package(
         .package(path: "../Core"),
     ],
     targets: [
-        .target(name: "Capture", dependencies: [.product(name: "DomainCore", package: "MeetCore")]),
-        .target(name: "Permissions", dependencies: [.product(name: "DomainCore", package: "MeetCore")]),
-        .target(name: "Detector", dependencies: [.product(name: "DomainCore", package: "MeetCore")]),
-        .target(name: "CalendarEventKit", dependencies: [.product(name: "DomainCore", package: "MeetCore")]),
+        .target(name: "Capture", dependencies: [.product(name: "DomainCore", package: "Core")]),
+        .target(name: "Permissions", dependencies: [.product(name: "DomainCore", package: "Core")]),
+        .target(name: "Detector", dependencies: [.product(name: "DomainCore", package: "Core")]),
+        .target(name: "CalendarEventKit", dependencies: [.product(name: "DomainCore", package: "Core")]),
         .target(
             name: "EngineXPCClient",
             dependencies: [
-                .product(name: "DomainCore", package: "MeetCore"),
-                .product(name: "EngineKit", package: "MeetCore"),
+                .product(name: "DomainCore", package: "Core"),
+                .product(name: "EngineKit", package: "Core"),
             ]
         ),
 
         .testTarget(
             name: "CaptureTests",
-            dependencies: ["Capture", .product(name: "DomainTestKit", package: "MeetCore")]
+            dependencies: ["Capture", .product(name: "DomainTestKit", package: "Core")]
         ),
         .testTarget(
             name: "PermissionsTests",
-            dependencies: ["Permissions", .product(name: "DomainTestKit", package: "MeetCore")]
+            dependencies: ["Permissions", .product(name: "DomainTestKit", package: "Core")]
         ),
         .testTarget(
             name: "DetectorTests",
-            dependencies: ["Detector", .product(name: "DomainTestKit", package: "MeetCore")]
+            dependencies: ["Detector", .product(name: "DomainTestKit", package: "Core")]
         ),
         .testTarget(
             name: "CalendarEventKitTests",
-            dependencies: ["CalendarEventKit", .product(name: "DomainTestKit", package: "MeetCore")]
+            dependencies: ["CalendarEventKit", .product(name: "DomainTestKit", package: "Core")]
         ),
         .testTarget(
             name: "EngineXPCClientTests",
-            dependencies: ["EngineXPCClient", .product(name: "DomainTestKit", package: "MeetCore")]
+            dependencies: ["EngineXPCClient", .product(name: "DomainTestKit", package: "Core")]
         ),
     ]
 )
