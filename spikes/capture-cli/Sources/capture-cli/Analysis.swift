@@ -232,12 +232,19 @@ enum Analysis {
         }
         var predicted = first.0
         var micDelay: Double? = nil
+        var misses = 0
         var rows: [(t: Double, sys: Double?, mic: Double?, noDrift: Double?)] = []
         while predicted + periodFrames / 2 < Double(system.length) {
             var sysPos: Double?
-            if let hit = locate(system, center: predicted, halfWindow: 0.15), hit.1 > 8 {
+            // После двух промахов подряд (разрыв шкалы, ложный пик на краю заполненного тишиной участка)
+            // ищем заново в окне целого периода.
+            let halfWindow = misses >= 2 ? period * 0.55 : 0.15
+            if let hit = locate(system, center: predicted, halfWindow: halfWindow), hit.1 > 8 {
                 sysPos = hit.0
                 predicted = hit.0
+                misses = 0
+            } else {
+                misses += 1
             }
             var micPos: Double?
             if let sysPos {
