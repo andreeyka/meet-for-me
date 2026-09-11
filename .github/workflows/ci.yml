@@ -1,0 +1,37 @@
+# Владелец файла — архитектор. Барьер приёмки: задача не принимается, пока CI не зелёный.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  core-linux:
+    # Модули DEV-2 обязаны собираться без macOS-фреймворков — эта работа проверяет
+    # именно это: если в Packages/Core просочился импорт AppKit или AVFoundation,
+    # облачная сессия DEV-2 перестанет собирать свои тесты, и увидим мы это здесь.
+    name: Core (Linux)
+    runs-on: ubuntu-latest
+    container: swift:5.10-jammy
+    steps:
+      - uses: actions/checkout@v4
+      - run: swift --version
+      - run: swift build --package-path Packages/Core
+      - run: swift test --package-path Packages/Core
+
+  macos:
+    name: Core + Mac (macos-14)
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - run: swift --version
+      - run: swift test --package-path Packages/Core
+      - run: swift test --package-path Packages/Mac
+      - name: SwiftLint
+        run: |
+          if command -v swiftlint >/dev/null 2>&1; then
+            swiftlint --strict
+          else
+            echo "swiftlint на раннере нет — шаг пропущен"
+          fi
