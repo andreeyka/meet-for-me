@@ -1,0 +1,52 @@
+{
+  "schemaVersion": 2,
+  "recordingId": "3f2504e0-4f89-41d3-9a0c-0305e82c3301",
+  "language": "ru",
+  "engine": "gigaam-sherpa-onnx",
+  "modelVersion": "v3.0.1",
+  "createdAt": "2026-09-11T10:35:12.250Z",
+  "segments": [
+    {
+      "startMs": 1200,
+      "endMs": 3400,
+      "channel": "mic",
+      "speakerCluster": null,
+      "text": "Привет, начнём.",
+      "textOriginal": null,
+      "textConfidence": 0.88,
+      "words": [
+        { "startMs": 1200, "endMs": 1900, "text": "Привет,", "confidence": 0.94 },
+        { "startMs": 1900, "endMs": 2600, "text": "начнём.", "confidence": 0.88 }
+      ]
+    },
+    {
+      "startMs": 3000,
+      "endMs": 6000,
+      "channel": "system",
+      "speakerCluster": 0,
+      "text": "Да, я готов.",
+      "textConfidence": 0.7,
+      "words": []
+    },
+    {
+      "startMs": 6100,
+      "endMs": 9000,
+      "channel": "system",
+      "speakerCluster": null,
+      "text": "   ",
+      "words": []
+    }
+  ],
+  "speakers": [
+    {
+      "cluster": 0,
+      "embedding": [0.0125, -0.5, 0.75],
+      "embeddingModelVersion": "wespeaker-v2",
+      "totalMs": 3000
+    },
+    {
+      "cluster": 1,
+      "totalMs": 0
+    }
+  ]
+}
