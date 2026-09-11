@@ -54,3 +54,4 @@ let package = Package(
         .testTarget(name: "AttributionTests", dependencies: ["Attribution", "DomainTestKit"]),
     ]
 )
+// swiftlint:enable trailing_comma
