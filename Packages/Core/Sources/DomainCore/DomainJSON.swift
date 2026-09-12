@@ -66,7 +66,7 @@ public enum DomainJSON {
 extension KeyedDecodingContainer {
 
     public func decodeFinite(_ type: Double.Type, forKey key: Key) throws -> Double {
-        let value = try domainDouble(key)
+        let value = try decode(Double.self, forKey: key)
         guard value.isFinite else {
             throw domainCorrupted(key, "значение не представимо конечным Double")
         }
@@ -140,7 +140,7 @@ extension KeyedDecodingContainer {
     /// Четыре условия §0.4: конечность, целость, диапазон §0.2 п. 9, диапазон объявленного типа.
     /// Все четыре дают одну и ту же ошибку с одним и тем же ключом — различие видно только в тексте.
     private func domainBounded(_ key: Key, lower: Double, upper: Double) throws -> Double {
-        let raw = try domainDouble(key)
+        let raw = try decode(Double.self, forKey: key)
         guard raw.isFinite else {
             throw domainCorrupted(key, "значение не конечно")
         }
@@ -154,20 +154,6 @@ extension KeyedDecodingContainer {
             throw domainCorrupted(key, "значение вне диапазона объявленного типа поля")
         }
         return raw
-    }
-
-    /// Число читается через `Double`, и битый литерал сообщается **нашей** ошибкой с именем
-    /// ключа. Иначе имя ключа теряется: часть сборок `Foundation` отвергает литерал вне
-    /// диапазона `Double` сама и делает это ошибкой всего документа с пустым `codingPath`,
-    /// а §0.4 требует `dataCorrupted` именно с именем ключа — «проверка стоит в нашем коде,
-    /// а не в чужом». `typeMismatch` и `keyNotFound` проходят как есть: их различает п. 104.
-    private func domainDouble(_ key: Key) throws -> Double {
-        do {
-            return try decode(Double.self, forKey: key)
-        } catch let error as DecodingError {
-            guard case .dataCorrupted = error else { throw error }
-            throw domainCorrupted(key, "литерал не представим конечным Double")
-        }
     }
 
     private func domainPresent(_ key: Key) throws -> Bool {
