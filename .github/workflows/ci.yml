@@ -40,6 +40,13 @@ jobs:
       # Стоит до `swift test` по доводу шага SwiftLint в работе ниже: падение
       # чужого теста не должно уносить с собой этот вердикт.
       - name: Символьный граф (Packages/Core)
+        # `shell: bash` здесь несущий, а не украшение. Шаг `run` без явного shell
+        # исполняется оболочкой по умолчанию, и в контейнере это может быть `sh`
+        # (в образе jammy — dash). У dash нет опции `-o pipefail`: строка `set -o
+        # pipefail` там не настройка, а незаконная опция, и шаг умирает на первой
+        # же строке с кодом 2, не выведя ничего, — ровно это и случилось на первом
+        # прогоне PR #12. `shell: bash` даёт `bash --noprofile --norc -eo pipefail`.
+        shell: bash
         env:
           # Отчёт шага написан кириллицей. Без этого в локали C поток вывода
           # Python получает кодировку ascii, и шаг падает на собственном отчёте,
@@ -72,7 +79,7 @@ jobs:
           # должно подтверждаться, не открывая журнал работы. При отказе туда же
           # уходит хвост журнала — иначе причина видна только тому, у кого есть
           # доступ к хранилищу логов Actions.
-          bash .github/scripts/annotate.sh "Символьный граф · Core (Linux)" "$status" "$log"
+          bash .github/scripts/annotate.sh "Символьный граф · Core (Linux)" "$status" "$log" || true
           exit $status
 
       - run: swift test --package-path Packages/Core
@@ -123,6 +130,9 @@ jobs:
       # `Packages/Core` только DomainCore и EngineKit, а таргеты Storage, GigaAM,
       # CalendarHub, ModelManager и Attribution в его графе не появятся вовсе.
       - name: Символьный граф (Packages/Core и Packages/Mac)
+        # Оболочка названа явно и здесь — чтобы обе половины одного шага
+        # исполнялись одной оболочкой, а не по-разному в двух работах.
+        shell: bash
         env:
           PYTHONIOENCODING: utf-8
         run: |
@@ -151,7 +161,7 @@ jobs:
             done
             exit $inner
           ) 2>&1 | tee "$log" || status=$?
-          bash .github/scripts/annotate.sh "Символьный граф · Core + Mac" "$status" "$log"
+          bash .github/scripts/annotate.sh "Символьный граф · Core + Mac" "$status" "$log" || true
           exit $status
 
       - run: swift test --package-path Packages/Core
