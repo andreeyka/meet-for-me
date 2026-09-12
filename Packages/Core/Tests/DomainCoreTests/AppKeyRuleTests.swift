@@ -145,7 +145,7 @@ private func appKeyCases() -> [(process: AudioProcess, appKey: String?)] {
         (audioProcess(pid: 3, bundleId: "com.apple.WebKit.GPU",
                       responsibleBundleId: nil), "com.apple.WebKit.GPU"),
         (audioProcess(pid: 4, bundleId: nil, responsibleBundleId: nil), nil),
-        (audioProcess(pid: 5, bundleId: "", responsibleBundleId: nil), ""),
+        (audioProcess(pid: 5, bundleId: "", responsibleBundleId: nil), "")
     ]
 }
 
@@ -167,6 +167,6 @@ private func matchCases() -> [MatchCase] {
         MatchCase(appKey: nil, entry: "com.google.Chrome", answer: false),
         MatchCase(appKey: "com.apple.WebKit.GPU", entry: "com.apple.Safari", answer: false),
         MatchCase(appKey: "com.google.Chrome", entry: "", answer: false),
-        MatchCase(appKey: "", entry: "", answer: true),
+        MatchCase(appKey: "", entry: "", answer: true)
     ]
 }

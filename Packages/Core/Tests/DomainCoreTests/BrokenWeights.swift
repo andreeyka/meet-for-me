@@ -73,7 +73,7 @@ struct BrokenWeights {
     /// Ровно восемь входов (a)…(h); вторая половина (h) подаётся отдельно.
     static let all: [BrokenWeights] = [
         invalidJSON, unknownSchema, missingSchema, duplicateKey,
-        nonFiniteNumber, missingTtl, weightOutOfRange, zeroTtl,
+        nonFiniteNumber, missingTtl, weightOutOfRange, zeroTtl
     ]
 
     /// Валидные байты с другими числами — вектор (ii) критерия К72.

@@ -31,7 +31,7 @@ final class RulesTablesTests: XCTestCase {
                 urlPatterns: [ProvidersTable.URLPattern(
                     hostSuffix: "meet.google.com",
                     pathRegex: "^/(?<meetingId>[a-z]{3}-[a-z]{4}-[a-z]{3})",
-                    meetingIdQueryKey: nil, passcodeQueryKey: nil)]),
+                    meetingIdQueryKey: nil, passcodeQueryKey: nil)])
         ])
         XCTAssertEqual(read, expected)
         XCTAssertEqual(read.providers.map(\.priority), [10, 20], "порядок записей сохранён")
@@ -50,7 +50,7 @@ final class RulesTablesTests: XCTestCase {
                                     browserFallback: true),
                 ClientsTable.Client(provider: "teams", bundleIds: ["com.microsoft.teams2"],
                                     browserFallback: true),
-                ClientsTable.Client(provider: "meet", bundleIds: [], browserFallback: true),
+                ClientsTable.Client(provider: "meet", bundleIds: [], browserFallback: true)
             ])
         XCTAssertEqual(read, expected)
         XCTAssertEqual(read.clients[2].bundleIds, [], "пустой список — «нативного клиента нет»")

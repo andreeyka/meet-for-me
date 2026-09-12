@@ -72,15 +72,23 @@ final class SignalWeightsResourceTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: url), bytes, "подмена записана на диск")
     }
 
-    /// Файл ресурса в собранном бандле модуля `domain-core`. Имя бандла собирает SwiftPM из
-    /// имени пакета и имени таргета, а раскладка внутри бандла различается между платформами —
-    /// поэтому бандл ищется по суффиксу имени, а файл внутри него обходом.
+    /// Файл ресурса в собранном бандле модуля `domain-core`. Имя каталога собирает SwiftPM из
+    /// имени пакета и имени таргета, а СУФФИКС у него разный по платформам: на Linux это
+    /// `MeetCore_DomainCore.resources`, на macOS — `MeetCore_DomainCore.bundle` с собственной
+    /// раскладкой внутри. Поэтому каталог ищется по обоим суффиксам, а файл внутри — обходом.
+    /// Суффикс берётся вместе с `_DomainCore`, иначе под шаблон попадает бандл тестового
+    /// таргета (`..._DomainCoreTests.resources`), и тест подменял бы не тот файл.
     private func resourceURL() throws -> URL {
-        let roots = [Bundle.module.bundleURL.deletingLastPathComponent(), Bundle.main.bundleURL]
+        let module = Bundle.module.bundleURL
+        let roots = [module.deletingLastPathComponent(), Bundle.main.bundleURL,
+                     Bundle.main.bundleURL.deletingLastPathComponent()]
         for root in roots {
             let contents = (try? FileManager.default.contentsOfDirectory(
                 at: root, includingPropertiesForKeys: nil)) ?? []
-            let bundles = contents.filter { $0.lastPathComponent.hasSuffix("DomainCore.bundle") }
+            let bundles = contents.filter { candidate in
+                let name = candidate.lastPathComponent
+                return name.hasSuffix("_DomainCore.resources") || name.hasSuffix("_DomainCore.bundle")
+            }
             for bundle in bundles {
                 if let found = signalWeights(in: bundle) {
                     return found

@@ -26,7 +26,7 @@ final class DomainTestKitFakesTests: XCTestCase {
                          isRunningOutput: false, isRunningInput: false, observedAt: moment),
             AudioProcess(pid: 2, bundleId: "com.google.Chrome.helper", responsibleBundleId: nil,
                          executableName: "helper", isRunningOutput: true, isRunningInput: false,
-                         observedAt: moment),
+                         observedAt: moment)
         ]
         port.setProcesses(first)
         let readFirst = try await port.audioProcesses()
@@ -44,7 +44,7 @@ final class DomainTestKitFakesTests: XCTestCase {
                          observedAt: moment),
             AudioProcess(pid: 6, bundleId: "com.google.ChromeX", responsibleBundleId: nil,
                          executableName: "other", isRunningOutput: false, isRunningInput: false,
-                         observedAt: moment),
+                         observedAt: moment)
         ])
         let matched = try await port.processes(matching: ["com.google.Chrome"])
         XCTAssertEqual(matched.map(\.pid), [5], "точка есть у helper и нет у ChromeX")

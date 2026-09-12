@@ -42,7 +42,7 @@ final class C009RoundTripTests: XCTestCase {
     func test_p147_c009RoundTrip_processGroup_emptyAndFilledPids() throws {
         let values = [
             ProcessGroup(appKey: "com.google.Chrome", pids: [], observedAt: moment),
-            ProcessGroup(appKey: "com.google.Chrome", pids: [120, 900], observedAt: moment),
+            ProcessGroup(appKey: "com.google.Chrome", pids: [120, 900], observedAt: moment)
         ]
         for value in values {
             let back = try roundTrip(value)
