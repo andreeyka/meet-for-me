@@ -9,29 +9,30 @@ import DomainCore
 
 final class CalendarAndRangeTests: XCTestCase {
 
-    private let springDates = [("Asia/Beirut", 2026, 3, 29), ("America/Havana", 2026, 3, 8),
-                               ("America/Santiago", 2026, 9, 6)]
+    private let springDates = [DSTDate(zone: "Asia/Beirut", year: 2026, month: 3, day: 29),
+                               DSTDate(zone: "America/Havana", year: 2026, month: 3, day: 8),
+                               DSTDate(zone: "America/Santiago", year: 2026, month: 9, day: 6)]
+    private let autumnDate = DSTDate(zone: "America/Havana", year: 2026, month: 11, day: 1)
 
     func test_p124_startOfDayIsAFixedPoint() throws {
-        for entry in springDates + [("America/Havana", 2026, 11, 1)] {
-            let calendar = try gregorian(entry.0)
+        for entry in springDates + [autumnDate] {
+            let calendar = try gregorian(entry.zone)
             let start = calendar.startOfDay(for: try noon(entry, calendar: calendar))
-            XCTAssertEqual(calendar.startOfDay(for: start), start, entry.0)
+            XCTAssertEqual(calendar.startOfDay(for: start), start, entry.zone)
         }
     }
 
     func test_p124_springDatesHaveNoMidnight() throws {
         for entry in springDates {
-            let calendar = try gregorian(entry.0)
+            let calendar = try gregorian(entry.zone)
             let start = calendar.startOfDay(for: try noon(entry, calendar: calendar))
-            XCTAssertEqual(calendar.component(.hour, from: start), 1, entry.0)
+            XCTAssertEqual(calendar.component(.hour, from: start), 1, entry.zone)
         }
     }
 
     func test_p124_autumnDateHasTwoMidnights() throws {
         let calendar = try gregorian("America/Havana")
-        let start = calendar.startOfDay(for: try noon(("America/Havana", 2026, 11, 1),
-                                                      calendar: calendar))
+        let start = calendar.startOfDay(for: try noon(autumnDate, calendar: calendar))
         XCTAssertEqual(calendar.component(.hour, from: start), 0)
         let later = start.addingTimeInterval(3_600)
         XCTAssertEqual(calendar.component(.hour, from: later), 0)
@@ -40,12 +41,11 @@ final class CalendarAndRangeTests: XCTestCase {
 
     func test_p124_dayLengthIsNotAlwaysTwentyFourHours() throws {
         for entry in springDates {
-            let calendar = try gregorian(entry.0)
-            XCTAssertEqual(try dayLength(entry, calendar: calendar), 23 * 3_600, entry.0)
+            let calendar = try gregorian(entry.zone)
+            XCTAssertEqual(try dayLength(entry, calendar: calendar), 23 * 3_600, entry.zone)
         }
-        let havana = try gregorian("America/Havana")
-        XCTAssertEqual(try dayLength(("America/Havana", 2026, 11, 1), calendar: havana),
-                       25 * 3_600)
+        let havana = try gregorian(autumnDate.zone)
+        XCTAssertEqual(try dayLength(autumnDate, calendar: havana), 25 * 3_600)
     }
 
     // MARK: - п. 125
@@ -151,19 +151,26 @@ final class CalendarAndRangeTests: XCTestCase {
         return calendar
     }
 
-    private func noon(_ entry: (String, Int, Int, Int), calendar: Calendar) throws -> Date {
+    private func noon(_ entry: DSTDate, calendar: Calendar) throws -> Date {
         var components = DateComponents()
-        components.year = entry.1
-        components.month = entry.2
-        components.day = entry.3
+        components.year = entry.year
+        components.month = entry.month
+        components.day = entry.day
         components.hour = 12
         return try XCTUnwrap(calendar.date(from: components))
     }
 
-    private func dayLength(_ entry: (String, Int, Int, Int),
-                           calendar: Calendar) throws -> TimeInterval {
+    private func dayLength(_ entry: DSTDate, calendar: Calendar) throws -> TimeInterval {
         let start = calendar.startOfDay(for: try noon(entry, calendar: calendar))
         let next = try XCTUnwrap(calendar.date(byAdding: .day, value: 1, to: start))
         return calendar.startOfDay(for: next).timeIntervalSince(start)
     }
+}
+
+/// Дата перехода на летнее или зимнее время в названном поясе.
+struct DSTDate {
+    let zone: String
+    let year: Int
+    let month: Int
+    let day: Int
 }

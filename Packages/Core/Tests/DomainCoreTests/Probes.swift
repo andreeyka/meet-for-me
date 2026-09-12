@@ -119,11 +119,12 @@ enum ManifestProbe {
         case .emptyCaptureGroupKey: shape.captureGroupKey = ""
         }
         let recordingId = try makeUUID(ManifestJSON.identifier)
+        let tracks = try shape.tracks ?? [track(.mic, "a.caf")]
         return try RecordingManifest(
             schemaVersion: shape.schemaVersion, recordingId: recordingId, meetingId: nil,
             directoryName: shape.directoryName ?? recordingId.uuidString,
             startedAt: startedAt ?? started, endedAt: shape.endedAt,
-            tracks: shape.tracks ?? [try track(.mic, "a.caf")],
+            tracks: tracks,
             markers: shape.markers, capturedProcesses: [],
             captureGroupKey: shape.captureGroupKey, inputDevices: shape.inputDevices,
             discontinuities: shape.discontinuities, isFinalized: shape.isFinalized

@@ -22,8 +22,9 @@ final class TranscriptTests: XCTestCase {
     }
 
     func test_p56_equalStartsOnDifferentChannels_areAccepted() throws {
-        let pair = "[\(TranscriptJSON.segment(startMs: "0", endMs: "500")), " +
-            "\(TranscriptJSON.segment(startMs: "0", endMs: "500", channel: "\"system\"", speakerCluster: "0"))]"
+        let system = TranscriptJSON.segment(startMs: "0", endMs: "500",
+                                            channel: "\"system\"", speakerCluster: "0")
+        let pair = "[\(TranscriptJSON.segment(startMs: "0", endMs: "500")), \(system)]"
         XCTAssertNoThrow(try decodeTranscript(TranscriptJSON.text(
             segments: pair, speakers: "[\(TranscriptJSON.speaker())]")))
     }
@@ -142,17 +143,20 @@ final class TranscriptTests: XCTestCase {
     }
 
     func test_p67_sameChannelOverlap_isRejected() throws {
-        let segments = "[\(TranscriptJSON.segment(startMs: "0", endMs: "1000", channel: "\"system\"", speakerCluster: "0")), " +
-            "\(TranscriptJSON.segment(startMs: "100", endMs: "900")), " +
-            "\(TranscriptJSON.segment(startMs: "500", endMs: "1500", channel: "\"system\"", speakerCluster: "0"))]"
+        let early = TranscriptJSON.segment(startMs: "0", endMs: "1000",
+                                           channel: "\"system\"", speakerCluster: "0")
+        let late = TranscriptJSON.segment(startMs: "500", endMs: "1500",
+                                          channel: "\"system\"", speakerCluster: "0")
+        let segments = "[\(early), \(TranscriptJSON.segment(startMs: "100", endMs: "900")), \(late)]"
         assertInvariant(try decodeTranscript(TranscriptJSON.text(
             segments: segments, speakers: "[\(TranscriptJSON.speaker())]")),
             contract: "C-003", type: "Transcript", invariant: 14, path: "segments[2].startMs")
     }
 
     func test_p67_crossChannelOverlapAndTouching_areAccepted() throws {
-        let overlap = "[\(TranscriptJSON.segment(startMs: "0", endMs: "1000")), " +
-            "\(TranscriptJSON.segment(startMs: "0", endMs: "1000", channel: "\"system\"", speakerCluster: "0"))]"
+        let system = TranscriptJSON.segment(startMs: "0", endMs: "1000",
+                                            channel: "\"system\"", speakerCluster: "0")
+        let overlap = "[\(TranscriptJSON.segment(startMs: "0", endMs: "1000")), \(system)]"
         XCTAssertNoThrow(try decodeTranscript(TranscriptJSON.text(
             segments: overlap, speakers: "[\(TranscriptJSON.speaker())]")))
         let touching = "[\(TranscriptJSON.segment(startMs: "0", endMs: "1000")), " +

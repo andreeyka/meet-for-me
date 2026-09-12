@@ -164,10 +164,11 @@ final class ManifestSpansTests: XCTestCase {
         XCTAssertEqual(try DomainJSON.decode(RecordingManifest.self,
                                              from: DomainJSON.encode(second)), second)
 
-        let segments = "[\(TranscriptJSON.segment(startMs: "0", endMs: "500")), " +
-            "\(TranscriptJSON.segment(startMs: "0", endMs: "500", channel: "\"system\"", speakerCluster: "0"))]"
-        let reversed = "[\(TranscriptJSON.segment(startMs: "0", endMs: "500", channel: "\"system\"", speakerCluster: "0")), " +
-            "\(TranscriptJSON.segment(startMs: "0", endMs: "500"))]"
+        let mic = TranscriptJSON.segment(startMs: "0", endMs: "500")
+        let system = TranscriptJSON.segment(startMs: "0", endMs: "500",
+                                            channel: "\"system\"", speakerCluster: "0")
+        let segments = "[\(mic), \(system)]"
+        let reversed = "[\(system), \(mic)]"
         let speakers = "[\(TranscriptJSON.speaker())]"
         let straight = try decodeTranscript(TranscriptJSON.text(segments: segments,
                                                                 speakers: speakers))

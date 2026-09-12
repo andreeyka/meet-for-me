@@ -81,7 +81,7 @@ enum DomainDateGrammar {
         return era * 146_097 + dayOfEra - 719_468
     }
 
-    static func civilFromDays(_ days: Int) -> (year: Int, month: Int, day: Int) {
+    static func civilFromDays(_ days: Int) -> CivilDate {
         let shifted = days + 719_468
         let era = (shifted >= 0 ? shifted : shifted - 146_096) / 146_097
         let dayOfEra = shifted - era * 146_097
@@ -90,7 +90,8 @@ enum DomainDateGrammar {
         let monthPrime = (5 * dayOfYear + 2) / 153
         let day = dayOfYear - (153 * monthPrime + 2) / 5 + 1
         let month = monthPrime + (monthPrime < 10 ? 3 : -9)
-        return (yearOfEra + era * 400 + (month <= 2 ? 1 : 0), month, day)
+        return CivilDate(year: yearOfEra + era * 400 + (month <= 2 ? 1 : 0),
+                         month: month, day: day)
     }
 
     static func daysInMonth(year: Int, month: Int) -> Int {
@@ -118,6 +119,13 @@ enum DomainDateGrammar {
         }
         return text
     }
+}
+
+/// Календарная дата пролептического григорианского счёта.
+struct CivilDate {
+    let year: Int
+    let month: Int
+    let day: Int
 }
 
 /// Разобранные поля отметки времени: календарные значения ещё не проверены.
