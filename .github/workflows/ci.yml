@@ -25,6 +25,64 @@ jobs:
       - uses: actions/checkout@v5
       - run: swift --version
       - run: swift build --package-path Packages/Core
+
+      # Разбор символьного графа — способ проверки, который девять контрактов
+      # называют для границы модуля (перечень и счёт — в отчёте по MEE-166), а
+      # критерий 45 MEE-74 уже записан под него. В ci.yml до этого шага не было ни
+      # одного вхождения слова symbol: пункты были описаны и не снимаемы ничем.
+      #
+      # Шаг обязан стоять в ОБЕИХ работах, и это не перестраховка. Граф снимается
+      # на одной платформе за прогон (инвариант 32 C-014, граница вторая):
+      # публичное объявление под `#if os(macOS)` в графе этой работы не появится
+      # вовсе, а за `#if` прячут именно системные типы. Снятый в одной работе,
+      # пункт зелен по построению на всём, что условная компиляция скрыла.
+      #
+      # Стоит до `swift test` по доводу шага SwiftLint в работе ниже: падение
+      # чужого теста не должно уносить с собой этот вердикт.
+      - name: Символьный граф (Packages/Core)
+        # `shell: bash` здесь несущий, а не украшение. Шаг `run` без явного shell
+        # исполняется оболочкой по умолчанию, и в контейнере это может быть `sh`
+        # (в образе jammy — dash). У dash нет опции `-o pipefail`: строка `set -o
+        # pipefail` там не настройка, а незаконная опция, и шаг умирает на первой
+        # же строке с кодом 2, не выведя ничего, — ровно это и случилось на первом
+        # прогоне PR #12. `shell: bash` даёт `bash --noprofile --norc -eo pipefail`.
+        shell: bash
+        env:
+          # Отчёт шага написан кириллицей. Без этого в локали C поток вывода
+          # Python получает кодировку ascii, и шаг падает на собственном отчёте,
+          # ничего не сказав о поверхности.
+          PYTHONIOENCODING: utf-8
+        run: |
+          set -o pipefail
+          log="$RUNNER_TEMP/symbol-graph.log"
+          status=0
+          ( set -eux
+            # Отсутствие python3 — отказ, а не пропуск. Ветка «шаг пропущен»
+            # уже была у SwiftLint, и шаг зеленел, ничего не проверив (MEE-91).
+            command -v python3
+            python3 --version
+            ls -l .github/scripts
+            python3 .github/scripts/symbol-graph-surface.py --self-test
+            graph_dir="$RUNNER_TEMP/symbol-graph-core"
+            rm -rf "$graph_dir"
+            mkdir -p "$graph_dir"
+            swift build --package-path Packages/Core \
+              -Xswiftc -emit-symbol-graph \
+              -Xswiftc -emit-symbol-graph-dir -Xswiftc "$graph_dir"
+            ls -l "$graph_dir"
+            python3 .github/scripts/symbol-graph-surface.py \
+              --graph-dir "$graph_dir" \
+              --sources Packages/Core/Sources \
+              --job "Core (Linux)"
+          ) 2>&1 | tee "$log" || status=$?
+          # Свой вердикт — число таргетов и число нарушений — разбор графа
+          # выносит аннотацией сам. Строка ниже нужна на один случай: шаг упал
+          # до того, как разбор сказал хоть слово, и тогда в аннотацию уходит
+          # хвост журнала. Иначе причина такого отказа видна только тому, у кого
+          # есть доступ к хранилищу логов Actions.
+          bash .github/scripts/annotate.sh "Символьный граф · Core (Linux)" "$status" "$log" || true
+          exit $status
+
       - run: swift test --package-path Packages/Core
 
   macos:
@@ -66,5 +124,46 @@ jobs:
           exit $status
 
       - run: swift --version
+
+      # Вторая половина шага, обязательная по той же границе способа: здесь граф
+      # снимается на macOS, и в нём видно всё, что `Core (Linux)` от себя скрыла
+      # условной компиляцией. Оба пакета — потому что `Packages/Mac` тянет из
+      # `Packages/Core` только DomainCore и EngineKit, а таргеты Storage, GigaAM,
+      # CalendarHub, ModelManager и Attribution в его графе не появятся вовсе.
+      - name: Символьный граф (Packages/Core и Packages/Mac)
+        # Оболочка названа явно и здесь — чтобы обе половины одного шага
+        # исполнялись одной оболочкой, а не по-разному в двух работах.
+        shell: bash
+        env:
+          PYTHONIOENCODING: utf-8
+        run: |
+          set -o pipefail
+          log="$RUNNER_TEMP/symbol-graph.log"
+          status=0
+          ( set -eux
+            command -v python3
+            python3 --version
+            python3 .github/scripts/symbol-graph-surface.py --self-test
+            # `|| inner=$?` несущий, как и у SwiftLint выше: вердикт по второму
+            # пакету не должен пропадать из-за отказа по первому.
+            inner=0
+            for pkg in Core Mac; do
+              graph_dir="$RUNNER_TEMP/symbol-graph-$pkg"
+              rm -rf "$graph_dir"
+              mkdir -p "$graph_dir"
+              swift build --package-path "Packages/$pkg" \
+                -Xswiftc -emit-symbol-graph \
+                -Xswiftc -emit-symbol-graph-dir -Xswiftc "$graph_dir"
+              ls -l "$graph_dir"
+              python3 .github/scripts/symbol-graph-surface.py \
+                --graph-dir "$graph_dir" \
+                --sources "Packages/$pkg/Sources" \
+                --job "Core + Mac (macos-14) · Packages/$pkg" || inner=$?
+            done
+            exit $inner
+          ) 2>&1 | tee "$log" || status=$?
+          bash .github/scripts/annotate.sh "Символьный граф · Core + Mac" "$status" "$log" || true
+          exit $status
+
       - run: swift test --package-path Packages/Core
       - run: swift test --package-path Packages/Mac
