@@ -284,6 +284,7 @@ def run(args):
 
     report = "\n".join(lines) + "\n"
     sys.stdout.write(report)
+    annotate(args.job, sorted(graphs), violations)
     if args.report:
         with open(args.report, "w", encoding="utf-8") as handle:
             handle.write(report)
@@ -292,6 +293,23 @@ def run(args):
         with open(summary, "a", encoding="utf-8") as handle:
             handle.write(report)
     return 1 if violations else 0
+
+
+def annotate(job, targets, violations):
+    """Вердикт прогона — аннотацией работы.
+
+    Довод тот же, что у шага SwiftLint: «шаг отработал» должно подтверждаться,
+    не открывая журнал работы. Вердикт выносит сам скрипт, а не оболочка шага:
+    один прогон — одна аннотация, и вердикт по второму пакету не теряется за
+    первым, как это вышло на прогоне 32e5681.
+    """
+    if os.environ.get("GITHUB_ACTIONS") != "true":
+        return
+    label = job or "символьный граф"
+    for target, what, where in violations:
+        print("::error title=Символьный граф · %s::`%s`: %s — %s" % (label, target, what, where))
+    print("::notice title=Символьный граф · %s::таргетов с графом %d (%s); нарушений %d"
+          % (label, len(targets), ", ".join(targets) or "—", len(violations)))
 
 
 def self_test():
