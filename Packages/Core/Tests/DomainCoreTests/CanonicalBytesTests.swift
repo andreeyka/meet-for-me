@@ -55,7 +55,7 @@ final class CanonicalBytesTests: XCTestCase {
 
     func test_p109_keysAreSortedRecursively() throws {
         let text = try encodedText(RecordingManifestFixtures.deviceChangedMidway)
-        assertKeyOrder(["\"capturedProcesses\"", "\"captureGroupKey\"", "\"directoryName\"",
+        assertKeyOrder(["\"captureGroupKey\"", "\"capturedProcesses\"", "\"directoryName\"",
                         "\"discontinuities\"", "\"endedAt\"", "\"inputDevices\"", "\"isFinalized\"",
                         "\"markers\"", "\"meetingId\"", "\"recordingId\"", "\"schemaVersion\"",
                         "\"startedAt\"", "\"tracks\""], in: text)
