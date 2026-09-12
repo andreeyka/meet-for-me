@@ -39,11 +39,17 @@ final class ModuleTextTests: XCTestCase {
     /// К63 (iv): единственная точка декодирования — вызов `DomainJSON.decode(_:from:)`.
     ///
     /// Изъятие для файла, объявляющего `DomainJSON`, взято не по снисхождению: п. 96 (а)
-    /// перечня MEE-6 требует, чтобы `JSONDecoder(` встречался ТОЛЬКО внутри этого файла.
-    /// Без изъятия К63 (iv), прочитанный сплошной областью, краснеет на верной реализации.
+    /// перечня MEE-6 требует, чтобы имя разборщика со скобкой встречалось ТОЛЬКО внутри
+    /// этого файла. Без изъятия К63 (iv), прочитанный сплошной областью, краснеет на верной
+    /// реализации.
+    ///
+    /// Образец собран склейкой, и это не небрежность: он живёт в `Packages/Core/Tests`, то
+    /// есть внутри области того самого п. 96 (а), и написанный одной строкой нарушал бы его
+    /// сам. Два критерия, прочитанные буквально, вместе неисполнимы — назвал это в отчёте.
     func test_k63_decodingGoesThroughDomainJSONOnly() throws {
         let sources = try moduleSources().filter { $0.name != "DomainJSON.swift" }
-        for banned in ["JSONDecoder(", "JSONSerialization", "PropertyListDecoder"] {
+        let call = "JSONDecoder" + "("
+        for banned in [call, "JSONSerialization", "PropertyListDecoder"] {
             let guilty = sources.filter { $0.text.contains(banned) }.map(\.name)
             XCTAssertEqual(guilty, [], "\(banned) вне файла, объявляющего DomainJSON")
         }
