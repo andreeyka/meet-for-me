@@ -25,6 +25,38 @@ jobs:
       - uses: actions/checkout@v5
       - run: swift --version
       - run: swift build --package-path Packages/Core
+
+      # Разбор символьного графа — способ проверки, который девять контрактов
+      # называют для границы модуля (перечень и счёт — в отчёте по MEE-166), а
+      # критерий 45 MEE-74 уже записан под него. В ci.yml до этого шага не было ни
+      # одного вхождения слова symbol: пункты были описаны и не снимаемы ничем.
+      #
+      # Шаг обязан стоять в ОБЕИХ работах, и это не перестраховка. Граф снимается
+      # на одной платформе за прогон (инвариант 32 C-014, граница вторая):
+      # публичное объявление под `#if os(macOS)` в графе этой работы не появится
+      # вовсе, а за `#if` прячут именно системные типы. Снятый в одной работе,
+      # пункт зелен по построению на всём, что условная компиляция скрыла.
+      #
+      # Стоит до `swift test` по доводу шага SwiftLint в работе ниже: падение
+      # чужого теста не должно уносить с собой этот вердикт.
+      - name: Символьный граф (Packages/Core)
+        run: |
+          set -euo pipefail
+          # Отсутствие python3 — отказ, а не пропуск. Ветка «шаг пропущен» уже
+          # была однажды у SwiftLint, и шаг зеленел, ничего не проверив (MEE-91).
+          python3 --version
+          python3 .github/scripts/symbol-graph-surface.py --self-test
+          graph_dir="$RUNNER_TEMP/symbol-graph-core"
+          rm -rf "$graph_dir"
+          mkdir -p "$graph_dir"
+          swift build --package-path Packages/Core \
+            -Xswiftc -emit-symbol-graph \
+            -Xswiftc -emit-symbol-graph-dir -Xswiftc "$graph_dir"
+          python3 .github/scripts/symbol-graph-surface.py \
+            --graph-dir "$graph_dir" \
+            --sources Packages/Core/Sources \
+            --job "Core (Linux)"
+
       - run: swift test --package-path Packages/Core
 
   macos:
@@ -66,5 +98,33 @@ jobs:
           exit $status
 
       - run: swift --version
+
+      # Вторая половина шага, обязательная по той же границе способа: здесь граф
+      # снимается на macOS, и в нём видно всё, что `Core (Linux)` от себя скрыла
+      # условной компиляцией. Оба пакета — потому что `Packages/Mac` тянет из
+      # `Packages/Core` только DomainCore и EngineKit, а таргеты Storage, GigaAM,
+      # CalendarHub, ModelManager и Attribution в его графе не появятся вовсе.
+      - name: Символьный граф (Packages/Core и Packages/Mac)
+        run: |
+          set -euo pipefail
+          python3 --version
+          python3 .github/scripts/symbol-graph-surface.py --self-test
+          # `|| status=$?` несущий, как и у SwiftLint выше: вердикт по второму
+          # пакету не должен пропадать из-за отказа по первому.
+          status=0
+          for pkg in Core Mac; do
+            graph_dir="$RUNNER_TEMP/symbol-graph-$pkg"
+            rm -rf "$graph_dir"
+            mkdir -p "$graph_dir"
+            swift build --package-path "Packages/$pkg" \
+              -Xswiftc -emit-symbol-graph \
+              -Xswiftc -emit-symbol-graph-dir -Xswiftc "$graph_dir"
+            python3 .github/scripts/symbol-graph-surface.py \
+              --graph-dir "$graph_dir" \
+              --sources "Packages/$pkg/Sources" \
+              --job "Core + Mac (macos-14) · Packages/$pkg" || status=$?
+          done
+          exit $status
+
       - run: swift test --package-path Packages/Core
       - run: swift test --package-path Packages/Mac
