@@ -186,12 +186,8 @@ final class StageOrderTests: XCTestCase {
             TranscriptJSON.text(speakers: "[\(speaker)]"))).last, "embedding")
     }
 
-    /// Негодное значение взято целым вне §0.2 п. 9, а не литералом `1e400`: место отказа на
-    /// литерале вне диапазона `Double` у `Foundation` разнится по сборкам, и вектор проверял бы
-    /// не порядок отказа, а разбор чисел.
     func test_p135_nestedValueFailsBeforeParentReachesNextField() throws {
-        let broken = TranscriptJSON.word(endMs: "9007199254740992")
-        let segment = TranscriptJSON.segment(words: "[\(broken)]")
+        let segment = TranscriptJSON.segment(words: "[\(TranscriptJSON.word(endMs: "1e400"))]")
         assertCorrupted(try decodeTranscript(TranscriptJSON.text(
             segments: "[\(segment)]", speakers: "[\(TranscriptJSON.speaker(totalMs: "1.5"))]")),
             key: "endMs")

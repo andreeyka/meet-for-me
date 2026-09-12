@@ -165,12 +165,10 @@ final class IntegerReadingTests: XCTestCase {
         assertCorrupted(try decodeTranscript(TranscriptJSON.text(segments:
             "[\(TranscriptJSON.segment(words: "[\(TranscriptJSON.word(endMs: over))]"))]")),
             key: "endMs")
-        for value in ["-9007199254740992", "9007199254740993", "9223372036854775808"] {
+        for value in ["-9007199254740992", "9007199254740993", "9223372036854775808", "1e400"] {
             assertCorrupted(try decodeManifest(ManifestJSON.text(
                 markers: "[\(ManifestJSON.marker(atMs: value))]")), key: "atMs")
         }
-        assertCorruptedByNumberLiteral(try decodeManifest(ManifestJSON.text(
-            markers: "[\(ManifestJSON.marker(atMs: "1e400"))]")), key: "atMs")
     }
 
     /// Вектор Q27: два негодных поля в одном типе, одно положительное, другое отрицательное.

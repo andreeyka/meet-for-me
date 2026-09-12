@@ -143,7 +143,7 @@ final class CanonicalBytesTests: XCTestCase {
 
     func test_p112_nonFiniteLiteralsAreRejected() throws {
         for value in ["1e400", "-1e400"] {
-            assertCorruptedByNumberLiteral(try decodeTranscript(TranscriptJSON.text(segments:
+            assertCorrupted(try decodeTranscript(TranscriptJSON.text(segments:
                 "[\(TranscriptJSON.segment(textConfidence: value))]")), key: "textConfidence")
         }
         let half = try decodeTranscript(TranscriptJSON.text(segments:
