@@ -110,9 +110,12 @@ final class FixtureTests: XCTestCase {
         XCTAssertEqual(TranscriptFixtures.oneOnOne.speakers.count, 1)
         XCTAssertTrue(hasCrossChannelOverlap(TranscriptFixtures.threeClustersOverlapping))
         XCTAssertEqual(Set(TranscriptFixtures.threeClustersOverlapping.speakers.map(\.cluster)).count, 3)
-        XCTAssertTrue(TranscriptFixtures.withoutConfidence.segments.allSatisfy {
-            $0.textConfidence == nil && $0.words.allSatisfy { $0.confidence == nil }
-        })
+        for segment in TranscriptFixtures.withoutConfidence.segments {
+            XCTAssertNil(segment.textConfidence)
+            for word in segment.words {
+                XCTAssertNil(word.confidence)
+            }
+        }
         let corrected = try XCTUnwrap(TranscriptFixtures.withNameCorrections.segments.first)
         XCTAssertNotEqual(corrected.textOriginal, corrected.text)
         XCTAssertTrue(corrected.words.contains { $0.original != nil && $0.original != $0.text })

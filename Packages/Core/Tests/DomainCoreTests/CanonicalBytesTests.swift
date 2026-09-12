@@ -83,12 +83,19 @@ final class CanonicalBytesTests: XCTestCase {
         var escaped = false
         for byte in bytes {
             if inString {
-                if escaped { escaped = false } else if byte == 0x5C { escaped = true } else if byte == 0x22 {
+                if escaped {
+                    escaped = false
+                } else if byte == 0x5C {
+                    escaped = true
+                } else if byte == 0x22 {
                     inString = false
                 }
                 continue
             }
-            if byte == 0x22 { inString = true; continue }
+            if byte == 0x22 {
+                inString = true
+                continue
+            }
             XCTAssertFalse(byte == 0x20 || byte == 0x0A || byte == 0x09, "пробельный байт вне строки")
         }
         XCTAssertEqual(DomainJSON.encoder().outputFormatting,
