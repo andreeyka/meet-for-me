@@ -5,8 +5,6 @@
 
 import Foundation
 
-// swiftlint:disable function_parameter_count
-
 enum EventJSON {
 
     static let identifier = "\"11111111-1111-4111-8111-111111111111\""
@@ -173,5 +171,3 @@ enum TranscriptJSON {
         "\"embeddingModelVersion\": \(embeddingModelVersion), \"totalMs\": \(totalMs)\(tail)}"
     }
 }
-
-// swiftlint:enable function_parameter_count

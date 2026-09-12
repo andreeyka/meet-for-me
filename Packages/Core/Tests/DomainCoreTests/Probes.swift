@@ -94,6 +94,7 @@ enum ManifestProbe {
     private static let started = Date(timeIntervalSince1970: 1_789_113_600)
     private static let ended = Date(timeIntervalSince1970: 1_789_117_200)
 
+    // swiftlint:disable:next cyclomatic_complexity
     static func manifest(violation: RootViolation,
                          startedAt: Date? = nil) throws -> RecordingManifest {
         var shape = Shape()

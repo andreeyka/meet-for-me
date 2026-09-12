@@ -15,8 +15,8 @@ final class UnknownKeysTests: XCTestCase {
         XCTAssertNoThrow(try decodeEvent(EventJSON.text(
             attendees: "[\(attendee.dropLast())\(extra)}]")))
         XCTAssertNoThrow(try decodeEvent(EventJSON.text(
-            attendees: "[\(EventJSON.attendee(email: "null"))]",
-            organizer: "\(EventJSON.person(email: "null").dropLast())\(extra)}")))
+            organizer: "\(EventJSON.person(email: "null").dropLast())\(extra)}",
+            attendees: "[\(EventJSON.attendee(email: "null"))]")))
         XCTAssertNoThrow(try decodeEvent(EventJSON.text(
             conference: EventJSON.conference(tail: extra))))
 

@@ -30,10 +30,6 @@ extension Transcript {
             try validate()
         }
 
-        enum CodingKeys: String, CodingKey {
-            case startMs, endMs, text, confidence, original
-        }
-
         public init(from decoder: Decoder) throws {
             let box = try decoder.container(keyedBy: CodingKeys.self)
             startMs = try box.decodeBounded(Int.self, forKey: .startMs)
@@ -91,11 +87,6 @@ extension Transcript {
             self.textConfidence = textConfidence
             self.words = words
             try validate()
-        }
-
-        enum CodingKeys: String, CodingKey {
-            case startMs, endMs, channel, speakerCluster, text, textOriginal
-            case textConfidence, words
         }
 
         public init(from decoder: Decoder) throws {
@@ -207,10 +198,6 @@ extension Transcript {
             try validate()
         }
 
-        enum CodingKeys: String, CodingKey {
-            case cluster, embedding, embeddingModelVersion, totalMs
-        }
-
         public init(from decoder: Decoder) throws {
             let box = try decoder.container(keyedBy: CodingKeys.self)
             cluster = try box.decodeBounded(Int.self, forKey: .cluster)
@@ -250,5 +237,24 @@ extension Transcript {
                 throw owner.fail(10, "embedding", "пустой массив значением не является")
             }
         }
+    }
+}
+
+extension Transcript.Word {
+    enum CodingKeys: String, CodingKey {
+        case startMs, endMs, text, confidence, original
+    }
+}
+
+extension Transcript.Segment {
+    enum CodingKeys: String, CodingKey {
+        case startMs, endMs, channel, speakerCluster, text, textOriginal
+        case textConfidence, words
+    }
+}
+
+extension Transcript.Speaker {
+    enum CodingKeys: String, CodingKey {
+        case cluster, embedding, embeddingModelVersion, totalMs
     }
 }

@@ -59,8 +59,9 @@ final class RecordingManifestTests: XCTestCase {
     func test_p43_finalizedRequiresEndedAtAndAAC() throws {
         assertInvariant(try decodeManifest(ManifestJSON.text(endedAt: "null")),
                         contract: "C-002", type: "RecordingManifest", invariant: 13, path: "endedAt")
-        let mixed = "[\(micTrack), \(ManifestJSON.track(channel: "\"system\"", fileName: "\"s.caf\"",
-                                                        format: "\"pcm-caf\""))]"
+        let rawSystem = ManifestJSON.track(channel: "\"system\"", fileName: "\"s.caf\"",
+                                           format: "\"pcm-caf\"")
+        let mixed = "[\(micTrack), \(rawSystem)]"
         assertInvariant(try decodeManifest(ManifestJSON.text(tracks: mixed)),
                         contract: "C-002", type: "RecordingManifest", invariant: 13,
                         path: "tracks[1].format")

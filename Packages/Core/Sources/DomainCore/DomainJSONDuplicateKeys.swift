@@ -130,7 +130,7 @@ private struct DuplicateKeyScanner {
             }
             raw.append(byte)
         }
-        return String(decoding: raw, as: UTF8.self)
+        return String(bytes: raw, encoding: .utf8) ?? ""
     }
 
     private mutating func skipLiteral() {

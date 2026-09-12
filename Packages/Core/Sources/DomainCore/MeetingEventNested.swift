@@ -22,10 +22,6 @@ extension MeetingEvent {
             try validate()
         }
 
-        enum CodingKeys: String, CodingKey {
-            case name, email
-        }
-
         public init(from decoder: Decoder) throws {
             let box = try decoder.container(keyedBy: CodingKeys.self)
             name = try box.decodeIfPresent(String.self, forKey: .name)
@@ -73,10 +69,6 @@ extension MeetingEvent {
             try validate()
         }
 
-        enum CodingKeys: String, CodingKey {
-            case person, responseStatus, isOptional
-        }
-
         public init(from decoder: Decoder) throws {
             let box = try decoder.container(keyedBy: CodingKeys.self)
             person = try box.decode(Person.self, forKey: .person)
@@ -111,10 +103,6 @@ extension MeetingEvent {
             self.meetingId = meetingId
             self.passcode = passcode
             try validate()
-        }
-
-        enum CodingKeys: String, CodingKey {
-            case provider, joinUrl, meetingId, passcode
         }
 
         public init(from decoder: Decoder) throws {
@@ -157,5 +145,23 @@ extension MeetingEvent.Attendee {
             let raw = try decoder.singleValueContainer().decode(String.self)
             self = ResponseStatus(rawValue: raw) ?? .unknown
         }
+    }
+}
+
+extension MeetingEvent.Person {
+    enum CodingKeys: String, CodingKey {
+        case name, email
+    }
+}
+
+extension MeetingEvent.Attendee {
+    enum CodingKeys: String, CodingKey {
+        case person, responseStatus, isOptional
+    }
+}
+
+extension MeetingEvent.Conference {
+    enum CodingKeys: String, CodingKey {
+        case provider, joinUrl, meetingId, passcode
     }
 }

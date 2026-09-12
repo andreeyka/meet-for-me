@@ -42,9 +42,9 @@ enum ReferenceJSON {
         }
       ],
       "markers": [
-        { "kind": "sleep",         "atMs": 1800000 },
+        { "kind": "sleep", "atMs": 1800000 },
         { "kind": "discontinuity", "atMs": 1800000, "detail": "aggregate device rebuilt" },
-        { "kind": "wake",          "atMs": 1802000 },
+        { "kind": "wake", "atMs": 1802000 },
         { "kind": "deviceChanged", "atMs": 2400000, "detail": "встроенный -> AirPods" }
       ],
       "discontinuities": [

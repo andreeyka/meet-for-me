@@ -107,7 +107,7 @@ func decodeTranscript(_ text: String) throws -> Transcript {
 }
 
 func encodedText<Value: Encodable>(_ value: Value) throws -> String {
-    String(decoding: try DomainJSON.encode(value), as: UTF8.self)
+    try XCTUnwrap(String(bytes: try DomainJSON.encode(value), encoding: .utf8))
 }
 
 func makeUUID(_ text: String) throws -> UUID {

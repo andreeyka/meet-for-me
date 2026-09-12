@@ -83,7 +83,7 @@ final class MeetingEventTests: XCTestCase {
     }
 
     func test_p31_optionalMembers_areAccepted() throws {
-        XCTAssertNoThrow(try decodeEvent(EventJSON.text(conference: "null", organizer: "null")))
+        XCTAssertNoThrow(try decodeEvent(EventJSON.text(organizer: "null", conference: "null")))
         let sparse = EventJSON.conference(tail: "")
         XCTAssertNoThrow(try decodeEvent(EventJSON.text(conference: sparse)))
         let decoded = try decodeEvent(EventJSON.text(conference: sparse))

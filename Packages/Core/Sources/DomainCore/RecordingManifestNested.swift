@@ -34,10 +34,6 @@ extension RecordingManifest {
             try validate()
         }
 
-        enum CodingKeys: String, CodingKey {
-            case channel, fileName, sampleRate, channelCount, format
-        }
-
         public init(from decoder: Decoder) throws {
             let box = try decoder.container(keyedBy: CodingKeys.self)
             channel = try box.decode(Channel.self, forKey: .channel)
@@ -108,10 +104,6 @@ extension RecordingManifest {
             try validate()
         }
 
-        enum CodingKeys: String, CodingKey {
-            case kind, atMs, detail
-        }
-
         public init(from decoder: Decoder) throws {
             let box = try decoder.container(keyedBy: CodingKeys.self)
             kind = try box.decode(MarkerKind.self, forKey: .kind)
@@ -146,10 +138,6 @@ extension RecordingManifest {
             self.bundleId = bundleId
             self.executableName = executableName
             try validate()
-        }
-
-        enum CodingKeys: String, CodingKey {
-            case pid, bundleId, executableName
         }
 
         public init(from decoder: Decoder) throws {
@@ -207,10 +195,6 @@ extension RecordingManifest {
             try validate()
         }
 
-        enum CodingKeys: String, CodingKey {
-            case atMs, gapMs, scaleErrorMs, reason
-        }
-
         public init(from decoder: Decoder) throws {
             let box = try decoder.container(keyedBy: CodingKeys.self)
             atMs = try box.decodeBounded(Int.self, forKey: .atMs)
@@ -255,10 +239,6 @@ extension RecordingManifest {
             try validate()
         }
 
-        enum CodingKeys: String, CodingKey {
-            case atMs, present, name, uid
-        }
-
         public init(from decoder: Decoder) throws {
             let box = try decoder.container(keyedBy: CodingKeys.self)
             atMs = try box.decodeBounded(Int.self, forKey: .atMs)
@@ -286,5 +266,35 @@ extension RecordingManifest {
             try owner.check(name == nil, 17, "name", "устройства нет, а имя названо")
             try owner.check(uid == nil, 17, "uid", "устройства нет, а UID назван")
         }
+    }
+}
+
+extension RecordingManifest.Track {
+    enum CodingKeys: String, CodingKey {
+        case channel, fileName, sampleRate, channelCount, format
+    }
+}
+
+extension RecordingManifest.Marker {
+    enum CodingKeys: String, CodingKey {
+        case kind, atMs, detail
+    }
+}
+
+extension RecordingManifest.CapturedProcess {
+    enum CodingKeys: String, CodingKey {
+        case pid, bundleId, executableName
+    }
+}
+
+extension RecordingManifest.Discontinuity {
+    enum CodingKeys: String, CodingKey {
+        case atMs, gapMs, scaleErrorMs, reason
+    }
+}
+
+extension RecordingManifest.InputDeviceSpan {
+    enum CodingKeys: String, CodingKey {
+        case atMs, present, name, uid
     }
 }
