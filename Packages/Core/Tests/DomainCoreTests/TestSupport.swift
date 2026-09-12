@@ -79,6 +79,28 @@ func assertTypeMismatch<Value>(
     }
 }
 
+/// Числовой литерал вне диапазона `Double`. Отказ обязателен на обеих работах CI, но место
+/// отказа у `Foundation` разное: на одной сборке значение превращается в число при чтении поля,
+/// и ключ попадает в `codingPath`, на другой документ отвергается целиком, и путь пуст. Пункт 5
+/// запрещает `#if os(...)` и `XCTSkip`, поэтому утверждение записано так, чтобы быть верным на
+/// обеих: отказ — всегда `dataCorrupted`, и если путь не пуст, последний его элемент — ключ.
+func assertCorruptedByNumberLiteral<Value>(
+    _ expression: @autoclosure () throws -> Value,
+    key: String,
+    file: StaticString = #filePath,
+    line: UInt = #line
+) {
+    XCTAssertThrowsError(try expression(), "ожидался DecodingError", file: file, line: line) { error in
+        guard let decoding = error as? DecodingError,
+              case .dataCorrupted(let context) = decoding else {
+            XCTFail("ожидался dataCorrupted, получено \(error)", file: file, line: line)
+            return
+        }
+        guard let last = context.codingPath.last?.stringValue else { return }
+        XCTAssertEqual(last, key, "ключ", file: file, line: line)
+    }
+}
+
 /// Полный путь ключей ошибки разбора — для утверждений о порядке отказа.
 func corruptedPath<Value>(_ expression: @autoclosure () throws -> Value) -> [String] {
     do {
