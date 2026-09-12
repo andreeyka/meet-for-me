@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "signalTtlSeconds": 60,
+  "weights": {
+    "calendarWindow": 0.2,
+    "clientRunning": 0.4,
+    "microphoneInUse": 0.4,
+    "clientAudioOutput": 0.8
+  }
+}
