@@ -149,10 +149,8 @@ final class NoteAndChangesTests: XCTestCase {
         let stream = sut.changes()
         XCTAssertEqual(sut.liveObserverCount, 1)
         await sut.note(observed: .granted, for: .systemAudioRecording)
-        for await snapshot in stream {
-            XCTAssertEqual(snapshot.status(of: .systemAudioRecording), .granted)
-            break
-        }
+        let snapshots = await Streams.take(stream, 1)
+        XCTAssertEqual(snapshots.map { $0.status(of: .systemAudioRecording) }, [.granted])
     }
 
     // MARK: - Активация приложения перечитывает снимок и публикует только изменение
