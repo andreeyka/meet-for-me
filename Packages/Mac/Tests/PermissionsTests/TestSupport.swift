@@ -1,0 +1,309 @@
+//  Оснастка тестов модуля `permissions`: фейки швов 1.а, 1.б и 2 перечня MEE-74 и сборка портов
+//  на подставленных источниках.
+//
+//  Реализацию портов оснастка не подменяет: перевод исхода чтения, правила `request`, `note`,
+//  `changes()`, счёт удержаний и события исполняет настоящий код модуля.
+
+import DomainCore
+import Foundation
+import XCTest
+@testable import Permissions
+
+// MARK: - Шов 1.а: текущий статус и промпт
+
+final class FakeStatusSource: StatusSource, @unchecked Sendable {
+
+    private let lock = NSLock()
+    private var statuses: [PermissionKind: PermissionStatus]
+    private var answers: [PermissionKind: Bool] = [:]
+    private var prompted: [PermissionKind] = []
+    /// Пауза перед ответом на промпт, секунды — чтобы два параллельных `request` перекрылись.
+    var promptDelay: TimeInterval = 0
+
+    init(_ statuses: [PermissionKind: PermissionStatus] = [:]) {
+        self.statuses = statuses
+    }
+
+    /// Права, для которых был показан промпт, в порядке показа.
+    var prompts: [PermissionKind] {
+        lock.lock()
+        defer { lock.unlock() }
+        return prompted
+    }
+
+    func set(_ status: PermissionStatus, for kind: PermissionKind) {
+        lock.lock()
+        defer { lock.unlock() }
+        statuses[kind] = status
+    }
+
+    /// Чем ответит «пользователь» на промпт права.
+    func answer(_ granted: Bool, for kind: PermissionKind) {
+        lock.lock()
+        defer { lock.unlock() }
+        answers[kind] = granted
+    }
+
+    func status(of kind: PermissionKind) async -> PermissionStatus {
+        current(kind)
+    }
+
+    func prompt(_ kind: PermissionKind) async -> Bool {
+        if promptDelay > 0 {
+            try? await Task.sleep(nanoseconds: UInt64(promptDelay * 1_000_000_000))
+        }
+        return recordPrompt(kind)
+    }
+
+    private func current(_ kind: PermissionKind) -> PermissionStatus {
+        lock.lock()
+        defer { lock.unlock() }
+        return statuses[kind] ?? .denied
+    }
+
+    private func recordPrompt(_ kind: PermissionKind) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        prompted.append(kind)
+        let granted = answers[kind] ?? false
+        statuses[kind] = granted ? .granted : .denied
+        return granted
+    }
+}
+
+// MARK: - Шов 1.б: исход системного чтения
+
+final class FakeSystemReader: SystemReader, @unchecked Sendable {
+
+    private let lock = NSLock()
+    private var readings: [PermissionKind: SystemReading]
+    private var answers: [PermissionKind: Bool] = [:]
+
+    init(_ readings: [PermissionKind: SystemReading] = [:]) {
+        self.readings = readings
+    }
+
+    func set(_ reading: SystemReading, for kind: PermissionKind) {
+        lock.lock()
+        defer { lock.unlock() }
+        readings[kind] = reading
+    }
+
+    func answer(_ granted: Bool, for kind: PermissionKind) {
+        lock.lock()
+        defer { lock.unlock() }
+        answers[kind] = granted
+    }
+
+    func read(_ kind: PermissionKind) async -> SystemReading {
+        current(kind)
+    }
+
+    func prompt(_ kind: PermissionKind) async -> Bool {
+        answer(for: kind)
+    }
+
+    private func answer(for kind: PermissionKind) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return answers[kind] ?? false
+    }
+
+    private func current(_ kind: PermissionKind) -> SystemReading {
+        lock.lock()
+        defer { lock.unlock() }
+        return readings[kind] ?? .unreadable
+    }
+}
+
+// MARK: - Шов 2: настройки, автозапуск, активация
+
+final class FakeSettingsOpener: SettingsOpener, @unchecked Sendable {
+
+    private let lock = NSLock()
+    private var failing: Set<PermissionKind> = []
+    private var openedKinds: [PermissionKind] = []
+
+    var opened: [PermissionKind] {
+        lock.lock()
+        defer { lock.unlock() }
+        return openedKinds
+    }
+
+    func fail(_ kinds: Set<PermissionKind>) {
+        lock.lock()
+        defer { lock.unlock() }
+        failing = kinds
+    }
+
+    func open(_ kind: PermissionKind) async -> Bool {
+        record(kind)
+    }
+
+    private func record(_ kind: PermissionKind) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        openedKinds.append(kind)
+        return !failing.contains(kind)
+    }
+}
+
+struct FakeFailure: LocalizedError {
+    let message: String
+    var errorDescription: String? { message }
+}
+
+final class FakeLoginItems: LoginItemRegistry, @unchecked Sendable {
+
+    private let lock = NSLock()
+    private var enabled = false
+    private var failure: String?
+
+    func fail(with message: String?) {
+        lock.lock()
+        defer { lock.unlock() }
+        failure = message
+    }
+
+    func isEnabled() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return enabled
+    }
+
+    func setEnabled(_ enabled: Bool) throws {
+        lock.lock()
+        defer { lock.unlock() }
+        if let failure {
+            throw FakeFailure(message: failure)
+        }
+        self.enabled = enabled
+    }
+}
+
+final class FakeActivation: ActivationSource, @unchecked Sendable {
+
+    private let lock = NSLock()
+    private var handler: (@Sendable () -> Void)?
+
+    func start(_ handler: @escaping @Sendable () -> Void) {
+        lock.lock()
+        defer { lock.unlock() }
+        self.handler = handler
+    }
+
+    func stop() {
+        lock.lock()
+        defer { lock.unlock() }
+        handler = nil
+    }
+
+    /// Приложение вернулось в активное состояние.
+    func fire() {
+        lock.lock()
+        let current = handler
+        lock.unlock()
+        current?()
+    }
+}
+
+// MARK: - Порт прав на подставленных источниках
+
+struct PermissionsHarness {
+
+    let statuses: FakeStatusSource
+    let settings = FakeSettingsOpener()
+    let loginItems = FakeLoginItems()
+    let activation = FakeActivation()
+    let sut: SystemPermissions
+
+    init(_ statuses: [PermissionKind: PermissionStatus] = [:]) {
+        self.statuses = FakeStatusSource(statuses)
+        sut = SystemPermissions(environment: .init(rights: self.statuses, settings: settings,
+                                                   loginItems: loginItems, activation: activation))
+    }
+
+    /// Порт со швом 1.б: исход чтения подставлен, перевод в статус — настоящий.
+    static func reading(_ readings: [PermissionKind: SystemReading]) -> (reader: FakeSystemReader,
+                                                                          sut: SystemPermissions) {
+        let reader = FakeSystemReader(readings)
+        let sut = SystemPermissions(environment: .init(rights: TranslatingStatusSource(reader: reader),
+                                                       settings: FakeSettingsOpener(),
+                                                       loginItems: FakeLoginItems(),
+                                                       activation: FakeActivation()))
+        return (reader, sut)
+    }
+}
+
+// MARK: - Потоки
+
+enum Streams {
+
+    /// Прочитать до `count` элементов, но не дольше `seconds`.
+    static func take<Element: Sendable>(_ stream: AsyncStream<Element>, _ count: Int,
+                                        within seconds: TimeInterval = 2) async -> [Element] {
+        let reader = Task { () -> [Element] in
+            var collected: [Element] = []
+            for await element in stream {
+                collected.append(element)
+                if collected.count >= count { break }
+            }
+            return collected
+        }
+        let watchdog = Task {
+            try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+            reader.cancel()
+        }
+        let result = await reader.value
+        watchdog.cancel()
+        return result
+    }
+}
+
+/// Ждать условия не дольше `seconds`; возвращает, дождались ли.
+func waitUntil(_ seconds: TimeInterval = 5, _ condition: () -> Bool) -> Bool {
+    let deadline = Date().addingTimeInterval(seconds)
+    while Date() < deadline {
+        if condition() { return true }
+        Thread.sleep(forTimeInterval: 0.02)
+    }
+    return condition()
+}
+
+// MARK: - Исходники и продукт сборки модуля
+
+struct SourceFile {
+    let name: String
+    let text: String
+}
+
+enum PermissionsSources {
+
+    static func directory(_ relative: String, from file: String = #filePath) -> URL {
+        URL(fileURLWithPath: file)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent(relative)
+    }
+
+    static func swiftFiles(in relative: String) throws -> [SourceFile] {
+        let root = directory(relative)
+        let names = try FileManager.default.contentsOfDirectory(atPath: root.path)
+            .filter { $0.hasSuffix(".swift") }
+            .sorted()
+        return try names.map { name in
+            SourceFile(name: name, text: try String(contentsOf: root.appendingPathComponent(name), encoding: .utf8))
+        }
+    }
+
+    static func sources() throws -> [SourceFile] { try swiftFiles(in: "Sources/Permissions") }
+
+    /// Объектные файлы таргета `Permissions` рядом с бандлом тестов: продукт `swift build`.
+    static func objectFiles() throws -> [URL] {
+        let products = Bundle(for: FakeHoldHandle.self).bundleURL.deletingLastPathComponent()
+        let build = products.appendingPathComponent("Permissions.build")
+        let names = try FileManager.default.contentsOfDirectory(atPath: build.path).filter { $0.hasSuffix(".o") }
+        return names.sorted().map { build.appendingPathComponent($0) }
+    }
+}
