@@ -27,7 +27,7 @@ final class SymbolTableTests: XCTestCase {
         let data = pipe.fileHandleForReading.readDataToEndOfFile()
         process.waitUntilExit()
         XCTAssertEqual(process.terminationStatus, 0)
-        let names = String(decoding: data, as: UTF8.self)
+        let names = (String(bytes: data, encoding: .utf8) ?? "")
             .split(separator: "\n")
             .map { String($0.split(separator: " ").last ?? "") }
             .filter { $0.hasPrefix("_") }
