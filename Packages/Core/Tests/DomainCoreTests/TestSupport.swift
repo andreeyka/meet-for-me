@@ -79,27 +79,26 @@ func assertTypeMismatch<Value>(
     }
 }
 
-/// Числовой литерал, не представимый конечным `Double`. Отказ обязателен на обеих работах CI
-/// и в обеих он `dataCorrupted`, но **имя ключа** у `Foundation` появляется не всегда: на
-/// macos-14 такой литерал отвергается ошибкой всего документа, с пустым `codingPath`, и наш
-/// `decodeFinite` до значения не доходит. §0.4 требует именно имя ключа — расхождение измерено
-/// и вынесено запросом на интерфейс (MEE-207), здесь оно не чинится и не прячется: п. 5
-/// запрещает `#if os(...)` и `XCTSkip`, поэтому утверждение записано так, чтобы быть верным
-/// на обеих сборках — отказ всегда, ключ там, где путь непуст.
-func assertCorruptedByNumberLiteral<Value>(
+/// Отказ разбора БЕЗ утверждения о месте: на числовом литерале, не представимом конечным
+/// `Double`, C-001 v11 §0.4 обещает тип ошибки и только его — «имя ключа в `codingPath`
+/// обещано там, где значение доходит до `decodeFinite` или `decodeBounded`; там, где чужой
+/// разбор отвечает раньше, `codingPath` пуст. Критериев на место на этом входе не пишут».
+///
+/// Прежний помощник сверял имя ключа, ЕСЛИ путь непуст, — то есть нёс утверждение о месте,
+/// спрятанное под платформенную ветку в тестовой оснастке, и командой Б7 не ловился, потому
+/// что записан был `guard`-ом, а не `#if os(...)`. Ключа этот помощник не принимает вовсе:
+/// вернуть утверждение о месте сюда нельзя, не переписав сигнатуру.
+func assertCorruptedWithoutPlace<Value>(
     _ expression: @autoclosure () throws -> Value,
-    key: String,
     file: StaticString = #filePath,
     line: UInt = #line
 ) {
     XCTAssertThrowsError(try expression(), "ожидался DecodingError", file: file, line: line) { error in
         guard let decoding = error as? DecodingError,
-              case .dataCorrupted(let context) = decoding else {
+              case .dataCorrupted = decoding else {
             XCTFail("ожидался dataCorrupted, получено \(error)", file: file, line: line)
             return
         }
-        guard let last = context.codingPath.last?.stringValue else { return }
-        XCTAssertEqual(last, key, "ключ", file: file, line: line)
     }
 }
 

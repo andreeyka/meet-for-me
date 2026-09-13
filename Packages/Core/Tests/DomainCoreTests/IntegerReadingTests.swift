@@ -169,8 +169,8 @@ final class IntegerReadingTests: XCTestCase {
             assertCorrupted(try decodeManifest(ManifestJSON.text(
                 markers: "[\(ManifestJSON.marker(atMs: value))]")), key: "atMs")
         }
-        assertCorruptedByNumberLiteral(try decodeManifest(ManifestJSON.text(
-            markers: "[\(ManifestJSON.marker(atMs: "1e400"))]")), key: "atMs")
+        assertCorruptedWithoutPlace(try decodeManifest(ManifestJSON.text(
+            markers: "[\(ManifestJSON.marker(atMs: "1e400"))]")))
     }
 
     /// Вектор Q27: два негодных поля в одном типе, одно положительное, другое отрицательное.
