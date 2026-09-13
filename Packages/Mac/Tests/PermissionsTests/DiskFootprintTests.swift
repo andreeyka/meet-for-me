@@ -46,7 +46,8 @@ final class DiskFootprintTests: XCTestCase {
 
         func difference(from other: Footprint) -> [String] {
             let changedFiles = Set(files.keys).union(other.files.keys).filter { files[$0] != other.files[$0] }
-            let changedKeys = Set(defaults.keys).union(other.defaults.keys).filter { defaults[$0] != other.defaults[$0] }
+            let keys = Set(defaults.keys).union(other.defaults.keys)
+            let changedKeys = keys.filter { defaults[$0] != other.defaults[$0] }
             return changedFiles.sorted() + changedKeys.sorted().map { "defaults: \($0)" }
         }
     }
