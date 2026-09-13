@@ -118,6 +118,8 @@ final class SettingsAndLoginTests: XCTestCase {
             let url = try XCTUnwrap(SettingsPane.url(for: kind), "\(kind)")
             XCTAssertEqual(url.scheme, "x-apple.systempreferences", "\(kind)")
         }
-        XCTAssertEqual(SettingsPane.url(for: .systemAudioRecording)?.query, "Privacy_AudioCapture")
+        // По строке, а не по `query`: у URL без `//` Foundation macOS 14 отдаёт `query` как `nil`, macOS 26 — значение.
+        XCTAssertEqual(SettingsPane.url(for: .systemAudioRecording)?.absoluteString,
+                       "x-apple.systempreferences:com.apple.preference.security?Privacy_AudioCapture")
     }
 }
