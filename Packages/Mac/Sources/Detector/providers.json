@@ -1,0 +1,31 @@
+{
+  "schemaVersion": 1,
+  "providers": [
+    {
+      "provider": "zoom",
+      "displayName": "Zoom",
+      "priority": 10,
+      "urlPatterns": [
+        {
+          "hostSuffix": "zoom.us",
+          "pathRegex": "^/(j|s|w)/(?<meetingId>[0-9]+)",
+          "meetingIdQueryKey": null,
+          "passcodeQueryKey": "pwd"
+        }
+      ]
+    },
+    {
+      "provider": "meet",
+      "displayName": "Google Meet",
+      "priority": 20,
+      "urlPatterns": [
+        {
+          "hostSuffix": "meet.google.com",
+          "pathRegex": "^/(?<meetingId>[a-z]{3}-[a-z]{4}-[a-z]{3})",
+          "meetingIdQueryKey": null,
+          "passcodeQueryKey": null
+        }
+      ]
+    }
+  ]
+}
