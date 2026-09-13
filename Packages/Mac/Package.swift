@@ -27,7 +27,8 @@ let package = Package(
     targets: [
         .target(name: "Capture", dependencies: [.product(name: "DomainCore", package: "Core")]),
         .target(name: "Permissions", dependencies: [.product(name: "DomainCore", package: "Core")]),
-        .target(name: "Detector", dependencies: [.product(name: "DomainCore", package: "Core")]),
+        .target(name: "Detector", dependencies: [.product(name: "DomainCore", package: "Core")],
+                resources: [.copy("providers.json"), .copy("clients.json")]),
         .target(name: "CalendarEventKit", dependencies: [.product(name: "DomainCore", package: "Core")]),
         .target(
             name: "EngineXPCClient",

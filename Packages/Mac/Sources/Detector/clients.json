@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "browsers": ["com.google.Chrome", "com.apple.Safari", "org.mozilla.firefox",
+               "com.microsoft.edgemac", "com.brave.Browser",
+               "ru.yandex.desktop.yandex-browser"],
+  "clients": [
+    {"provider": "zoom",  "bundleIds": ["us.zoom.xos"],             "browserFallback": true},
+    {"provider": "teams", "bundleIds": ["com.microsoft.teams2"],    "browserFallback": true},
+    {"provider": "meet",  "bundleIds": [],                          "browserFallback": true}
+  ]
+}
