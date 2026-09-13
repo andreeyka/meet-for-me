@@ -117,6 +117,39 @@ final class WeightsAndConfirmationTests: XCTestCase {
         try await confirmationRun(bytes: ReferenceTables.signalWeights(signalTtlSeconds: 7))
     }
 
+    /// Без номера критерия: драйвер приложения сам зовёт шаги, и подтверждения идут без теста.
+    /// Реальные часы для К73 не годятся (шапка «Инвариантов» C-009), поэтому здесь проверяется только
+    /// проводка `TimerDriver` на сроке в доли секунды — число подтверждений, а не величина разрывов.
+    func test_timerDriver_confirmsHoldingStateWithoutTestSteps() async throws {
+        let world = TestWorld()
+        world.set(chrome, bundleIds: SignalStreamTests.chromeBundles)
+        let values = try ReferenceTables.received(
+            SignalWeights.values(from: ReferenceTables.signalWeights(signalTtlSeconds: 1)))
+        let shortTtl = try ReceivedValues(clientRunning: values.clientRunning,
+                                          clientAudioOutput: values.clientAudioOutput,
+                                          microphoneInUse: values.microphoneInUse,
+                                          signalTtlSeconds: values.signalTtlSeconds / 5)
+        let environment = SignalEngine.Environment(source: world, clock: SystemClock(), driver: TimerDriver(),
+                                                   preferredStep: Harness.preferredStep)
+        let detector = MeetingDetector(tables: try ReferenceTables.tables(), values: shortTtl,
+                                       environment: environment)
+        let stream = detector.signals()
+        try await detector.startObserving()
+        // Сторож: если драйвер не зовёт шаги, поток закрывается через пять секунд, а не висит вечно.
+        let watchdog = Task {
+            try? await Task.sleep(nanoseconds: 5_000_000_000)
+            detector.observation.finishSignalStreams()
+        }
+        var confirmations = 0
+        for await signal in stream where signal.kind == .clientAudioOutput {
+            confirmations += 1
+            if confirmations == 3 { break }
+        }
+        watchdog.cancel()
+        await detector.stopObserving()
+        XCTAssertEqual(confirmations, 3, "публикация и два подтверждения пришли от драйвера приложения")
+    }
+
     /// Держит состояние `3 × signalTtlSeconds` шагами меньше запаса реализации, затем убирает процесс.
     private func confirmationRun(bytes: Data?) async throws {
         let harness = try harness(bytes)
