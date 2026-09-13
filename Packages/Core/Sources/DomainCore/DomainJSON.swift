@@ -18,7 +18,10 @@ import Foundation
 /// Канонический вид байтов C-001 §0.4.
 public enum DomainJSON {
 
-    /// Кодировщик канонического вида: компактный вывод, сортированные ключи, `/` без экранирования.
+    /// Настроенный кодировщик для чужих API. Санкционированным способом писать наши файлы
+    /// он не является (C-001 v11 §0.4): байтового прохода по ключам он не несёт — ровно та
+    /// же граница, что у `decoder()` на чтении. `.sortedKeys` остаётся объявленным, и п. 110
+    /// перечня стоит на нём дословно; порядок по UTF-8 обеспечивает `encode(_:)`.
     public static func encoder() -> JSONEncoder {
         let result = JSONEncoder()
         result.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
@@ -51,8 +54,12 @@ public enum DomainJSON {
         return result
     }
 
+    /// Единственный санкционированный способ писать байты наших форматов: после кодирования
+    /// вызывает `canonicalizeKeyOrder(in:)`. Проход даёт порядок ключей по UTF-8 на всякой
+    /// сборке Foundation, а не только на той, где его даёт `.sortedKeys` (C-001 v11 §0.4).
     public static func encode<Value: Encodable>(_ value: Value) throws -> Data {
-        try encoder().encode(value)
+        let bytes = try encoder().encode(value)
+        return try canonicalizeKeyOrder(in: bytes)
     }
 
     public static func decode<Value: Decodable>(_ type: Value.Type, from data: Data) throws -> Value {
