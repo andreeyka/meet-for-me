@@ -27,7 +27,7 @@ let package = Package(
     ],
     targets: [
         // домен: DTO, порты, машина состояний, Scheduler, JobQueue — только Foundation
-        .target(name: "DomainCore"),
+        .target(name: "DomainCore", resources: [.copy("signal-weights.json")]),
         // фейки портов домена: живут отдельно, чтобы не тянуть системные фреймворки
         .target(name: "DomainTestKit", dependencies: ["DomainCore"]),
 

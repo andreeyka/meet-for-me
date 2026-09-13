@@ -1,11 +1,12 @@
 {
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "recordingId": "3f2504e0-4f89-41d3-9a0c-0305e82c3301",
   "directoryName": "3F2504E0-4F89-41D3-9A0C-0305E82C3301",
   "meetingId": null,
   "startedAt": "2026-09-11T09:30:00.000Z",
   "endedAt": "2026-09-11T10:31:20.500+00:00",
   "isFinalized": true,
+  "captureGroupKey": "bundle:us.zoom.xos",
   "tracks": [
     {
       "channel": "mic",
@@ -28,9 +29,12 @@
     { "kind": "wake",           "atMs": 1802000 },
     { "kind": "deviceChanged",  "atMs": 2400000, "detail": "BuiltInMicrophoneDevice -> A1B2C3-airpods" }
   ],
+  "discontinuities": [
+    { "atMs": 1800000, "gapMs": 2000, "scaleErrorMs": 150, "reason": "rebuild" }
+  ],
   "inputDevices": [
-    { "atMs": 0,       "name": "MacBook Pro Microphone", "uid": "BuiltInMicrophoneDevice" },
-    { "atMs": 2400000, "name": "AirPods Pro",            "uid": "A1B2C3-airpods" }
+    { "atMs": 0,       "present": true, "name": "MacBook Pro Microphone", "uid": "BuiltInMicrophoneDevice" },
+    { "atMs": 2400000, "present": true, "name": "AirPods Pro",            "uid": "A1B2C3-airpods" }
   ],
   "capturedProcesses": [
     { "pid": 4821, "bundleId": "us.zoom.xos", "executableName": "zoom.us" }
