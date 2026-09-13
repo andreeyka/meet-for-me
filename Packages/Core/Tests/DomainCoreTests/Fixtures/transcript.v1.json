@@ -15,7 +15,7 @@
       "textOriginal": null,
       "textConfidence": 0.88,
       "words": [
-        { "startMs": 1200, "endMs": 1900, "text": "Привет,", "confidence": 0.94 },
+        { "startMs": 1200, "endMs": 1900, "text": "Привет,", "confidence": 0.94, "original": null },
         { "startMs": 1900, "endMs": 2600, "text": "начнём.", "confidence": 0.88 }
       ]
     },
