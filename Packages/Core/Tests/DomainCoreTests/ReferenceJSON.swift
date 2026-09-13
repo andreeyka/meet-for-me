@@ -43,8 +43,15 @@ enum ReferenceJSON {
     }
 
     /// Тот же эталон текстом: свойства (в), (д) и (е) — свойства записи, а не значения.
+    ///
+    /// Перевод failable намеренно: эталон не в UTF-8 — отказ, а не текст с замещающими
+    /// символами. Заменяющее чтение прошло бы молча и проверяло бы уже не тот файл.
     static func text(of reference: Reference) throws -> String {
-        String(decoding: try bytes(of: reference), as: UTF8.self)
+        let data = try bytes(of: reference)
+        guard let text = String(bytes: data, encoding: .utf8) else {
+            throw ReferenceResourceError.notUTF8(reference.rawValue)
+        }
+        return text
     }
 
     // MARK: - Признак свойства (з): имена ключей по уровням
@@ -229,4 +236,5 @@ enum ReferenceJSON {
 /// Ресурс, объявленный сборкой, но не найденный в бандле, — отказ, а не пропуск.
 enum ReferenceResourceError: Error {
     case missing(String)
+    case notUTF8(String)
 }
