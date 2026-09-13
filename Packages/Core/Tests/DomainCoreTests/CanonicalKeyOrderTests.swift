@@ -292,6 +292,6 @@ private struct PairScanner {
     }
 
     private func text(_ range: Range<Int>) -> String {
-        String(decoding: bytes[range], as: UTF8.self)
+        String(bytes: bytes[range], encoding: .utf8) ?? "<не UTF-8>"
     }
 }
