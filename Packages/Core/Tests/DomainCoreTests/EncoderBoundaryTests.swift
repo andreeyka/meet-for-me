@@ -30,6 +30,7 @@
 
 import XCTest
 import Foundation
+import DomainCore
 
 final class EncoderBoundaryTests: XCTestCase {
 
@@ -81,6 +82,9 @@ final class EncoderBoundaryTests: XCTestCase {
                       "файл самой проверки изъят из области")
         let modules = Set(sources.compactMap { Self.moduleName(of: $0.name) })
         XCTAssertGreaterThan(modules.count, 2, "область сужена до модуля — изъятий быть не должно")
+        //  МУТАЦИЯ L1 (вектор Q43): вхождение вне всех четырёх классов, стоящее в файле
+        //  самой проверки. Пункт 155 обязан покраснеть в обеих работах.
+        _ = try? DomainJSON.encoder().encode(["mutation": 1])
     }
 
     // MARK: - Классификация
