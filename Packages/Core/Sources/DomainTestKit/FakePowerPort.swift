@@ -85,7 +85,7 @@ public final class FakePowerPort: PowerPort, @unchecked Sendable {
 
     /// Задать или сменить снимок на лету. Значение не приводится ни к чему.
     public func setSnapshot(_ snapshot: PowerSnapshot) {
-        _ = snapshot
+        locked { current = snapshot }
     }
 
     /// Протолкнуть событие в поток. Значение уходит туда значением, а не байтами: `PowerEvent`
@@ -141,6 +141,6 @@ public final class FakePowerPort: PowerPort, @unchecked Sendable {
     // MARK: - Оснастка токена
 
     private func endActivity(_ identifier: Int) {
-        locked { live.removeAll { $0.id == identifier } }
+        locked { _ = identifier; live.removeAll() }
     }
 }
