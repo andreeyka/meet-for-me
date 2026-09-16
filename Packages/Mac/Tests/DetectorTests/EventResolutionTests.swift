@@ -29,10 +29,12 @@ final class EventResolutionTests: XCTestCase {
     /// Вход ВТОРОГО вызова разведён с входом К74 намеренно: правило, совпавшее в `location`,
     /// по §3 проверяется РАНЬШЕ правила, совпавшего в `bodyText`, — то есть порядок полей и
     /// порядок `priority` здесь не спорят. Соотношения `priority` вход К13 не требует и
-    /// подавать его не обязан (план MEE-126, `АЖ.3`); спорящий вход — предмет К74, и там он
-    /// утверждается, а не наследуется из таблицы. Пока эти два входа совпадали побайтово,
-    /// зелёные К13 и К74 вместе не доказывали, что реализация держит два разных требования,
-    /// а лишь что она проходит оба на одном входе (план MEE-126, `АЖ.5`).
+    /// подавать его не обязан (план MEE-126, `АЖ.3`); спорящий вход — предмет К74. Но
+    /// **способ проверки** К13 требует большего (план MEE-126, `АИ.4`): тест обязан подать
+    /// второй вызов на событии, которое входом К74 не является, — и **утверждать** это, а не
+    /// наследовать из таблицы. Разведение фикстур само по себе тут не держится: К14 штатно
+    /// подменяет таблицу, К20 меняет множество провайдеров, и входы вернулись бы к совпадению
+    /// без единого красного.
     func test_k13_firstMatchingFieldWinsInContractOrder() throws {
         let resolver = try threeProviderDetector()
 
@@ -42,6 +44,16 @@ final class EventResolutionTests: XCTestCase {
         let fromConference = try XCTUnwrap(resolver.resolve(event: whole))
         XCTAssertEqual(fromConference.source, .conferenceField)
         XCTAssertEqual(fromConference.provider, "zoom")
+
+        // Соотношение `priority` второго вызова — часть его способа проверки (`АИ.4`), и
+        // утверждается оно по тем же байтам, из которых собран резолвер. `≤`, а не строгое
+        // `<`: клауза есть ровно отрицание входа К74, и равные `priority` ей не противоречат.
+        let table = try DomainJSON.decode(ProvidersTable.self, from: Self.threeProviders)
+        let priority = Dictionary(uniqueKeysWithValues: table.providers.map { ($0.provider, $0.priority) })
+        let inLocation = try XCTUnwrap(priority["acme"])
+        let inBodyText = try XCTUnwrap(priority["meet"])
+        XCTAssertLessThanOrEqual(inLocation, inBodyText,
+                                 "правило `location` обязано проверяться не позже правила `bodyText`")
 
         let withoutConference = try event(location: "Где: \(Self.acmeLink)",
                                           bodyText: "Резерв: \(Self.meetLink)")
@@ -191,8 +203,8 @@ final class EventResolutionTests: XCTestCase {
     static let acmeLink = "https://acme.example/12345"
 
     /// Три провайдера: по одному на каждое поле события, дающее вход. Байты вынесены в
-    /// свойство, потому что К74 утверждает `priority` по тем же самым байтам, из которых
-    /// собран резолвер, — иначе утверждение относилось бы к другой таблице.
+    /// свойство, потому что и К74, и второй вызов К13 утверждают `priority` по тем же самым
+    /// байтам, из которых собран резолвер, — иначе утверждение относилось бы к другой таблице.
     static let threeProviders = ReferenceTables.providers([ReferenceTables.zoomEntry,
                                                           ReferenceTables.meetEntry,
                                                           ReferenceTables.acmeEntry])

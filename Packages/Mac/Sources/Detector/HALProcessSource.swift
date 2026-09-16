@@ -15,21 +15,39 @@ import Darwin
 import DomainCore
 import Foundation
 
-/// Источник снимков процессов. Шов Ш4 (i): в тесте его заменяет значение.
+/// Снятый снимок: содержание и момент, на который содержание верно.
+///
+/// Шов Ш4, свойства (i) и (ii): вход наблюдения — пара «содержание + момент». Момент здесь есть
+/// значение входа, а не показание часов наблюдения, и разводится он с ними тестом. Без этой пары
+/// момент снимка и момент публикации в `SignalEngine` были одной переменной, а К51 и К62
+/// сверяли её саму с собой.
+struct TakenSnapshot: Equatable, Sendable {
+    let content: RawSnapshot
+    let observedAt: Date
+}
+
+/// Источник снимков процессов. Шов Ш4 (i) и (ii): в тесте его заменяет значение.
 protocol ProcessSnapshotSource: Sendable {
-    func readSnapshot() throws -> RawSnapshot
+    func readSnapshot() throws -> TakenSnapshot
 }
 
 final class HALProcessSource: ProcessSnapshotSource, @unchecked Sendable {
 
+    /// Часы, которыми источник помечает снимок. Момент снимается ДО чтения списка процессов:
+    /// содержание верно на момент не раньше него, а публикация случается заведомо позже — то
+    /// есть в живой работе `observedAt` меньше момента публикации, а не равен ему.
+    private let clock: ObservationClock
+
     /// Журнал кодов возврата каждого системного вызова; ведётся, только если передан.
     private let journal: StatusJournal?
 
-    init(journal: StatusJournal? = nil) {
+    init(clock: ObservationClock = SystemClock(), journal: StatusJournal? = nil) {
+        self.clock = clock
         self.journal = journal
     }
 
-    func readSnapshot() throws -> RawSnapshot {
+    func readSnapshot() throws -> TakenSnapshot {
+        let observedAt = clock.now()
         var records: [RawProcessRecord] = []
         for object in try processObjects() {
             if case .value(let record) = try record(of: object) {
@@ -40,7 +58,8 @@ final class HALProcessSource: ProcessSnapshotSource, @unchecked Sendable {
         for pid in Set(records.compactMap(\.responsiblePid)) {
             bundleIds[pid] = ProcessIdentity.bundleIdentifier(ofPid: pid)
         }
-        return RawSnapshot(records: records, bundleIdsByPid: bundleIds)
+        return TakenSnapshot(content: RawSnapshot(records: records, bundleIdsByPid: bundleIds),
+                             observedAt: observedAt)
     }
 
     // MARK: - Список процессов

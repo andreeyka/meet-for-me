@@ -3,7 +3,10 @@
 //  * `ReferenceTables` — байты таблиц, из которых тест строит правила чистой функцией
 //    `RuleTables.build` (шов Ш2 (ii)) и значения весов чистой функцией `domain-core`
 //    `SignalWeights.values(from:)` (Ш2 (ii) стороны `domain-core`, Ш5 (i)).
-//  * `TestWorld` — источник снимков и часы, которыми распоряжается тест (швы Ш4 и Ш6).
+//  * `TestWorld` — источник снимков и часы, которыми распоряжается тест (швы Ш4 и Ш6). Входов
+//    у него ДВА и они независимы: момент снимка (Ш4 (ii), задаётся вместе с содержанием) и ход
+//    времени (Ш6 (i), `advance(by:)`). Критерий, чей предмет — сам `observedAt`, обязан задать
+//    их разными: иначе он сверяет одну величину с самой собой.
 //  * `ManualDriver` — драйвер наблюдения, шаг которого зовёт тест; возврат из `fire()` значит,
 //    что всё, что шаг должен был опубликовать, уже в потоке (Ш4 (iii), Ш6 (i)).
 //
@@ -96,12 +99,20 @@ final class TestWorld: ProcessSnapshotSource, ObservationClock, @unchecked Senda
     private var records: [RawProcessRecord] = []
     private var bundleIds: [Int32: String] = [:]
     private var moment = TestWorld.start
+    private var snapshotMoment: Date?
 
-    func set(_ records: [RawProcessRecord], bundleIds: [Int32: String] = [:]) {
+    /// Содержание снимка и — если тест его задаёт — момент, на который содержание верно (Ш4 (ii)).
+    ///
+    /// `observedAt == nil` значит «тест момент снимка с часами не разводил»: источник помечает
+    /// снимок текущим показанием часов мира. Так подаются снимки тем критериям, чей предмет —
+    /// не `observedAt`. К51 и К62 обязаны задать момент явно и отличным от показания часов:
+    /// только тогда реализация, подставляющая момент публикации, краснеет, а не совпадает.
+    func set(_ records: [RawProcessRecord], bundleIds: [Int32: String] = [:], observedAt: Date? = nil) {
         lock.lock()
         defer { lock.unlock() }
         self.records = records
         self.bundleIds = bundleIds
+        self.snapshotMoment = observedAt
     }
 
     func advance(by seconds: TimeInterval) {
@@ -110,10 +121,11 @@ final class TestWorld: ProcessSnapshotSource, ObservationClock, @unchecked Senda
         moment = moment.addingTimeInterval(seconds)
     }
 
-    func readSnapshot() throws -> RawSnapshot {
+    func readSnapshot() throws -> TakenSnapshot {
         lock.lock()
         defer { lock.unlock() }
-        return RawSnapshot(records: records, bundleIdsByPid: bundleIds)
+        return TakenSnapshot(content: RawSnapshot(records: records, bundleIdsByPid: bundleIds),
+                             observedAt: snapshotMoment ?? moment)
     }
 
     func now() -> Date {
