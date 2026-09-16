@@ -85,6 +85,51 @@ jobs:
 
       - run: swift test --package-path Packages/Core
 
+      # ------------------------------------------------------------------
+      # ВРЕМЕННО. ТОЛЬКО СЛУЖЕБНАЯ ВЕТКА `qa/mutation-4b44f8e`. В `main` этот
+      # блок не уходит ни одним коммитом: задача MEE-252, решение РП от 16.09,
+      # раздел 3. Владелец файла — архитектор; здесь файл правится по санкции,
+      # выданной под один батч, и правка живёт ровно до закрытия служебного PR.
+      #
+      # Зачем. Батч мутаций `M` (АД.8 плана MEE-7) заказывает исход ПОИМЁННО по
+      # каждому из векторов Q45—Q49 — «покраснела ли мутация и краснеет ли ровно
+      # её вектор, а не весь пункт». Один шаг `swift test` на весь пакет даёт
+      # один вердикт на пятерых и на этот вопрос не отвечает.
+      #
+      # Почему не читаем лог. Текст лога Actions из сессии-исполнителя не
+      # читается ни одним из четырёх способов (замер — отчёт MEE-252, таблица
+      # 0.1), а `conclusion` КАЖДОГО шага читается запросом, отдающим HTTP 200.
+      # Отсюда способ: один вектор — один шаг, и исход вектора есть исход шага.
+      #
+      # Почему `if: always()`, а не `continue-on-error: true`. Обе конструкции
+      # пускают прогон дальше после красного шага, но `continue-on-error`
+      # МАСКИРУЕТ `conclusion` упавшего шага в `success` — то есть стирает ровно
+      # тот сигнал, ради которого шаги и разложены. `if: always()` исхода шага
+      # не трогает.
+      #
+      # Шаг `swift test` выше не снят и не сдвинут: он и есть полный прогон
+      # пакета, отвечающий на вопрос «задето ли что-то вне пятёрки».
+      # ------------------------------------------------------------------
+      - name: "Q45 · счёт request по правам, а не суммарно"
+        if: always()
+        run: swift test --package-path Packages/Core --filter 'FakePermissionsPortTests/test_p156_fakePermissionsPort_countsCallsPerKind'
+
+      - name: "Q46 · ответ request задаётся, а не выводится из статуса"
+        if: always()
+        run: swift test --package-path Packages/Core --filter 'FakePermissionsPortTests/test_p156_fakePermissionsPort_requestOutcomeIsAskedNotDerived'
+
+      - name: "Q47 · снимок задаётся и меняется на лету"
+        if: always()
+        run: swift test --package-path Packages/Core --filter 'FakePowerPortTests/test_p157_fakePowerPort_snapshotIsSetAndChangedOnTheFly'
+
+      - name: "Q48 · end убирает свой токен, а не список целиком"
+        if: always()
+        run: swift test --package-path Packages/Core --filter 'FakePowerPortTests/test_p157_fakePowerPort_endRemovesOnlyItsOwnToken'
+
+      - name: "Q49 · снимок, который настоящий порт отдать не вправе"
+        if: always()
+        run: swift test --package-path Packages/Core --filter 'FakePowerPortTests/test_p157_fakePowerPort_snapshotNoRealPortMayReturn'
+
   macos:
     name: Core + Mac (macos-14)
     runs-on: macos-14
