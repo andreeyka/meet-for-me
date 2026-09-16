@@ -130,6 +130,22 @@ jobs:
         if: always()
         run: swift test --package-path Packages/Core --filter 'FakePowerPortTests/test_p157_fakePowerPort_snapshotNoRealPortMayReturn'
 
+      # Шаг, без которого §3 постановки не различает свой первый исход от
+      # второго. Полный прогон выше краснеет и когда мутация задела ровно свой
+      # вектор, и когда она задела сверх него: её собственный тест в нём тоже
+      # есть. Здесь пятёрка векторов вычтена целиком — значит зелёный шаг
+      # означает «за пределами пятёрки не покраснело ничто», а красный есть
+      # ровно тот случай, который §3 велит назвать с перечнем.
+      - name: "Остальное дерево Core — пятёрка векторов вычтена"
+        if: always()
+        run: |
+          swift test --package-path Packages/Core \
+            --skip 'test_p156_fakePermissionsPort_countsCallsPerKind' \
+            --skip 'test_p156_fakePermissionsPort_requestOutcomeIsAskedNotDerived' \
+            --skip 'test_p157_fakePowerPort_snapshotIsSetAndChangedOnTheFly' \
+            --skip 'test_p157_fakePowerPort_endRemovesOnlyItsOwnToken' \
+            --skip 'test_p157_fakePowerPort_snapshotNoRealPortMayReturn'
+
   macos:
     name: Core + Mac (macos-14)
     runs-on: macos-14
