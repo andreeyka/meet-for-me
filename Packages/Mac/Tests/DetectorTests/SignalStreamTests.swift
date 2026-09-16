@@ -1,9 +1,16 @@
 //  Критерии блока E перечня MEE-75: поток сигналов, наблюдение, группы.
 //  К41—К44, К46, К48—К53, К61, К62.
 //
-//  Снимки подаёт тест точкой подачи Ш4, момент — часами Ш6; всё остальное исполняет настоящий
-//  `SignalEngine`. Окно каждого критерия короче срока подтверждения (К41—К44 в редакции АВ.6
-//  плана): часы теста между шагами не доходят до половины `signalTtlSeconds`.
+//  Снимки подаёт тест точкой подачи Ш4, ход времени — часами Ш6; всё остальное исполняет
+//  настоящий `SignalEngine`. Окно каждого критерия короче срока подтверждения (К41—К44 в
+//  редакции АВ.6 плана): часы теста между шагами не доходят до половины `signalTtlSeconds`.
+//
+//  У К51 и К62 предмет — сам `observedAt`, и они задают момент снимка ТРЕТЬИМ аргументом
+//  `world.set(_:bundleIds:observedAt:)`, отличным от показания часов (Ш4 (ii)). Пока этого
+//  входа не было, обе величины в реализации были одной переменной, и оба критерия сверяли её
+//  саму с собой: реализация, подставляющая момент публикации вместо момента снимка, проходила
+//  их зелёными. Отсюда в обоих стоит `XCTAssertNotEqual` с моментом публикации — утверждение,
+//  которое такая реализация провалить обязана.
 
 import DomainCore
 import Foundation
@@ -179,12 +186,16 @@ final class SignalStreamTests: XCTestCase {
     func test_k51_groupPids_sortedUnique_observedAtIsSnapshotMoment() async throws {
         let harness = try Harness()
         let stream = harness.detector.signals()
+        // Снимок снят в `moment`, а часы к шагу публикации ушли вперёд: величины две, и
+        // задаёт их тест двумя разными входами.
+        let moment = TestWorld.start
         harness.world.advance(by: 42)
-        let moment = harness.world.now()
         harness.world.set([Record.make(900, bundle: "com.google.Chrome", responsible: 900),
                            Record.make(120, bundle: "com.google.Chrome.helper", responsible: 900, output: true),
                            Record.make(900, bundle: "com.google.Chrome", responsible: 900)],
-                          bundleIds: [900: "com.google.Chrome"])
+                          bundleIds: [900: "com.google.Chrome"], observedAt: moment)
+        let published = harness.world.now()
+        XCTAssertNotEqual(moment, published, "момент снимка и момент публикации разведены входом")
         try await harness.detector.startObserving()
         let events = await harness.drain(stream)
         XCTAssertFalse(events.isEmpty)
@@ -194,6 +205,8 @@ final class SignalStreamTests: XCTestCase {
             XCTAssertTrue(group.pids.contains(try XCTUnwrap(signal.pid)))
             XCTAssertEqual(group.observedAt, moment)
             XCTAssertEqual(signal.observedAt, moment)
+            XCTAssertNotEqual(group.observedAt, published, "в group.observedAt уехал момент публикации")
+            XCTAssertNotEqual(signal.observedAt, published, "в signal.observedAt уехал момент публикации")
         }
     }
 
@@ -230,18 +243,25 @@ final class SignalStreamTests: XCTestCase {
     func test_k62_changedComposition_observedAtIsSnapshotMoment_andGrows() async throws {
         let harness = try Harness()
         let stream = harness.detector.signals()
-        harness.world.set([Self.chromeMain, Self.chromeHelper(101, output: true)], bundleIds: Self.chromeBundles)
+        // Два снимка с РАЗНЫМИ моментами, и ход часов между шагами им не равен: `observedAt`
+        // обязан вырасти на шаг снимка, а не на шаг часов.
+        let first = TestWorld.start
+        let second = first.addingTimeInterval(7)
+        harness.world.set([Self.chromeMain, Self.chromeHelper(101, output: true)],
+                          bundleIds: Self.chromeBundles, observedAt: first)
         try await harness.detector.startObserving()
-        harness.world.advance(by: 7)
-        let second = harness.world.now()
+        harness.world.advance(by: 21)
         harness.world.set([Self.chromeMain, Self.chromeHelper(101, output: true), Self.chromeHelper(102)],
-                          bundleIds: Self.chromeBundles)
+                          bundleIds: Self.chromeBundles, observedAt: second)
+        let published = harness.world.now()
+        XCTAssertNotEqual(second, published, "момент снимка и момент публикации разведены входом")
         harness.driver.fire()
         let events = await harness.drain(stream).filter { $0.kind == .clientAudioOutput }
         guard events.count == 2, let before = events.first, let after = events.last else {
             return XCTFail("ожидалось два сигнала пары, пришло \(events.count)")
         }
         XCTAssertEqual(after.observedAt, second)
+        XCTAssertNotEqual(after.observedAt, published, "в observedAt уехал момент публикации")
         XCTAssertGreaterThan(after.observedAt, before.observedAt)
         XCTAssertEqual(after.group?.observedAt, after.observedAt)
         XCTAssertEqual(after.group?.pids, [100, 101, 102])
