@@ -70,7 +70,12 @@ public final class FakePowerPort: PowerPort, @unchecked Sendable {
     /// - Parameter snapshot: стартовый снимок; умолчания нет намеренно — «пустого» `PowerSnapshot`
     ///   не существует, и всякое значение здесь есть вход теста, а не решение фейка.
     public init(snapshot: PowerSnapshot) {
-        current = snapshot
+        current = PowerSnapshot(
+            source: snapshot.source,
+            batteryFraction: snapshot.batteryFraction.map { min(max($0, 0), 1) },
+            isLowPowerModeEnabled: snapshot.isLowPowerModeEnabled,
+            thermalPressure: snapshot.thermalPressure,
+            checkedAt: snapshot.checkedAt)
     }
 
     /// Замок вокруг состояния. Своя обёртка, а не `NSLocking.withLock`: та пришла в Foundation
@@ -141,6 +146,6 @@ public final class FakePowerPort: PowerPort, @unchecked Sendable {
     // MARK: - Оснастка токена
 
     private func endActivity(_ identifier: Int) {
-        locked { _ = identifier; live.removeAll() }
+        locked { live.removeAll { $0.id == identifier } }
     }
 }
