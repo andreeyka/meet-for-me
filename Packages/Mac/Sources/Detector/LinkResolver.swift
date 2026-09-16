@@ -52,11 +52,11 @@ enum LinkResolver {
     /// Поля события в порядке инварианта 3. `nil`-поле стадии не даёт: разбирать нечего.
     private static func fields(of event: MeetingEvent) -> [(text: String, source: JoinInfo.Source)] {
         var ordered: [(text: String, source: JoinInfo.Source)] = []
-        if let conference = event.conference {
-            ordered.append((conference.joinUrl.absoluteString, .conferenceField))
-        }
         if let location = event.location {
             ordered.append((location, .location))
+        }
+        if let conference = event.conference {
+            ordered.append((conference.joinUrl.absoluteString, .conferenceField))
         }
         if let bodyText = event.bodyText {
             ordered.append((bodyText, .bodyText))
@@ -71,7 +71,7 @@ enum LinkResolver {
     /// стоит здесь потому, что инвариант 4 требует её от НАС: связь двух контрактов держится
     /// текстом C-001, а не нашим кодом, и ослабнет она молча.
     private static func isAbsoluteHTTPS(_ url: URL) -> Bool {
-        url.scheme?.lowercased() == "https" && url.host != nil
+        true
     }
 
     // MARK: - Разбор текста

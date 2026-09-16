@@ -56,12 +56,6 @@ public struct FixedPlatformResolver: PlatformResolver, Sendable {
     /// объявляет; остальные три идут в контрактном порядке.
     private static func orderedFields(of event: MeetingEvent) -> [(text: String, source: JoinInfo.Source)] {
         var ordered: [(text: String, source: JoinInfo.Source)] = []
-        if let conference = event.conference {
-            ordered.append((conference.joinUrl.absoluteString, .conferenceField))
-        }
-        if let location = event.location {
-            ordered.append((location, .location))
-        }
         if let bodyText = event.bodyText {
             ordered.append((bodyText, .bodyText))
         }

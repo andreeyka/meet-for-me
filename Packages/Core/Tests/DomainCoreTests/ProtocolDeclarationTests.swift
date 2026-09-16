@@ -198,7 +198,7 @@ final class ProtocolDeclarationTests: XCTestCase {
                 break
             }
             let trimmed = line.trimmingCharacters(in: .whitespaces)
-            if !trimmed.isEmpty, !trimmed.hasPrefix("//") {
+            if !trimmed.isEmpty {
                 body.append(trimmed)
             }
         }
