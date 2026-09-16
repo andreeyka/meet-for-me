@@ -1,20 +1,19 @@
 //  Разбор события календаря: `PlatformResolver.resolve(event:)`, инварианты 3, 4 и 5 C-009.
-//  Критерии К13, К15, К16, К17, К18, К23 перечня MEE-75; способ — Ф плана MEE-126.
+//  Критерии К13, К15, К16, К17, К18, К23, К74 перечня MEE-75; способ — Ф плана MEE-126.
 //
-//  Два места, где критерий разошёлся с исполнимым. Оба названы отчётом MEE-220 и здесь не
-//  чинятся — чужая зона (перечень аналитика, контракт архитектора):
+//  Место, где критерий расходится с исполнимым, осталось одно. Названо оно отчётом MEE-220
+//  и здесь не чинится — чужая зона (перечень аналитика):
 //
-//  1. **Третий вызов К13 — «без `conference` и `location` → `.eventUrl`» — исполнить нечем.**
-//     Порядок инварианта 3 называет четыре поля, а `MeetingEvent` (C-001 v11) объявляет три,
-//     из которых берут ссылку: `conference`, `location`, `bodyText`. Поля URL события в DTO
-//     нет ни под каким именем, вхождений `eventUrl` в тексте C-001 — ноль. Стадия остаётся
-//     без входа, и `JoinInfo.Source.eventUrl` разбором события не порождается никогда.
-//     Здесь проверены три вызова из четырёх; четвёртый не подменяется похожим.
-//  2. **Все три входа К18 неконструируемы.** Критерий подаёт `conference` с `http`-URL, с
-//     относительным путём и с текстом, не являющимся URL, и ждёт `nil`. Ни одно из трёх не
-//     доходит до резолвера: тот же признак стоит инвариантом 5 C-001 и отвергает значение
-//     при создании `MeetingEvent.Conference`. Проверено то, что проверяемо, — что признак
-//     ослаблению не подлежит; ослабнет он — тест покраснеет, и К18 придётся переписать.
+//  **Все три входа К18 неконструируемы.** Критерий подаёт `conference` с `http`-URL, с
+//  относительным путём и с текстом, не являющимся URL, и ждёт `nil`. Ни одно из трёх не
+//  доходит до резолвера: тот же признак стоит инвариантом 5 C-001 и отвергает значение
+//  при создании `MeetingEvent.Conference`. Проверено то, что проверяемо, — что признак
+//  ослаблению не подлежит; ослабнет он — тест покраснеет, и К18 придётся переписать.
+//
+//  Второе место — «третий вызов К13 исполнить нечем» — закрыто не здесь и не нами: издание
+//  C-009 v8 (IR-097) сняло стадию `eventUrl` из инварианта 3 и случай `.eventUrl` из
+//  `JoinInfo.Source`, после чего К13 переписан на три вызова из трёх. Требования без входа
+//  больше нет, и подменять его похожим по-прежнему нечем и незачем.
 
 import DomainCore
 import Foundation
@@ -25,33 +24,55 @@ final class EventResolutionTests: XCTestCase {
 
     // MARK: - К13. Порядок полей события
 
+    /// Три вызова, три ответа — по числу полей, из которых контракт берёт ссылку.
+    ///
+    /// Вход ВТОРОГО вызова разведён с входом К74 намеренно: правило, совпавшее в `location`,
+    /// по §3 проверяется РАНЬШЕ правила, совпавшего в `bodyText`, — то есть порядок полей и
+    /// порядок `priority` здесь не спорят. Соотношения `priority` вход К13 не требует и
+    /// подавать его не обязан (план MEE-126, `АЖ.3`); спорящий вход — предмет К74, и там он
+    /// утверждается, а не наследуется из таблицы. Пока эти два входа совпадали побайтово,
+    /// зелёные К13 и К74 вместе не доказывали, что реализация держит два разных требования,
+    /// а лишь что она проходит оба на одном входе (план MEE-126, `АЖ.5`).
     func test_k13_firstMatchingFieldWinsInContractOrder() throws {
         let resolver = try threeProviderDetector()
 
         let whole = try event(conference: try conference(Self.zoomLink),
-                              location: "Где: \(Self.meetLink)",
-                              bodyText: "Резерв: \(Self.acmeLink)")
+                              location: "Где: \(Self.acmeLink)",
+                              bodyText: "Резерв: \(Self.meetLink)")
         let fromConference = try XCTUnwrap(resolver.resolve(event: whole))
         XCTAssertEqual(fromConference.source, .conferenceField)
         XCTAssertEqual(fromConference.provider, "zoom")
 
-        let withoutConference = try event(location: "Где: \(Self.meetLink)",
-                                          bodyText: "Резерв: \(Self.acmeLink)")
+        let withoutConference = try event(location: "Где: \(Self.acmeLink)",
+                                          bodyText: "Резерв: \(Self.meetLink)")
         let fromLocation = try XCTUnwrap(resolver.resolve(event: withoutConference))
         XCTAssertEqual(fromLocation.source, .location)
-        XCTAssertEqual(fromLocation.provider, "meet")
+        XCTAssertEqual(fromLocation.provider, "acme")
 
-        let bodyOnly = try event(bodyText: "Резерв: \(Self.acmeLink)")
+        let bodyOnly = try event(bodyText: "Резерв: \(Self.meetLink)")
         let fromBody = try XCTUnwrap(resolver.resolve(event: bodyOnly))
         XCTAssertEqual(fromBody.source, .bodyText)
-        XCTAssertEqual(fromBody.provider, "acme")
+        XCTAssertEqual(fromBody.provider, "meet")
     }
 
+    // MARK: - К74. Порядок полей старше приоритета правила
+
     /// Вторая половина инварианта 3, отдельным утверждением: побеждает поле, а не правило.
-    /// `location` несёт провайдера с бо́льшим `priority`, чем `bodyText`, и всё равно выигрывает
-    /// то, что стоит раньше в порядке полей. Без этого вектора разбор, склеивающий поля в один
-    /// текст и отдающий его `resolve(text:source:)`, проходит К13 целиком.
-    func test_k13_fieldOrderBeatsRulePriority() throws {
+    /// `location` несёт провайдера с бо́льшим `priority`, чем `bodyText`, — по §3 его правило
+    /// проверялось бы позже, — и всё равно выигрывает то, что стоит раньше в порядке полей.
+    /// Без этого вектора разбор, склеивающий поля в один текст и отдающий его
+    /// `resolve(text:source:)`, проходит К13 целиком.
+    func test_k74_fieldOrderBeatsRulePriority() throws {
+        // Соотношение `priority` — часть входа К74, а не свойство оснастки, и утверждается
+        // здесь же (план MEE-126, `АЖ.4`): правка таблицы, сделавшая неравенство ложным,
+        // обязана покраснеть, а не превратить этот вход во вход второго вызова К13 молча.
+        let table = try DomainJSON.decode(ProvidersTable.self, from: Self.threeProviders)
+        let priority = Dictionary(uniqueKeysWithValues: table.providers.map { ($0.provider, $0.priority) })
+        let inLocation = try XCTUnwrap(priority["meet"])
+        let inBodyText = try XCTUnwrap(priority["acme"])
+        XCTAssertGreaterThan(inLocation, inBodyText,
+                             "правило `location` обязано проверяться позже правила `bodyText`")
+
         let resolver = try threeProviderDetector()
         let mixed = try event(location: "Где: \(Self.meetLink)", bodyText: "Резерв: \(Self.acmeLink)")
         let answer = try XCTUnwrap(resolver.resolve(event: mixed))
@@ -169,12 +190,15 @@ final class EventResolutionTests: XCTestCase {
     static let meetLink = "https://meet.google.com/abc-defg-hij"
     static let acmeLink = "https://acme.example/12345"
 
-    /// Три провайдера: по одному на каждое поле события, дающее вход.
+    /// Три провайдера: по одному на каждое поле события, дающее вход. Байты вынесены в
+    /// свойство, потому что К74 утверждает `priority` по тем же самым байтам, из которых
+    /// собран резолвер, — иначе утверждение относилось бы к другой таблице.
+    static let threeProviders = ReferenceTables.providers([ReferenceTables.zoomEntry,
+                                                          ReferenceTables.meetEntry,
+                                                          ReferenceTables.acmeEntry])
+
     private func threeProviderDetector() throws -> MeetingDetector {
-        let providers = ReferenceTables.providers([ReferenceTables.zoomEntry,
-                                                   ReferenceTables.meetEntry,
-                                                   ReferenceTables.acmeEntry])
-        return try Harness(tables: ReferenceTables.tables(providers: providers)).detector
+        try Harness(tables: ReferenceTables.tables(providers: Self.threeProviders)).detector
     }
 
     private func conference(_ link: String, provider: String = "zoom") throws -> MeetingEvent.Conference {

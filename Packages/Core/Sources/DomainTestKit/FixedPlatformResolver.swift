@@ -51,9 +51,9 @@ public struct FixedPlatformResolver: PlatformResolver, Sendable {
         answers[text]
     }
 
-    /// Поля события в порядке инварианта 3 C-009: `conference` → `location` → `eventUrl` →
-    /// `bodyText`. Стадия `eventUrl` входа не имеет — поля URL события C-001 v11 не
-    /// объявляет; остальные три идут в контрактном порядке.
+    /// Поля события в порядке инварианта 3 C-009: `conference` → `location` → `bodyText`.
+    /// Число стадий равно числу полей `MeetingEvent`, из которых контракт берёт ссылку, —
+    /// и это равенство сам инвариант 3 называет правилом.
     private static func orderedFields(of event: MeetingEvent) -> [(text: String, source: JoinInfo.Source)] {
         var ordered: [(text: String, source: JoinInfo.Source)] = []
         if let conference = event.conference {

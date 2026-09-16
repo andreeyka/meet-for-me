@@ -1,4 +1,4 @@
-//  PlatformResolver — контракт C-009 v2 (MEE-15), §2 «JoinInfo и PlatformResolver»
+//  PlatformResolver — контракт C-009 (MEE-15), §2 «JoinInfo и PlatformResolver»
 //  и §4.1 «Правило сравнения процесса с таблицей»
 //
 //  Модуль: domain-core · Владелец: DEV-2 · Слой: домен
@@ -17,7 +17,6 @@ public struct JoinInfo: Codable, Equatable, Sendable {
     public enum Source: String, Codable, Sendable {
         case conferenceField   // структурное поле события у источника
         case location
-        case eventUrl          // поле URL события
         case bodyText
     }
 
@@ -60,7 +59,7 @@ public func bundleKeyMatches(appKey: String?, entry: String) -> Bool {
 /// C-001 §0.2 п. 9 распространено на объявления этого файла его же шапкой.
 ///
 /// Разбор события (`resolve(event:)`) несёт инварианты 3, 4 и 5 контракта: порядок полей
-/// `conference` → `location` → `eventUrl` → `bodyText`, первое совпадение побеждает, и
+/// `conference` → `location` → `bodyText`, первое совпадение побеждает, и
 /// единственное исключение из правила `nil` — структурное поле `conference` с абсолютным
 /// `https`-URL, не совпавшим ни с одним правилом. Через `resolve(text:source:)` эти инварианты
 /// не проверяются: у текста полей нет.

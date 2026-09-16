@@ -58,15 +58,18 @@ final class C009ConstructionTests: XCTestCase {
         XCTAssertNil(value.group)
     }
 
+    /// `source` подаётся НЕ первым случаем перечисления намеренно: пункт проверяет, что поле
+    /// сохранено дословно, а на `.conferenceField` его прошла бы и реализация, отдающая первый
+    /// случай вместо переданного.
     func test_p150_memberwiseInitShape_joinInfo() throws {
         let value = JoinInfo(provider: "zoom",
                              joinUrl: try makeURL("https://zoom.us/j/123"),
                              meetingId: "123",
                              passcode: "pwd",
                              clientBundleIds: ["us.zoom.xos"],
-                             source: .eventUrl)
+                             source: .bodyText)
         XCTAssertEqual(value.provider, "zoom")
-        XCTAssertEqual(value.source, .eventUrl)
+        XCTAssertEqual(value.source, .bodyText)
     }
 
     // MARK: - 151. Значение собирается и хранится дословно
