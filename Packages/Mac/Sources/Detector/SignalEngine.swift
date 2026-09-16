@@ -12,9 +12,11 @@
 //
 //  Шаг наблюдения `step()` берёт у источника пару «содержание + момент» (Ш4, свойства (i) и
 //  (ii)), а показание часов (Ш6) берёт отдельно — и это ДВЕ РАЗНЫЕ величины, а не одна:
-//  момент снимка уезжает в `observedAt` сигналов и группы, показание часов решает, пора ли
-//  подтверждать держащееся состояние. Шаг возвращает управление, когда всё, что снимок должен
-//  был породить, уже отдано подписчикам.
+//  момент снимка уезжает в `observedAt` сигналов и группы, показание часов отвечает на вопрос
+//  «сколько сейчас», когда решается срок подтверждения. Отсчитывается срок от `observedAt`
+//  прошлой публикации пары, а не от показания часов того шага, который её опубликовал:
+//  координата публикации в C-009 одна (`ConfirmationPolicy`, инварианты 24 и 25). Шаг
+//  возвращает управление, когда всё, что снимок должен был породить, уже отдано подписчикам.
 
 import DomainCore
 import Foundation
@@ -34,19 +36,15 @@ final class SignalEngine: @unchecked Sendable {
     private let values: ReceivedValues
     private let environment: Environment
 
-    /// Что пара отдала в поток в последний раз и когда именно её отдали. Моменты здесь разные
-    /// по смыслу: `signal.observedAt` — момент снимка (Ш4 (ii)), `at` — показание часов (Ш6) в
-    /// шаге, который сигнал опубликовал. Срок подтверждения меряется вторым: инвариант 24 — о
-    /// разрыве между ПУБЛИКАЦИЯМИ, а не между снимками.
-    private struct PublishedSignal {
-        let signal: MeetingSignal
-        let at: Date
-    }
-
     private let stepLock = NSLock()
     private let stateLock = NSLock()
     private var subscribers: [UUID: AsyncStream<MeetingSignal>.Continuation] = [:]
-    private var lastPublished: [PairKey: PublishedSignal] = [:]
+    /// Что пара отдала в поток в последний раз. Срок подтверждения отсчитывается от
+    /// `observedAt` этого сигнала — единственной временной координаты публикации, какую знает
+    /// C-009. Показание часов того шага, который сигнал опубликовал, здесь не держится: после
+    /// перехода на `observedAt` у него не осталось ни одного читателя, а хранимое значение без
+    /// читателя возвращает то самое прочтение, от которого модуль уходит (MEE-267).
+    private var lastPublished: [PairKey: MeetingSignal] = [:]
     private var observing = false
 
     init(tables: RuleTables, values: ReceivedValues, environment: Environment) {
@@ -134,19 +132,21 @@ final class SignalEngine: @unchecked Sendable {
 
     /// `moment` здесь — момент ПУБЛИКАЦИИ: показание часов наблюдения, а не момент снимка.
     /// В `observedAt` сигнала он не попадает ни одним путём — там стоит момент, пришедший
-    /// входом вместе с содержанием снимка.
+    /// входом вместе с содержанием снимка. Решению о сроке он даёт «сейчас»: часы Ш6 из
+    /// решения не уходят, уходит только нижний конец отсчёта — им стал `observedAt` прошлой
+    /// публикации пары.
     private func publish(_ candidates: [SignalCandidate], at moment: Date) {
         withState {
-            var current: [PairKey: PublishedSignal] = [:]
+            var current: [PairKey: MeetingSignal] = [:]
             for candidate in candidates {
                 if let previous = lastPublished[candidate.key],
-                   previous.signal.hasSameState(as: candidate.signal),
-                   !ConfirmationPolicy.isDue(published: previous.at, now: moment,
+                   previous.hasSameState(as: candidate.signal),
+                   !ConfirmationPolicy.isDue(lastObservedAt: previous.observedAt, now: moment,
                                              signalTtlSeconds: values.signalTtlSeconds) {
                     current[candidate.key] = previous
                     continue
                 }
-                current[candidate.key] = PublishedSignal(signal: candidate.signal, at: moment)
+                current[candidate.key] = candidate.signal
                 subscribers.values.forEach { $0.yield(candidate.signal) }
             }
             lastPublished = current

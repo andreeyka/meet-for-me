@@ -7,6 +7,8 @@
 //    у него ДВА и они независимы: момент снимка (Ш4 (ii), задаётся вместе с содержанием) и ход
 //    времени (Ш6 (i), `advance(by:)`). Критерий, чей предмет — сам `observedAt`, обязан задать
 //    их разными: иначе он сверяет одну величину с самой собой.
+//    **Отдельный случай — мир на часах машины** (`TestWorld(clock:)`): там обе величины идут от
+//    одного источника нарочно, как в живой работе, и `advance(by:)` этим миром не двигают.
 //  * `ManualDriver` — драйвер наблюдения, шаг которого зовёт тест; возврат из `fire()` значит,
 //    что всё, что шаг должен был опубликовать, уже в потоке (Ш4 (iii), Ш6 (i)).
 //
@@ -101,6 +103,21 @@ final class TestWorld: ProcessSnapshotSource, ObservationClock, @unchecked Senda
     private var moment = TestWorld.start
     private var snapshotMoment: Date?
 
+    /// Часы, которыми мир отвечает на «сколько сейчас» и метит снимок, когда тест момента не задал.
+    ///
+    /// По умолчанию их нет, и обе величины идут от `moment`, которым распоряжается тест. Тесту,
+    /// которому нужен НАСТОЯЩИЙ `TimerDriver`, звать `advance(by:)` не с кем: шаги идут по часам
+    /// машины, а `moment` стоит. Такой тест подставляет сюда часы машины — тогда момент снимка и
+    /// «сколько сейчас» приходят от одного источника, как их и берёт живая работа
+    /// (`HALProcessSource` метит снимок теми же `SystemClock`, какими `SignalEngine` читает «сейчас»).
+    /// Иначе возраст в решении о сроке есть разность двух несоизмеримых шкал, и срок перестаёт
+    /// решать что-либо вовсе.
+    private let machineClock: ObservationClock?
+
+    init(clock machineClock: ObservationClock? = nil) {
+        self.machineClock = machineClock
+    }
+
     /// Содержание снимка и — если тест его задаёт — момент, на который содержание верно (Ш4 (ii)).
     ///
     /// `observedAt == nil` значит «тест момент снимка с часами не разводил»: источник помечает
@@ -125,13 +142,18 @@ final class TestWorld: ProcessSnapshotSource, ObservationClock, @unchecked Senda
         lock.lock()
         defer { lock.unlock() }
         return TakenSnapshot(content: RawSnapshot(records: records, bundleIdsByPid: bundleIds),
-                             observedAt: snapshotMoment ?? moment)
+                             observedAt: snapshotMoment ?? currentLocked())
     }
 
     func now() -> Date {
         lock.lock()
         defer { lock.unlock() }
-        return moment
+        return currentLocked()
+    }
+
+    /// Зовётся под уже взятым `lock`: `NSLock` не рекурсивен, и `now()` отсюда звать нельзя.
+    private func currentLocked() -> Date {
+        machineClock?.now() ?? moment
     }
 }
 

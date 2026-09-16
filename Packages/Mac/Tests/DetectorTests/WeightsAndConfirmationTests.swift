@@ -117,11 +117,32 @@ final class WeightsAndConfirmationTests: XCTestCase {
         try await confirmationRun(bytes: ReferenceTables.signalWeights(signalTtlSeconds: 7))
     }
 
+    /// К73, вектор (v). Прогон 3: момент снимка РАЗВЕДЁН с показанием часов.
+    ///
+    /// Без этого вектора клауза (i) зелена по построению: при равных моменте снимка и показании
+    /// часов разрыв по `observedAt` тождественно равен разрыву между публикациями, и реализация,
+    /// отсчитывающая срок от момента СОБСТВЕННОЙ публикации, проходит клаузу на любом входе — не
+    /// потому, что исполняет её, а потому, что вход не различает две величины. Тот же класс, что
+    /// [MEE-254](https://linear.app/easypto/issue/MEE-254) снял для К51 и К62, этажом ниже.
+    ///
+    /// Разрыв между моментами публикации в этом прогоне меньше срока и без того: краснеет ровно
+    /// разрыв по `observedAt`, и краснеет он у той реализации, которую вектор обязан ловить.
+    func test_k73_vectorV_laggingSnapshotMoment_deadlineIsMeasuredByObservedAt() async throws {
+        try await confirmationRun(bytes: nil, laggingFirstSnapshot: true)
+    }
+
     /// Без номера критерия: драйвер приложения сам зовёт шаги, и подтверждения идут без теста.
     /// Реальные часы для К73 не годятся (шапка «Инвариантов» C-009), поэтому здесь проверяется только
     /// проводка `TimerDriver` на сроке в доли секунды — число подтверждений, а не величина разрывов.
+    ///
+    /// Мир взят НА ЧАСАХ МАШИНЫ, и это несущее: `advance(by:)` здесь звать не с кем — шаги идут по
+    /// часам машины, а `moment` мира стоял бы на `TestWorld.start`. Тогда возраст в решении о сроке
+    /// был бы разностью двух несоизмеримых шкал — порядка ста тридцати суток при сроке в доли
+    /// секунды, — «пора» наступало бы на КАЖДОМ шаге при любом сроке, и тест доказывал бы только
+    /// то, что драйвер зовёт шаги. С часами машины момент снимка и «сколько сейчас» приходят от
+    /// одного источника, как их берёт живая работа, и срок снова решает, когда идёт подтверждение.
     func test_timerDriver_confirmsHoldingStateWithoutTestSteps() async throws {
-        let world = TestWorld()
+        let world = TestWorld(clock: SystemClock())
         world.set(chrome, bundleIds: SignalStreamTests.chromeBundles)
         let values = try ReferenceTables.received(
             SignalWeights.values(from: ReferenceTables.signalWeights(signalTtlSeconds: 1)))
@@ -129,7 +150,7 @@ final class WeightsAndConfirmationTests: XCTestCase {
                                           clientAudioOutput: values.clientAudioOutput,
                                           microphoneInUse: values.microphoneInUse,
                                           signalTtlSeconds: values.signalTtlSeconds / 5)
-        let environment = SignalEngine.Environment(source: world, clock: SystemClock(), driver: TimerDriver(),
+        let environment = SignalEngine.Environment(source: world, clock: world, driver: TimerDriver(),
                                                    preferredStep: Harness.preferredStep)
         let detector = MeetingDetector(tables: try ReferenceTables.tables(), values: shortTtl,
                                        environment: environment)
@@ -151,14 +172,41 @@ final class WeightsAndConfirmationTests: XCTestCase {
     }
 
     /// Держит состояние `3 × signalTtlSeconds` шагами меньше запаса реализации, затем убирает процесс.
-    private func confirmationRun(bytes: Data?) async throws {
+    ///
+    /// `laggingFirstSnapshot` — вектор (v). Первый снимок пары подаётся с моментом, отстающим от
+    /// показания часов БОЛЬШЕ, чем `signalTtlSeconds` минус наибольший разрыв между публикациями,
+    /// который реализация себе позволяет на этом шаге; все последующие снимки идут по часам, то
+    /// есть отставание убывает ОДНОКРАТНО — `observedAt` остаётся строго возрастающим, и К62
+    /// входом не нарушается. **Числа секунд здесь не написано ни одного:** отставание выражено
+    /// через `signalTtlSeconds` загруженной таблицы и наблюдаемый запас реализации (Ш6 (iii)).
+    /// Числом его размерить нельзя — запас не константа реализации: он меняется от одной строки
+    /// оснастки, и вектор, размеренный числом, был бы зелен на той самой реализации, которую
+    /// обязан ловить.
+    private func confirmationRun(bytes: Data?, laggingFirstSnapshot: Bool = false) async throws {
         let harness = try harness(bytes)
         let ttl = try bytes.map { Double(try SignalWeights.values(from: $0).signalTtlSeconds) }
             ?? ReferenceTables.shippedValues().signalTtlSeconds
-        let stepLength = ConfirmationPolicy.confirmationAge(signalTtlSeconds: ttl) / 5
+        let confirmationAge = ConfirmationPolicy.confirmationAge(signalTtlSeconds: ttl)
+        let stepLength = confirmationAge / 5
+        // Подтверждение идёт на первом шаге, на котором возраст достиг запаса, — отсюда наибольший
+        // разрыв между публикациями при этом шаге. Отставание берётся на один шаг больше порога,
+        // чтобы вектор не стоял на самой границе.
+        let widestPublicationGap = (confirmationAge / stepLength).rounded(.up) * stepLength
+        let lag = ttl - widestPublicationGap + stepLength
         let stream = harness.detector.signals()
-        harness.world.set(chrome, bundleIds: SignalStreamTests.chromeBundles)
+        let firstMoment: Date? = laggingFirstSnapshot
+            ? harness.world.now().addingTimeInterval(-lag) : nil
+        harness.world.set(chrome, bundleIds: SignalStreamTests.chromeBundles, observedAt: firstMoment)
+        if let firstMoment {
+            XCTAssertNotEqual(firstMoment, harness.world.now(), "момент снимка и часы разведены входом")
+            XCTAssertLessThan(lag + stepLength, ttl, "вектор обязан оставлять верную реализацию зелёной")
+            XCTAssertGreaterThan(widestPublicationGap + lag, ttl, "вектор обязан ловить отсчёт от публикации")
+        }
         try await harness.detector.startObserving()
+        if laggingFirstSnapshot {
+            // Дальше момент снимка равен показанию часов: отставание убывает ровно один раз.
+            harness.world.set(chrome, bundleIds: SignalStreamTests.chromeBundles)
+        }
         XCTAssertLessThan(try XCTUnwrap(harness.driver.interval), ttl, "шаг наблюдения короче срока")
         for _ in 0..<Int((3 * ttl / stepLength).rounded(.up)) {
             harness.world.advance(by: stepLength)
