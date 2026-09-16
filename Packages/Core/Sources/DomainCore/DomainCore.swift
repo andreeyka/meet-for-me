@@ -8,5 +8,5 @@
 //
 //  Объявления портов и доменных типов контрактов C-007, C-008 и C-009 — в соседних файлах
 //  каталога: PermissionsPort.swift, PowerPort.swift, ProcessMonitorPort.swift,
-//  PlatformResolver.swift (задача MEE-86). Реализаций, фейков и DTO C-001…C-003 здесь нет:
-//  они приходят своими задачами.
+//  PlatformResolver.swift (задача MEE-86). Реализаций портов и фейков здесь нет: реализации
+//  живут в Packages/Mac, фейки — в соседнем таргете DomainTestKit.

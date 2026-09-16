@@ -4,7 +4,8 @@
 //  Модуль: domain-core · Владелец: DEV-2 · Слой: домен
 //
 //  Только объявления (MEE-86). Реализацию протокола и сами таблицы правил пишет модуль `detector`
-//  (Packages/Mac/Sources/Detector/), фейк `FixedPlatformResolver` придёт отдельным пакетом DEV-2.
+//  (Packages/Mac/Sources/Detector/); фейк `FixedPlatformResolver` лежит в соседнем таргете
+//  этого пакета — Packages/Core/Sources/DomainTestKit/.
 //  §1 контракта (AudioProcess, ProcessGroup, MeetingSignal, порт) — в ProcessMonitorPort.swift.
 //
 //  Порядок типов и порядок полей внутри типа — дословно по §2 контракта
