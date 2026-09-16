@@ -64,13 +64,13 @@ final class PlatformResolverTests: XCTestCase {
         for (resolver, keys) in [(standard, Set(["zoom", "meet", "unknown"])),
                                  (withAcme, Set(["zoom", "meet", "acme", "unknown"]))] {
             for link in corpus {
-                if let provider = resolver.resolve(text: link, source: .eventUrl)?.provider {
+                if let provider = resolver.resolve(text: link, source: .bodyText)?.provider {
                     XCTAssertTrue(keys.contains(provider), "\(provider) вне ключей загруженной таблицы")
                 }
             }
         }
-        XCTAssertNil(standard.resolve(text: "https://acme.example/42", source: .eventUrl))
-        XCTAssertEqual(withAcme.resolve(text: "https://acme.example/42", source: .eventUrl)?.provider, "acme")
+        XCTAssertNil(standard.resolve(text: "https://acme.example/42", source: .bodyText))
+        XCTAssertEqual(withAcme.resolve(text: "https://acme.example/42", source: .bodyText)?.provider, "acme")
     }
 
     /// §3 без номера критерия: хост равен `hostSuffix` или кончается на `"." + hostSuffix` —
@@ -84,7 +84,7 @@ final class PlatformResolverTests: XCTestCase {
         XCTAssertNil(resolver.resolve(text: "http://zoom.us/j/1", source: .conferenceField))
         XCTAssertNil(resolver.resolve(text: "/j/123", source: .conferenceField))
         XCTAssertNil(resolver.resolve(text: "https://example.com/x", source: .conferenceField))
-        let withPasscode = resolver.resolve(text: "https://zoom.us/j/77?pwd=abc", source: .eventUrl)
+        let withPasscode = resolver.resolve(text: "https://zoom.us/j/77?pwd=abc", source: .bodyText)
         XCTAssertEqual(withPasscode?.meetingId, "77")
         XCTAssertEqual(withPasscode?.passcode, "abc")
         XCTAssertEqual(withPasscode?.clientBundleIds, ["us.zoom.xos"])
