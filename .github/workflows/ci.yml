@@ -83,7 +83,42 @@ jobs:
           bash .github/scripts/annotate.sh "Символьный граф · Core (Linux)" "$status" "$log" || true
           exit $status
 
-      - run: swift test --package-path Packages/Core
+      # Исход шага называл таргет, а не вектор: в сессии без сырых логов
+      # красная CI говорила «что-то в Core упало», а не «упал Q50» (MEE-263).
+      # Разложить весь файл по векторам отвергнуто: это заводит зависимость
+      # чужой зоны — всякий новый вектор плана требовал бы правки этого файла
+      # рукой архитектора, — и платится шагом за вектор. Поэтому вектор
+      # называет не имя шага, а аннотация: имена упавших тестов уходят в
+      # `::error`, а `check-runs/<job>/annotations` читается тем же способом
+      # и там же, где `runs/<id>/jobs` (замер DEV-1, 16.09). Поимённый исход
+      # получается без единой прочитанной строки лога и без служебной ветки
+      # с разложенными по векторам шагами — той, что уже была оплачена раз.
+      - name: Тесты · Packages/Core
+        shell: bash
+        run: |
+          set -o pipefail
+          log="$RUNNER_TEMP/tests-Core.log"
+          status=0
+          swift test --package-path Packages/Core 2>&1 | tee "$log" || status=$?
+          # `|| true` здесь несущий, а не украшение: шаг идёт под `bash -eo
+          # pipefail`, а grep без совпадений возвращает 1 — без guard зелёный
+          # прогон умирал бы на собственной аннотации.
+          failed=$(grep -hoE "Test Case '[^']+' failed" "$log" | cut -d"'" -f2 | sort -u || true)
+          if [ -n "$failed" ]; then
+            while IFS= read -r name; do
+              printf '::error title=Упал тест · Packages/Core::%s\n' "$name"
+            done <<< "$failed"
+            printf '::notice title=Тесты · Packages/Core::упало тестов: %s\n' \
+              "$(printf '%s\n' "$failed" | wc -l | tr -d ' ')"
+          fi
+          # Шаг мог умереть до того, как XCTest сказал хоть слово: сборка,
+          # оболочка, отсутствие тулчейна. Тогда имени теста в журнале нет
+          # вовсе, и в аннотацию уходит хвост журнала — тот же приём и тот же
+          # довод, что у разбора символьного графа выше.
+          if [ "$status" -ne 0 ] && [ -z "$failed" ]; then
+            bash .github/scripts/annotate.sh "Тесты · Packages/Core" "$status" "$log" || true
+          fi
+          exit $status
 
   macos:
     name: Core + Mac (macos-14)
@@ -165,5 +200,68 @@ jobs:
           bash .github/scripts/annotate.sh "Символьный граф · Core + Mac" "$status" "$log" || true
           exit $status
 
-      - run: swift test --package-path Packages/Core
-      - run: swift test --package-path Packages/Mac
+      # Исход шага называл таргет, а не вектор: в сессии без сырых логов
+      # красная CI говорила «что-то в Core упало», а не «упал Q50» (MEE-263).
+      # Разложить весь файл по векторам отвергнуто: это заводит зависимость
+      # чужой зоны — всякий новый вектор плана требовал бы правки этого файла
+      # рукой архитектора, — и платится шагом за вектор. Поэтому вектор
+      # называет не имя шага, а аннотация: имена упавших тестов уходят в
+      # `::error`, а `check-runs/<job>/annotations` читается тем же способом
+      # и там же, где `runs/<id>/jobs` (замер DEV-1, 16.09). Поимённый исход
+      # получается без единой прочитанной строки лога и без служебной ветки
+      # с разложенными по векторам шагами — той, что уже была оплачена раз.
+      - name: Тесты · Packages/Core
+        shell: bash
+        run: |
+          set -o pipefail
+          log="$RUNNER_TEMP/tests-Core.log"
+          status=0
+          swift test --package-path Packages/Core 2>&1 | tee "$log" || status=$?
+          # `|| true` здесь несущий, а не украшение: шаг идёт под `bash -eo
+          # pipefail`, а grep без совпадений возвращает 1 — без guard зелёный
+          # прогон умирал бы на собственной аннотации.
+          failed=$(grep -hoE "Test Case '[^']+' failed" "$log" | cut -d"'" -f2 | sort -u || true)
+          if [ -n "$failed" ]; then
+            while IFS= read -r name; do
+              printf '::error title=Упал тест · Packages/Core::%s\n' "$name"
+            done <<< "$failed"
+            printf '::notice title=Тесты · Packages/Core::упало тестов: %s\n' \
+              "$(printf '%s\n' "$failed" | wc -l | tr -d ' ')"
+          fi
+          # Шаг мог умереть до того, как XCTest сказал хоть слово: сборка,
+          # оболочка, отсутствие тулчейна. Тогда имени теста в журнале нет
+          # вовсе, и в аннотацию уходит хвост журнала — тот же приём и тот же
+          # довод, что у разбора символьного графа выше.
+          if [ "$status" -ne 0 ] && [ -z "$failed" ]; then
+            bash .github/scripts/annotate.sh "Тесты · Packages/Core" "$status" "$log" || true
+          fi
+          exit $status
+
+      # Вторая половина того же приёма, по тому же доводу: вектор называет
+      # аннотация, а не имя шага (MEE-263).
+      - name: Тесты · Packages/Mac
+        shell: bash
+        run: |
+          set -o pipefail
+          log="$RUNNER_TEMP/tests-Mac.log"
+          status=0
+          swift test --package-path Packages/Mac 2>&1 | tee "$log" || status=$?
+          # `|| true` здесь несущий, а не украшение: шаг идёт под `bash -eo
+          # pipefail`, а grep без совпадений возвращает 1 — без guard зелёный
+          # прогон умирал бы на собственной аннотации.
+          failed=$(grep -hoE "Test Case '[^']+' failed" "$log" | cut -d"'" -f2 | sort -u || true)
+          if [ -n "$failed" ]; then
+            while IFS= read -r name; do
+              printf '::error title=Упал тест · Packages/Mac::%s\n' "$name"
+            done <<< "$failed"
+            printf '::notice title=Тесты · Packages/Mac::упало тестов: %s\n' \
+              "$(printf '%s\n' "$failed" | wc -l | tr -d ' ')"
+          fi
+          # Шаг мог умереть до того, как XCTest сказал хоть слово: сборка,
+          # оболочка, отсутствие тулчейна. Тогда имени теста в журнале нет
+          # вовсе, и в аннотацию уходит хвост журнала — тот же приём и тот же
+          # довод, что у разбора символьного графа выше.
+          if [ "$status" -ne 0 ] && [ -z "$failed" ]; then
+            bash .github/scripts/annotate.sh "Тесты · Packages/Mac" "$status" "$log" || true
+          fi
+          exit $status
