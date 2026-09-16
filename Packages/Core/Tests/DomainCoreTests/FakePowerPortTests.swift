@@ -1,6 +1,6 @@
 //  П. 157: управляющая поверхность `DomainTestKit.FakePowerPort`, названная §«Фейк для тестов»
 //  C-008 дословно, включая снимок, который настоящий порт отдать не вправе. Четыре грани —
-//  (а)…(г) — и три вектора.
+//  (а)…(г) — и четыре вектора.
 //
 //  Q47 — два разных `PowerSnapshot` у одного экземпляра: без второго ответа грань зелена
 //  у реализации, принимающей снимок один раз в инициализаторе.
@@ -9,6 +9,11 @@
 //  Q49 — снимок с `batteryFraction == 1.5`: основание — §«Построение значения на границе
 //  модуля» C-008 дословно. «Ничего не проверяет» отличается от «тихо нормализует» только тем,
 //  что утверждается КАЖДОЕ поле, а не одно.
+//  Q50 — тот же снимок, заданный ЧЕРЕЗ `setSnapshot(_:)`. Публичных путей задать снимок у фейка
+//  ДВА, и Q49 проходит через один из них: реализация, зажимающая `batteryFraction` в `0...1`
+//  только в `setSnapshot(_:)`, проходит Q49 целиком. Граница вектора: он утверждает отсутствие
+//  приведения на ВТОРОМ пути и ничего не говорит о ЧИСЛЕ путей — появится третий, вектор его не
+//  заметит; признак «путей два» снят чтением (`FakePowerPort.swift:72` и `:87`), а не тестом.
 //
 //  Поток берётся ДО толчка — тот же довод и тот же образец, что у п. 156.
 //  `PowerEvent` уходит в поток значением, а не байтами: `Codable` он не объявлен вовсе.
@@ -111,6 +116,35 @@ final class FakePowerPortTests: XCTestCase {
         XCTAssertEqual(read.thermalPressure, .nominal)
         XCTAssertEqual(read.checkedAt, moment)
         XCTAssertEqual(read, broken, "значение не приводится ни к чему")
+    }
+
+    // MARK: - Тот же снимок ЧЕРЕЗ setSnapshot(_:) — вектор Q50
+
+    func test_p157_fakePowerPort_setSnapshotDoesNotNormalize() async throws {
+        // Стартовый снимок ГОДНЫЙ, и это несущее условие вектора, а не украшение: собери порт
+        // негодным — и ответ `snapshot()` был бы зелен у реализации, которая `setSnapshot(_:)`
+        // не исполняет вовсе. Годным он отличается от `broken` ровно одним полем.
+        let healthy = makeSnapshot(source: .battery, fraction: 0.5, thermal: .nominal)
+        let port = FakePowerPort(snapshot: healthy)
+
+        // Q50: негодное значение входит вторым публичным путём — `setSnapshot(_:)`, не `init`.
+        let broken = PowerSnapshot(
+            source: .battery,
+            batteryFraction: 1.5,
+            isLowPowerModeEnabled: false,
+            thermalPressure: .nominal,
+            checkedAt: moment)
+        port.setSnapshot(broken)
+
+        let read = await port.snapshot()
+        let fraction = try XCTUnwrap(read.batteryFraction)
+        XCTAssertEqual(fraction, 1.5, "зажатия в 0...1 нет и на втором пути")
+        XCTAssertEqual(read.source, .battery, "каждое поле равно переданному")
+        XCTAssertFalse(read.isLowPowerModeEnabled)
+        XCTAssertEqual(read.thermalPressure, .nominal)
+        XCTAssertEqual(read.checkedAt, moment)
+        XCTAssertEqual(read, broken, "значение не приводится ни к чему")
+        XCTAssertNotEqual(read, healthy, "отдано заданное вторым путём, а не стартовое")
     }
 
     // MARK: - Оснастка
