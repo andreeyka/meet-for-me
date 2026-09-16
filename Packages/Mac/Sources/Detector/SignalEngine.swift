@@ -103,10 +103,7 @@ final class SignalEngine: @unchecked Sendable {
     func signals() -> AsyncStream<MeetingSignal> {
         let id = UUID()
         let moment = environment.clock.now()
-        // МУТАЦИЯ (MEE-280, замер К76 (iv)): буфер ограничен числом ВИДОВ сигнала — по
-        // одному месту на вид. Числом здесь не написан ни один литерал; величина меньше
-        // числа подач вектора (iv), и всё, что сверх неё, буфер роняет молча.
-        return AsyncStream(bufferingPolicy: .bufferingNewest(MeetingSignalKind.allCases.count)) { continuation in
+        return AsyncStream(bufferingPolicy: .unbounded) { continuation in
             continuation.onTermination = { [weak self] _ in
                 self?.withState { self?.subscribers[id] = nil }
             }
@@ -114,6 +111,15 @@ final class SignalEngine: @unchecked Sendable {
                 forgetStale(at: moment)
                 for signal in SignalCandidates.inPublicationOrder(published) {
                     continuation.yield(signal)
+                }
+                // МУТАЦИЯ (MEE-280, замер К75 (vii)): снимок уходит в `holding` с моментом
+                // подписки — чужая подписка засчитывается подтверждением состояния и
+                // переносит срок инварианта 24.
+                for (key, signal) in published {
+                    holding[key] = MeetingSignal(kind: signal.kind, weight: signal.weight,
+                                                 pid: signal.pid, bundleId: signal.bundleId,
+                                                 group: signal.group, provider: signal.provider,
+                                                 meetingId: signal.meetingId, observedAt: moment)
                 }
                 subscribers[id] = continuation
             }
