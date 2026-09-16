@@ -109,17 +109,16 @@ final class SignalEngine: @unchecked Sendable {
             }
             withState {
                 forgetStale(at: moment)
+                // МУТАЦИЯ (MEE-280, замер К75 (i)): поток, подписанный прежде любой
+                // публикации, открывается маркером «сведений нет» — значением, которого не
+                // публиковал никто.
+                if published.isEmpty {
+                    continuation.yield(MeetingSignal(kind: .calendarWindow, weight: 0, pid: nil,
+                                                     bundleId: nil, group: nil, provider: nil,
+                                                     meetingId: nil, observedAt: moment))
+                }
                 for signal in SignalCandidates.inPublicationOrder(published) {
                     continuation.yield(signal)
-                }
-                // МУТАЦИЯ (MEE-280, замер К75 (vii)): снимок уходит в `holding` с моментом
-                // подписки — чужая подписка засчитывается подтверждением состояния и
-                // переносит срок инварианта 24.
-                for (key, signal) in published {
-                    holding[key] = MeetingSignal(kind: signal.kind, weight: signal.weight,
-                                                 pid: signal.pid, bundleId: signal.bundleId,
-                                                 group: signal.group, provider: signal.provider,
-                                                 meetingId: signal.meetingId, observedAt: moment)
                 }
                 subscribers[id] = continuation
             }
