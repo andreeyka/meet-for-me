@@ -85,6 +85,59 @@ jobs:
 
       - run: swift test --package-path Packages/Core
 
+      # ------------------------------------------------------------------
+      # ВРЕМЕННО. ТОЛЬКО СЛУЖЕБНАЯ ВЕТКА `qa/mutation-1a078b0`. В `main` этот
+      # блок не уходит ни одним коммитом: задача MEE-265, санкция РП от 16.09,
+      # раздел 1. Владелец файла — архитектор; здесь файл правится по санкции,
+      # выданной под шестую мутацию батча `M`, и правка живёт ровно до
+      # закрытия служебного PR.
+      #
+      # Зачем. Шестая мутация батча `M` заказывает ПОИМЁННЫЙ исход: «краснеет
+      # ровно Q50 и Q49 не краснеет». Один шаг `swift test` на весь пакет даёт
+      # один вердикт на всех и на этот вопрос не отвечает.
+      #
+      # Почему не читаем лог. Замер этой сессии, 16.09: список прогонов,
+      # `…/actions/runs/<id>/jobs` и `…/check-runs/<job>/annotations` отдают
+      # HTTP 200, а текст журнала (`…/actions/jobs/<id>/logs`) не читается —
+      # редирект в хранилище закрыт политикой сети (CONNECT 403). Отсюда
+      # способ: один вектор — один шаг, и исход вектора есть исход шага.
+      #
+      # Почему `if: always()`, а не `continue-on-error: true` — довод батча
+      # `M` на ветке `qa/mutation-4b44f8e`: `continue-on-error` МАСКИРУЕТ
+      # `conclusion` упавшего шага в `success`, то есть стирает ровно тот
+      # сигнал, ради которого шаги и разложены. `if: always()` исхода шага
+      # не трогает.
+      #
+      # Шаг `swift test` выше не снят и не сдвинут: он и есть полный прогон
+      # пакета.
+      # ------------------------------------------------------------------
+      - name: "Q50 · тот же снимок ЧЕРЕЗ setSnapshot — ОЖИДАЕТСЯ КРАСНЫМ"
+        if: always()
+        run: swift test --package-path Packages/Core --filter 'FakePowerPortTests/test_p157_fakePowerPort_setSnapshotDoesNotNormalize'
+
+      - name: "Q49 · снимок, который настоящий порт отдать не вправе — ожидается зелёным"
+        if: always()
+        run: swift test --package-path Packages/Core --filter 'FakePowerPortTests/test_p157_fakePowerPort_snapshotNoRealPortMayReturn'
+
+      - name: "Q47 · снимок задаётся и меняется на лету — ожидается зелёным"
+        if: always()
+        run: swift test --package-path Packages/Core --filter 'FakePowerPortTests/test_p157_fakePowerPort_snapshotIsSetAndChangedOnTheFly'
+
+      - name: "Q48 · end убирает свой токен, а не список целиком — ожидается зелёным"
+        if: always()
+        run: swift test --package-path Packages/Core --filter 'FakePowerPortTests/test_p157_fakePowerPort_endRemovesOnlyItsOwnToken'
+
+      # Шаг, без которого «краснеет РОВНО Q50» не отличается от «краснеет Q50
+      # и ещё что-то». Полный прогон выше краснеет в обоих случаях: тест Q50
+      # в нём тоже есть. Здесь вычтен ровно он — значит зелёный шаг означает
+      # «за пределами Q50 не покраснело ничто», а красный есть тот самый иной
+      # исход, который постановка велит назвать первой строкой.
+      - name: "Остальное дерево Core — Q50 вычтен — ожидается зелёным"
+        if: always()
+        run: |
+          swift test --package-path Packages/Core \
+            --skip 'test_p157_fakePowerPort_setSnapshotDoesNotNormalize'
+
   macos:
     name: Core + Mac (macos-14)
     runs-on: macos-14

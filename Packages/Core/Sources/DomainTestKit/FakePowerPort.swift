@@ -83,9 +83,34 @@ public final class FakePowerPort: PowerPort, @unchecked Sendable {
 
     // MARK: - Управление из теста
 
+    // ------------------------------------------------------------------
+    // ВРЕМЕННО. МУТАЦИЯ. ТОЛЬКО СЛУЖЕБНАЯ ВЕТКА `qa/mutation-1a078b0`.
+    // В `main` этот блок не уходит ни одним коммитом: задача MEE-265,
+    // санкция РП от 16.09, раздел 1. Владелец файла — DEV-2; здесь файл
+    // портится по санкции, выданной под шестую мутацию батча `M`, и порча
+    // живёт ровно до закрытия служебного PR.
+    //
+    // Что именно испорчено: `batteryFraction` зажат в `0...1` ТОЛЬКО здесь,
+    // на втором публичном пути задания снимка. Путь первый (`init`, строка
+    // выше) не тронут ни символом — в этом и весь вектор Q50: реализация,
+    // зажимающая только здесь, проходит Q49 целиком и тихо нормализует на
+    // всяком последующем входе.
+    //
+    // Действующий текст этого метода, который вернётся закрытием PR:
+    //     /// Задать или сменить снимок на лету. Значение не приводится ни к чему.
+    //     public func setSnapshot(_ snapshot: PowerSnapshot) {
+    //         locked { current = snapshot }
+    //     }
+    // ------------------------------------------------------------------
     /// Задать или сменить снимок на лету. Значение не приводится ни к чему.
     public func setSnapshot(_ snapshot: PowerSnapshot) {
-        locked { current = snapshot }
+        let clamped = PowerSnapshot(
+            source: snapshot.source,
+            batteryFraction: snapshot.batteryFraction.map { min(max($0, 0), 1) },
+            isLowPowerModeEnabled: snapshot.isLowPowerModeEnabled,
+            thermalPressure: snapshot.thermalPressure,
+            checkedAt: snapshot.checkedAt)
+        locked { current = clamped }
     }
 
     /// Протолкнуть событие в поток. Значение уходит туда значением, а не байтами: `PowerEvent`
