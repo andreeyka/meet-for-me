@@ -14,8 +14,12 @@
 //  Правило сравнения берётся у домена — `bundleKeyMatches` (§4.1), а не своё: двух мнений
 //  о том, что совпало, не заводится даже у фейка.
 //
-//  Протокол `PlatformResolver` объявлен в дереве неполно и сознательно (см. его заголовок);
-//  фейк реализует его целиком таким, каков он на сегодня.
+//  Разбор события (`resolve(event:)`) фейк ведёт в порядке инварианта 3 C-009 и спрашивает
+//  о каждом поле СВОЙ ЖЕ словарь. Исключения инварианта 4 (`provider == "unknown"` на
+//  структурном поле `conference`) у него нет, и это решение, а не недосмотр: п. 149 перечня
+//  MEE-6 требует вектор «текста нет в словаре → `nil`», а автоматический `unknown` завёл бы
+//  у фейка второй источник ответа помимо теста. Тесту, которому нужна эта ветвь, ответ на
+//  неё кладётся в словарь — ровно так же, как всякий другой.
 
 import Foundation
 import DomainCore
@@ -34,8 +38,34 @@ public struct FixedPlatformResolver: PlatformResolver, Sendable {
         self.browsers = browsers
     }
 
+    public func resolve(event: MeetingEvent) -> JoinInfo? {
+        for field in FixedPlatformResolver.orderedFields(of: event) {
+            if let answer = resolve(text: field.text, source: field.source) {
+                return answer
+            }
+        }
+        return nil
+    }
+
     public func resolve(text: String, source: JoinInfo.Source) -> JoinInfo? {
         answers[text]
+    }
+
+    /// Поля события в порядке инварианта 3 C-009: `conference` → `location` → `eventUrl` →
+    /// `bodyText`. Стадия `eventUrl` входа не имеет — поля URL события C-001 v11 не
+    /// объявляет; остальные три идут в контрактном порядке.
+    private static func orderedFields(of event: MeetingEvent) -> [(text: String, source: JoinInfo.Source)] {
+        var ordered: [(text: String, source: JoinInfo.Source)] = []
+        if let conference = event.conference {
+            ordered.append((conference.joinUrl.absoluteString, .conferenceField))
+        }
+        if let location = event.location {
+            ordered.append((location, .location))
+        }
+        if let bodyText = event.bodyText {
+            ordered.append((bodyText, .bodyText))
+        }
+        return ordered
     }
 
     public func clientBundleIds(for provider: String) -> [String] {
