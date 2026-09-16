@@ -105,18 +105,19 @@ final class SignalEngine: @unchecked Sendable {
         let moment = environment.clock.now()
         return AsyncStream(bufferingPolicy: .unbounded) { continuation in
             continuation.onTermination = { [weak self] _ in
-                self?.withState { self?.subscribers[id] = nil }
+                // МУТАЦИЯ (MEE-280, замер К76 (iii) ДОГАДКОЙ ПОСТАНОВКИ): наблюдение гаснет,
+                // когда ушёл ПОСЛЕДНИЙ подписчик, — а не когда ушёл любой.
+                guard let self else { return }
+                let lastLeft = self.withState { () -> Bool in
+                    self.subscribers[id] = nil
+                    return self.subscribers.isEmpty
+                }
+                guard lastLeft else { return }
+                self.withState { self.observing = false }
+                self.environment.driver.stop()
             }
             withState {
                 forgetStale(at: moment)
-                // МУТАЦИЯ (MEE-280, замер К75 (i)): поток, подписанный прежде любой
-                // публикации, открывается маркером «сведений нет» — значением, которого не
-                // публиковал никто.
-                if published.isEmpty {
-                    continuation.yield(MeetingSignal(kind: .calendarWindow, weight: 0, pid: nil,
-                                                     bundleId: nil, group: nil, provider: nil,
-                                                     meetingId: nil, observedAt: moment))
-                }
                 for signal in SignalCandidates.inPublicationOrder(published) {
                     continuation.yield(signal)
                 }
