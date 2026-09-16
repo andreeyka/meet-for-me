@@ -103,16 +103,12 @@ final class SignalEngine: @unchecked Sendable {
     func signals() -> AsyncStream<MeetingSignal> {
         let id = UUID()
         let moment = environment.clock.now()
-        return AsyncStream(bufferingPolicy: .unbounded) { continuation in
+        // МУТАЦИЯ (MEE-280, замер К76 (iv)): буфер ограничен числом ВИДОВ сигнала — по
+        // одному месту на вид. Числом здесь не написан ни один литерал; величина меньше
+        // числа подач вектора (iv), и всё, что сверх неё, буфер роняет молча.
+        return AsyncStream(bufferingPolicy: .bufferingNewest(MeetingSignalKind.allCases.count)) { continuation in
             continuation.onTermination = { [weak self] _ in
-                // МУТАЦИЯ (MEE-280, замер К76 (iii)): завершение ОДНОГО потока гасит
-                // наблюдение целиком — ушедший подписчик считается концом работы порта.
-                guard let self else { return }
-                self.withState {
-                    self.subscribers[id] = nil
-                    self.observing = false
-                }
-                self.environment.driver.stop()
+                self?.withState { self?.subscribers[id] = nil }
             }
             withState {
                 forgetStale(at: moment)
