@@ -3,6 +3,13 @@
 //  Значения весов строятся чистой функцией `domain-core` `SignalWeights.values(from:)` из байтов,
 //  которые задаёт тест, и подаются порту точкой приёма — без пересборки `domain-core`, без
 //  подмены ресурса и без обращения к файловой системе. Штатный набор — `SignalWeights.current()`.
+//
+//  МЕСТО ПОДПИСКИ — ДО ПЕРВОЙ ПОДАЧИ у всех тестов этого файла: ни один из критериев его не
+//  называет, и действует умолчание Ш4 (iii) (способ `С` плана в редакции `АС`). Цена поздней
+//  подписки названа дельтой прямо и наибольшая у К45 (i-бис): подписавшемуся уходит снимок
+//  актуального — ОДНА публикация пары, последняя по `observedAt`, — и вектор, чей ответ есть
+//  «второй сигнал идёт», покраснел бы на ВЕРНОЙ реализации. То же у К73 (i), где ответ считает
+//  события пары.
 
 import DomainCore
 import Foundation
@@ -69,15 +76,17 @@ final class WeightsAndConfirmationTests: XCTestCase {
 
     func test_k45_vectorI_sameSnapshotBeforeConfirmationAge_doesNotGo() async throws {
         let harness = try harness()
+        let stream = harness.detector.signals()
         harness.world.set(chrome, bundleIds: SignalStreamTests.chromeBundles)
         try await harness.detector.startObserving()
-        let stream = harness.detector.signals()
         let ttl = try ReferenceTables.shippedValues().signalTtlSeconds
         let age = ConfirmationPolicy.confirmationAge(signalTtlSeconds: ttl)
         harness.world.advance(by: age / 2)
         harness.driver.fire()
         let events = await harness.drain(stream)
-        XCTAssertEqual(events, [], "повторное неизменившееся состояние изменением не является")
+        XCTAssertEqual(events.filter { $0.kind == .clientAudioOutput }.count, 1,
+                       "второй clientAudioOutput в поток не идёт: неизменившееся состояние не изменение")
+        XCTAssertEqual(events.count, 3, "по одному сигналу на пару корпуса и ни одного повторного")
     }
 
     func test_k45_vectorIBis_sameSnapshotAfterTtl_goesAsConfirmation() async throws {
@@ -97,14 +106,15 @@ final class WeightsAndConfirmationTests: XCTestCase {
 
     func test_k45_vectorII_changedComposition_goesAtOnce() async throws {
         let harness = try harness()
+        let stream = harness.detector.signals()
         harness.world.set(chrome, bundleIds: SignalStreamTests.chromeBundles)
         try await harness.detector.startObserving()
-        let stream = harness.detector.signals()
         harness.world.set(chrome + [SignalStreamTests.chromeHelper(102)], bundleIds: SignalStreamTests.chromeBundles)
         harness.world.advance(by: 1)
         harness.driver.fire()
         let output = await harness.drain(stream).filter { $0.kind == .clientAudioOutput }
-        XCTAssertEqual(output.map { $0.group?.pids }, [[100, 101, 102]])
+        XCTAssertEqual(output.map { $0.group?.pids }, [[100, 101], [100, 101, 102]],
+                       "изменившийся состав идёт сразу, и group.pids — новый состав")
     }
 
     // MARK: - К73. Инвариант 24, половина порта
