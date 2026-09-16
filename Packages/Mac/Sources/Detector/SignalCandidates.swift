@@ -53,6 +53,15 @@ enum SignalCandidates {
         return result.sorted(by: publicationOrder)
     }
 
+    /// Пары снимка при подписке — в том же порядке, каким они ушли бы в поток одним шагом
+    /// (инвариант 26). Очерёдности внутри снимка контракт не требует; порядок взят один и тот
+    /// же затем, чтобы он не зависел от того, как легло отображение пар.
+    static func inPublicationOrder(_ pairs: [PairKey: MeetingSignal]) -> [MeetingSignal] {
+        pairs.map { SignalCandidate(key: $0.key, signal: $0.value) }
+            .sorted(by: publicationOrder)
+            .map(\.signal)
+    }
+
     private static func groupSignals(appKey: String, members: [AudioProcess], tables: RuleTables,
                                      values: ReceivedValues, at moment: Date) -> [SignalCandidate] {
         guard let first = members.first else { return [] }

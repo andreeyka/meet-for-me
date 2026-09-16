@@ -2,8 +2,16 @@
 //  К41—К44, К46, К48—К53, К61, К62.
 //
 //  Снимки подаёт тест точкой подачи Ш4, ход времени — часами Ш6; всё остальное исполняет
-//  настоящий `SignalEngine`. Окно каждого критерия короче срока подтверждения (К41—К44 в
-//  редакции АВ.6 плана): часы теста между шагами не доходят до половины `signalTtlSeconds`.
+//  настоящий `SignalEngine`. Окно каждого критерия короче срока подтверждения: часы теста
+//  между шагами не доходят до половины `signalTtlSeconds`.
+//
+//  МЕСТО ПОДПИСКИ ЕСТЬ ЧАСТЬ ВХОДА, а не оснастка (Ш4 (iii) в редакции `АР` перечня; способ
+//  `С` плана в редакции `АС`). С C-009 v9 подписавшемуся уходит снимок актуального
+//  (инвариант 26), поэтому число и состав элементов потока зависят от того, где стоит
+//  подписка. Критерий, чей ответ считает элементы потока, называет место сам — здесь это К43
+//  (между переходами №1 и №2) и К44 (после трёх переходов). У ОСТАЛЬНЫХ подписка стоит ДО
+//  ПЕРВОЙ ПОДАЧИ: это умолчание шва, а не выбор автора теста, и оно стоит в каждом тесте
+//  первой строкой после `Harness()`.
 //
 //  У К51 и К62 предмет — сам `observedAt`, и они задают момент снимка ТРЕТЬИМ аргументом
 //  `world.set(_:bundleIds:observedAt:)`, отличным от показания часов (Ш4 (ii)). Пока этого
@@ -30,54 +38,79 @@ final class SignalStreamTests: XCTestCase {
 
     func test_k41_secondStart_createsNoSecondStream() async throws {
         let harness = try Harness()
+        let stream = harness.detector.signals()
         harness.world.set([Self.chromeMain, Self.chromeHelper(101)], bundleIds: Self.chromeBundles)
         try await harness.detector.startObserving()
         try await harness.detector.startObserving()
-        let stream = harness.detector.signals()
         harness.world.set([Self.chromeMain, Self.chromeHelper(101, output: true)], bundleIds: Self.chromeBundles)
         harness.world.advance(by: 1)
         harness.driver.fire()
         let events = await harness.drain(stream)
-        XCTAssertEqual(events.map(\.kind), [.clientAudioOutput], "ровно одно событие")
+        XCTAssertEqual(events.filter { $0.kind == .clientAudioOutput }.count, 1,
+                       "переход состояния дал ровно одно событие, не два")
         XCTAssertEqual(harness.driver.starts, 1, "второй драйвер наблюдения не заведён")
     }
 
     func test_k42_startStopStart_eventArrives() async throws {
         let harness = try Harness()
+        let stream = harness.detector.signals()
         harness.world.set([Self.chromeMain, Self.chromeHelper(101)], bundleIds: Self.chromeBundles)
         try await harness.detector.startObserving()
         await harness.detector.stopObserving()
         try await harness.detector.startObserving()
-        let stream = harness.detector.signals()
         harness.world.set([Self.chromeMain, Self.chromeHelper(101, output: true)], bundleIds: Self.chromeBundles)
         harness.world.advance(by: 1)
         harness.driver.fire()
         let events = await harness.drain(stream)
-        XCTAssertEqual(events.map(\.kind), [.clientAudioOutput])
+        XCTAssertEqual(events.filter { $0.kind == .clientAudioOutput }.count, 1,
+                       "после второго старта событие приходит")
     }
 
-    // MARK: - К43, К44. Поток после подписки; наблюдение без подписчиков
+    // MARK: - К43, К44. Снимок при подписке и события после неё; наблюдение без подписчиков
 
-    func test_k43_subscriberGetsOnlyEventsAfterSubscription() async throws {
+    /// К43 в редакции дельты `АР` перечня MEE-75 и дельты `АС` плана MEE-126 (C-009 v9,
+    /// инвариант 26). Прежняя редакция утверждала обратное — «№1 не получено», — и была зелена
+    /// на реализации, снимка не отдававшей.
+    ///
+    /// Место подписки — часть входа: она стоит между переходом №1 и переходом №2 ТОЙ ЖЕ пары.
+    /// Пары разные дали бы в снимке два сигнала, и вектор перестал бы отличать снимок от
+    /// предыстории. Окно ведут часы теста (Ш6 (i)) и не доходят ни до `signalTtlSeconds` от
+    /// №1, ни до запаса подтверждения реализации (Ш6 (iii)): подтверждений в него не попадает
+    /// ни одного.
+    ///
+    /// Сравнение — ТОЖДЕСТВОМ события, включая `observedAt`, а не равенством значения: ровно
+    /// им краснеет реализация, ставящая снимку свежий `observedAt`, — третий исход, названный
+    /// и отвергнутый изданием v9. Поток `early` здесь оснастка, а не утверждение о втором
+    /// подписчике (это К76): он даёт опубликованные значения, с которыми сверяется поздний.
+    ///
+    /// Счёт ведётся по паре, названной входом. Клауза критерия «третьего события в потоке нет»
+    /// читается по ней же: группа `com.google.Chrome` публикует ещё и пару
+    /// «`clientRunning` + `com.google.Chrome`», и переход №2 меняет состав `pids` у обеих.
+    func test_k43_subscriberGetsSnapshotOfTransitionOne_thenTransitionTwo() async throws {
         let harness = try Harness()
+        let ttl = try ReferenceTables.shippedValues().signalTtlSeconds
+        let step = ConfirmationPolicy.confirmationAge(signalTtlSeconds: ttl) / 4
+        let early = harness.detector.signals()
         harness.world.set([Self.chromeMain, Self.chromeHelper(101)], bundleIds: Self.chromeBundles)
         try await harness.detector.startObserving()
-        let early = harness.detector.signals()
         harness.world.set([Self.chromeMain, Self.chromeHelper(101, output: true)], bundleIds: Self.chromeBundles)
-        harness.world.advance(by: 1)
+        harness.world.advance(by: step)
         harness.driver.fire()
         let stream = harness.detector.signals()
-        harness.world.set([Self.chromeMain, Self.chromeHelper(101, output: true, input: true)],
+        harness.world.set([Self.chromeMain, Self.chromeHelper(101, output: true), Self.chromeHelper(102)],
                           bundleIds: Self.chromeBundles)
-        harness.world.advance(by: 1)
+        harness.world.advance(by: step)
         harness.driver.fire()
-        let first = await harness.drain(early).filter { $0.kind == .clientAudioOutput }
-        let events = await harness.drain(stream)
-        XCTAssertEqual(events.map(\.kind), [.microphoneInUse], "получено №2")
-        guard first.count == 1, let transitionOne = first.first else {
-            return XCTFail("переход №1 опубликован \(first.count) раз вместо одного")
+        XCTAssertLessThan(2 * step, ConfirmationPolicy.confirmationAge(signalTtlSeconds: ttl),
+                          "окно короче запаса: ни одного подтверждения в него не попало")
+        let published = await harness.drain(early).filter { $0.kind == .clientAudioOutput }
+        let events = await harness.drain(stream).filter { $0.kind == .clientAudioOutput }
+        guard published.count == 2, events.count == 2 else {
+            return XCTFail("опубликовано \(published.count) переходов пары, получено \(events.count)")
         }
-        XCTAssertFalse(events.contains(transitionOne), "№1 — тождеством, включая observedAt — не получено")
+        XCTAssertEqual(events.first, published.first, "первым — снимок: №1 тождеством, включая observedAt")
+        XCTAssertEqual(events.last, published.last, "вторым — событие перехода №2, и третьего у пары нет")
+        XCTAssertEqual(events.last?.group?.pids, [100, 101, 102], "№2 — та же пара, изменившийся состав")
     }
 
     func test_k44_observationSurvivesAbsenceOfSubscribers() async throws {
@@ -106,9 +139,9 @@ final class SignalStreamTests: XCTestCase {
     func test_k46_deathOfProcess_signalGoesOnSameSnapshot_streamContinues() async throws {
         let harness = try Harness()
         let full = [Self.chromeMain, Self.chromeHelper(101, output: true), Self.chromeHelper(102)]
+        let stream = harness.detector.signals()
         harness.world.set(full, bundleIds: Self.chromeBundles)
         try await harness.detector.startObserving()
-        let stream = harness.detector.signals()
         harness.world.set(Array(full.prefix(2)), bundleIds: Self.chromeBundles)
         harness.world.advance(by: 1)
         harness.driver.fire()
