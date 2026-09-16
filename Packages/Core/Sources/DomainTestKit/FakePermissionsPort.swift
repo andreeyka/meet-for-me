@@ -155,11 +155,7 @@ public final class FakePermissionsPort: PermissionsPort, @unchecked Sendable {
     public func request(_ kind: PermissionKind) async -> PermissionRequestOutcome {
         locked { () -> PermissionRequestOutcome in
             requestCalls[kind, default: 0] += 1
-            switch statuses[kind] ?? .unknown {
-            case .granted: return .granted
-            case .denied: return .denied
-            default: return .promptOnUse
-            }
+            return outcomes[kind] ?? .cannotPrompt
         }
     }
 

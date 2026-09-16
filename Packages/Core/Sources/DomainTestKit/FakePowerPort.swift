@@ -85,7 +85,7 @@ public final class FakePowerPort: PowerPort, @unchecked Sendable {
 
     /// Задать или сменить снимок на лету. Значение не приводится ни к чему.
     public func setSnapshot(_ snapshot: PowerSnapshot) {
-        locked { current = snapshot }
+        _ = snapshot
     }
 
     /// Протолкнуть событие в поток. Значение уходит туда значением, а не байтами: `PowerEvent`
