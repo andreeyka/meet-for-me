@@ -116,7 +116,7 @@ public final class FakePermissionsPort: PermissionsPort, @unchecked Sendable {
 
     /// Счётчик вызовов `request(_:)` по этому праву.
     public func requestCallCount(for kind: PermissionKind) -> Int {
-        locked { requestCalls.values.reduce(0, +) }
+        locked { requestCalls[kind] ?? 0 }
     }
 
     /// Счётчик вызовов `openSettings(for:)` по этому праву. Растёт и там, где вызов бросил.
@@ -155,7 +155,11 @@ public final class FakePermissionsPort: PermissionsPort, @unchecked Sendable {
     public func request(_ kind: PermissionKind) async -> PermissionRequestOutcome {
         locked { () -> PermissionRequestOutcome in
             requestCalls[kind, default: 0] += 1
-            return outcomes[kind] ?? .cannotPrompt
+            switch statuses[kind] ?? .unknown {
+            case .granted: return .granted
+            case .denied: return .denied
+            default: return .promptOnUse
+            }
         }
     }
 
