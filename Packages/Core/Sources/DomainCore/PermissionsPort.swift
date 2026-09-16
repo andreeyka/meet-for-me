@@ -1,9 +1,10 @@
-//  PermissionsPort — контракт C-007 v2 (MEE-11), раздел «Определение»
+//  PermissionsPort — контракт C-007 (MEE-11), раздел «Определение»
 //
 //  Модуль: domain-core · Владелец: DEV-2 · Слой: домен
 //
 //  Только объявления (MEE-86). Реализацию порта пишет модуль `permissions`
-//  (Packages/Mac/Sources/Permissions/), фейк `FakePermissionsPort` придёт отдельным пакетом DEV-2.
+//  (Packages/Mac/Sources/Permissions/); фейк `FakePermissionsPort` лежит в соседнем таргете
+//  этого пакета — Packages/Core/Sources/DomainTestKit/.
 //
 //  Порядок типов и порядок полей внутри типа — дословно по §«Определение» контракта.
 //  Порядок полей значим: на нём стоит правило обхода C-001 §0.2 п. 9 (ступени (а) и (в) идут

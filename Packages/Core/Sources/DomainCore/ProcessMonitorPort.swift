@@ -1,9 +1,10 @@
-//  ProcessMonitorPort — контракт C-009 v2 (MEE-15), §1 «Процессы и аудиоактивность»
+//  ProcessMonitorPort — контракт C-009 (MEE-15), §1 «Процессы и аудиоактивность»
 //
 //  Модуль: domain-core · Владелец: DEV-2 · Слой: домен
 //
 //  Только объявления (MEE-86). Реализацию порта пишет модуль `detector`
-//  (Packages/Mac/Sources/Detector/), фейк `FakeProcessMonitorPort` придёт отдельным пакетом DEV-2.
+//  (Packages/Mac/Sources/Detector/); фейк `FakeProcessMonitorPort` лежит в соседнем таргете
+//  этого пакета — Packages/Core/Sources/DomainTestKit/.
 //  §2 контракта (JoinInfo, правило §4.1, PlatformResolver) — в PlatformResolver.swift.
 //
 //  Порядок типов и порядок полей внутри типа — дословно по §1 контракта

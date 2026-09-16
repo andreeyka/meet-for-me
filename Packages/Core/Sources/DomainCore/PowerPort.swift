@@ -1,9 +1,10 @@
-//  PowerPort — контракт C-008 v1 (MEE-12), раздел «Определение»
+//  PowerPort — контракт C-008 (MEE-12), раздел «Определение»
 //
 //  Модуль: domain-core · Владелец: DEV-2 · Слой: домен
 //
 //  Только объявления (MEE-86). Реализацию порта пишет модуль `permissions`
-//  (Packages/Mac/Sources/Permissions/), фейк `FakePowerPort` придёт отдельным пакетом DEV-2.
+//  (Packages/Mac/Sources/Permissions/); фейк `FakePowerPort` лежит в соседнем таргете
+//  этого пакета — Packages/Core/Sources/DomainTestKit/.
 //
 //  Порядок типов и порядок полей внутри типа — дословно по §«Определение» контракта
 //  (порядок значим: правило обхода C-001 §0.2 п. 9).
