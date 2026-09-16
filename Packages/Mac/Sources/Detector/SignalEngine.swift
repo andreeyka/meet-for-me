@@ -47,8 +47,6 @@ final class SignalEngine: @unchecked Sendable {
     private let stepLock = NSLock()
     private let stateLock = NSLock()
     private var subscribers: [UUID: AsyncStream<MeetingSignal>.Continuation] = [:]
-    /// МУТАЦИЯ (MEE-280, замер К76 (i)): единственный поток на все вызовы `signals()`.
-    private var shared: AsyncStream<MeetingSignal>?
     /// Что пара отдала в поток в последний раз, ПОКА ОНА ДЕРЖИТСЯ. Срок подтверждения
     /// отсчитывается от `observedAt` этого сигнала — единственной временной координаты
     /// публикации, какую знает C-009. Показание часов того шага, который сигнал опубликовал,
@@ -103,22 +101,18 @@ final class SignalEngine: @unchecked Sendable {
     /// ронять опубликованное, и исполнение пункта обязано читаться здесь, а не в чужой
     /// документации.
     func signals() -> AsyncStream<MeetingSignal> {
-        // МУТАЦИЯ (MEE-280, замер К76 (i)): второй и всякий следующий вызов получает ТОТ ЖЕ
-        // поток, а не свой. По сигнатуре законно; `AsyncStream` доставляет элемент ровно
-        // одному ожидающему, и публикация делится между потребителями вместо того, чтобы
-        // приходить каждому целиком.
-        if let existing = withState({ shared }) { return existing }
-        let stream = makeStream()
-        withState { shared = stream }
-        return stream
-    }
-
-    private func makeStream() -> AsyncStream<MeetingSignal> {
         let id = UUID()
         let moment = environment.clock.now()
         return AsyncStream(bufferingPolicy: .unbounded) { continuation in
             continuation.onTermination = { [weak self] _ in
-                self?.withState { self?.subscribers[id] = nil }
+                // МУТАЦИЯ (MEE-280, замер К76 (iii)): завершение ОДНОГО потока гасит
+                // наблюдение целиком — ушедший подписчик считается концом работы порта.
+                guard let self else { return }
+                self.withState {
+                    self.subscribers[id] = nil
+                    self.observing = false
+                }
+                self.environment.driver.stop()
             }
             withState {
                 forgetStale(at: moment)
