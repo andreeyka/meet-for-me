@@ -10,13 +10,71 @@
 //
 //  Ссылка без совпавшего правила даёт `nil` при любом `source`. Исключение инварианта 4
 //  (`provider == "unknown"` для структурного поля `conference`) принадлежит разбору СОБЫТИЯ:
-//  оно говорит «ни одно правило не совпало ни в одном поле», а у текста полей нет. Метод
-//  `resolve(event:)` в протоколе не объявлен (MEE-220) и в этой задаче не пишется.
+//  оно говорит «ни одно правило не совпало ни в одном поле», а у текста полей нет. Разбор
+//  события — `resolve(event:tables:)` ниже, инварианты 3 и 4 (MEE-220).
 
 import DomainCore
 import Foundation
 
 enum LinkResolver {
+
+    /// Значение `provider`, которым инвариант 4 велит отвечать на структурном поле `conference`,
+    /// не совпавшем ни с одним правилом. Ключом таблицы оно не бывает — инвариант 6 добавляет
+    /// его к множеству ключей отдельно.
+    static let unknownProvider = "unknown"
+
+    // MARK: - Разбор события (инварианты 3 и 4)
+
+    /// Порядок разбора строгий: `conference` → `location` → `eventUrl` → `bodyText`; первое
+    /// поле, давшее совпадение, побеждает, и `JoinInfo.source` равен этому полю (инвариант 3).
+    ///
+    /// **Стадия `eventUrl` входа не имеет, и это не пропуск.** Поля URL события C-001 v11 не
+    /// объявляет ни одним именем: у `MeetingEvent` есть `location`, `bodyText` и `conference`,
+    /// и больше ничего, из чего ссылку берут. Значение `JoinInfo.Source.eventUrl` остаётся
+    /// объявленным (оно принадлежит C-009 §2) и ни одним разбором события не порождается.
+    /// Расхождение названо отчётом MEE-220 и правится изданием контракта, а не здесь.
+    ///
+    /// Исключение инварианта 4 проверяется ПОСЛЕ обхода всех полей: оно обусловлено тем, что
+    /// не совпало ни одно правило **ни в одном** поле, а не тем, что не совпало `conference`.
+    static func resolve(event: MeetingEvent, tables: RuleTables) -> JoinInfo? {
+        for field in fields(of: event) {
+            if let info = resolve(text: field.text, source: field.source, tables: tables) {
+                return info
+            }
+        }
+        guard let conference = event.conference, isAbsoluteHTTPS(conference.joinUrl) else {
+            return nil
+        }
+        return JoinInfo(provider: unknownProvider, joinUrl: conference.joinUrl, meetingId: nil,
+                        passcode: nil, clientBundleIds: [], source: .conferenceField)
+    }
+
+    /// Поля события в порядке инварианта 3. `nil`-поле стадии не даёт: разбирать нечего.
+    private static func fields(of event: MeetingEvent) -> [(text: String, source: JoinInfo.Source)] {
+        var ordered: [(text: String, source: JoinInfo.Source)] = []
+        if let conference = event.conference {
+            ordered.append((conference.joinUrl.absoluteString, .conferenceField))
+        }
+        if let location = event.location {
+            ordered.append((location, .location))
+        }
+        if let bodyText = event.bodyText {
+            ordered.append((bodyText, .bodyText))
+        }
+        return ordered
+    }
+
+    /// Условие исключения инварианта 4 дословно: абсолютный URL со схемой `https`.
+    ///
+    /// На событии, собранном по C-001, ложным оно сегодня не бывает — тот же признак стоит
+    /// инвариантом 5 C-001 и проверяется при создании `MeetingEvent.Conference`. Проверка
+    /// стоит здесь потому, что инвариант 4 требует её от НАС: связь двух контрактов держится
+    /// текстом C-001, а не нашим кодом, и ослабнет она молча.
+    private static func isAbsoluteHTTPS(_ url: URL) -> Bool {
+        url.scheme?.lowercased() == "https" && url.host != nil
+    }
+
+    // MARK: - Разбор текста
 
     static func resolve(text: String, source: JoinInfo.Source, tables: RuleTables) -> JoinInfo? {
         let candidates = httpsLinks(in: text)

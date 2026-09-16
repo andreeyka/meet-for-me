@@ -74,6 +74,11 @@ public final class MeetingDetector: ProcessMonitorPort, PlatformResolver, Sendab
 
     // MARK: - PlatformResolver
 
+    /// Разбор события календаря, инварианты 3 и 4. Порядок требований здесь — по §2 контракта.
+    public func resolve(event: MeetingEvent) -> JoinInfo? {
+        LinkResolver.resolve(event: event, tables: tables)
+    }
+
     public func resolve(text: String, source: JoinInfo.Source) -> JoinInfo? {
         LinkResolver.resolve(text: text, source: source, tables: tables)
     }

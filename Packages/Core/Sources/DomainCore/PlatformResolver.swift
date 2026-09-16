@@ -55,17 +55,16 @@ public func bundleKeyMatches(appKey: String?, entry: String) -> Bool {
     return appKey == entry || appKey.hasPrefix(entry + ".")
 }
 
+/// Резолвер площадок C-009 §2. Порядок требований — дословно по §2 и значим: правило обхода
+/// C-001 §0.2 п. 9 распространено на объявления этого файла его же шапкой.
+///
+/// Разбор события (`resolve(event:)`) несёт инварианты 3, 4 и 5 контракта: порядок полей
+/// `conference` → `location` → `eventUrl` → `bodyText`, первое совпадение побеждает, и
+/// единственное исключение из правила `nil` — структурное поле `conference` с абсолютным
+/// `https`-URL, не совпавшим ни с одним правилом. Через `resolve(text:source:)` эти инварианты
+/// не проверяются: у текста полей нет.
 public protocol PlatformResolver: Sendable {
-    // Метод `resolve(event: MeetingEvent) -> JoinInfo?` контракта C-009 §2 здесь НЕ объявлен,
-    // и протокол объявлен неполно СОЗНАТЕЛЬНО: в контракте метод есть, а его аргумент
-    // `MeetingEvent` принадлежит контракту C-001 и пишется задачей MEE-29 вместе с остальными DTO
-    // (https://linear.app/easypto/issue/MEE-29). Объявить метод здесь значило бы завести второй
-    // источник истины для чужого типа; отсутствие метода — граница задачи MEE-86, а не забывчивость.
-    // Решение РП и три отвергнутых варианта — в комментарии «ПРАВКА ПОСТАНОВКИ» к MEE-86:
-    // https://linear.app/easypto/issue/MEE-86#comment-0ee73914
-    // Следствие, записанное РП на свою сторону: инварианты C-009 3, 4 и 5 (порядок разбора события
-    // conference → location → eventUrl → bodyText и правило возврата nil) проверяются только через
-    // этот метод и потому лежат вне объёма MEE-67 до прихода DTO C-001.
+    func resolve(event: MeetingEvent) -> JoinInfo?
     func resolve(text: String, source: JoinInfo.Source) -> JoinInfo?
     func clientBundleIds(for provider: String) -> [String]
     func allKnownClientBundleIds() -> [String]
