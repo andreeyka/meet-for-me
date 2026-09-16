@@ -68,6 +68,6 @@ public protocol PlatformResolver: Sendable {
     func resolve(text: String, source: JoinInfo.Source) -> JoinInfo?
     func clientBundleIds(for provider: String) -> [String]
     func allKnownClientBundleIds() -> [String]
-    func isBrowser(appKey: String) -> Bool
     func provider(forAppKey appKey: String) -> String?
+    func isBrowser(appKey: String) -> Bool
 }
