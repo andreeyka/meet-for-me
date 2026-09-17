@@ -67,13 +67,33 @@ final class SessionMachineTextTests: XCTestCase {
         )
         XCTAssertEqual(hits["Repositories.swift"], 9, "и там он полон — это и есть единственное перечисление")
 
-        // Ноль функций отображения между двумя перечислениями состояний.
-        let mapping = try machineFiles().flatMap { source in
+        // Ноль функций отображения между двумя перечислениями состояний. ПРИЗНАК ОТОБРАЖЕНИЯ —
+        // чужое перечисление НА ВХОДЕ, а не состояние на выходе: состояние на выходе даёт
+        // всякая строка таблицы §7, и грубый признак «возвращает `MeetingStatus`» красил в
+        // прогоне 146 строку 1 (`openingState(event:settings:now:)`), то есть саму машину.
+        // Различающая сила сохранена: `func state(from: RecordingState) -> MeetingStatus`
+        // этим признаком ловится.
+        let producing = try machineFiles().flatMap { source in
             source.text.components(separatedBy: "\n")
-                .filter { $0.contains("-> MeetingStatus") && $0.contains("func ") && !isComment($0) }
+                .filter { $0.contains("func ") && $0.contains("-> MeetingStatus") && !isComment($0) }
                 .map { "\(source.name): \($0.trimmingCharacters(in: .whitespaces))" }
         }
+        XCTAssertFalse(producing.isEmpty, "вектор непустоты: функции, дающие состояние, в области есть")
+        let mapping = producing.filter { takesForeignStateType($0) }
         XCTAssertEqual(mapping, [], "функции, переводящей чужое перечисление в `MeetingStatus`, нет")
+    }
+
+    /// Стоит ли среди параметров строки объявления тип, чьё имя кончается на `State` или
+    /// `Status` и не есть `MeetingStatus`. Это и есть признак отображения между двумя
+    /// перечислениями состояний.
+    private func takesForeignStateType(_ line: String) -> Bool {
+        guard let open = line.firstIndex(of: "("), let close = line.lastIndex(of: ")"), open < close else {
+            return false
+        }
+        let parameters = String(line[line.index(after: open)..<close])
+        return parameters
+            .components(separatedBy: CharacterSet(charactersIn: " ,:()[]?<>-"))
+            .contains { $0.hasSuffix("State") || ($0.hasSuffix("Status") && $0 != "MeetingStatus") }
     }
 
     /// Имена случаев из строки объявления: `case a, b(x), c` → `["a", "b", "c"]`.
@@ -167,9 +187,13 @@ final class SessionMachineTextTests: XCTestCase {
         XCTAssertFalse(lines.isEmpty, "вектор непустоты: `estimate` в области есть — он вычисляется")
 
         for (name, line) in lines {
+            // Стрелка возврата — не сравнение: в прогоне 146 этот пункт красил `-> Double`
+            // у самой функции оценки. Признак исправлен снятием стрелки, и различающая сила
+            // сохранена целиком — `if estimate > 0.5` ловится по-прежнему.
+            let scanned = line.replacingOccurrences(of: "->", with: " ")
             for operatorText in [">", "<", ">=", "<=", "== 0.", "if "] {
                 XCTAssertFalse(
-                    line.contains("estimate") && line.contains(operatorText),
+                    scanned.contains("estimate") && scanned.contains(operatorText),
                     "`estimate` сравнивается либо стоит в условии: \(name): \(line)"
                 )
             }
