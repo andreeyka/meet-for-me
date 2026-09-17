@@ -10,27 +10,9 @@ final class SessionMachineStopTests: XCTestCase {
 
     private let moment = SessionMachineFixtures.start
 
-    /// Стенд, доведённый до `recording`: цель подана в `moment + 60`, запись начата тем же
-    /// `tick`. Возвращает стенд, событие и назначенный `recordingId`.
-    private func recording(
-        silence: Int = 240
-    ) async throws -> (SessionMachineBench, MeetingEvent, UUID) {
-        let stand = SessionMachineBench(
-            settings: SessionMachineFixtures.settings(policy: .auto, silence: silence),
-            weights: try SessionMachineFixtures.weights()
-        )
-        let event = try SessionMachineFixtures.event()
-        stand.seed(event)
-        stand.allowCaptureStart()
-        await stand.machine.start(now: moment.addingTimeInterval(60))
-        await stand.machine.tick(now: moment.addingTimeInterval(60))
-        await stand.deliver(SessionMachineFixtures.audioOutput(
-            appKey: "us.zoom.xos", observedAt: moment.addingTimeInterval(60)
-        ))
-        await stand.machine.tick(now: moment.addingTimeInterval(60))
-        let live = try unwrap(await stand.machine.sessions().first)
-        XCTAssertEqual(live.state, .recording, "оснастка: сессия в записи")
-        return (stand, event, try XCTUnwrap(live.recordingId))
+    /// Стенд, доведённый до `recording`, — оснастка `SessionMachineStand`.
+    private func recording() async throws -> SessionMachineStand {
+        try await SessionMachineStand.recording(from: moment)
     }
 
     // MARK: - К57 (§8.4, правило 2 — момент отсчёта)
@@ -40,7 +22,9 @@ final class SessionMachineStopTests: XCTestCase {
     /// Задержка замечания подаётся ненулевой намеренно: при δ = 0 обе реализации отвечают
     /// одинаково, и вектор был бы зелен по построению.
     func test_k57_silenceIsCountedFromTheMomentTheTargetLeftTheMergeNotFromNoticing() async throws {
-        let (stand, _, _) = try await recording()
+        let staged = try await recording()
+        let stand = staged.stand
+
         let observed = moment.addingTimeInterval(60)
         let leftMerge = observed.addingTimeInterval(60)          // + signalTtlSeconds
         let stopsAt = leftMerge.addingTimeInterval(240)          // + silenceStopSeconds
@@ -63,7 +47,9 @@ final class SessionMachineStopTests: XCTestCase {
 
     /// Цель появилась снова до истечения срока: переход не наступает, отсчёт начинается заново.
     func test_k57_aReturnedTargetRestartsTheCountdown() async throws {
-        let (stand, _, _) = try await recording()
+        let staged = try await recording()
+        let stand = staged.stand
+
         let back = moment.addingTimeInterval(200)
         await stand.deliver(SessionMachineFixtures.audioOutput(appKey: "us.zoom.xos", observedAt: back))
         await stand.machine.tick(now: back)
@@ -85,7 +71,10 @@ final class SessionMachineStopTests: XCTestCase {
     /// строки 10. Вектор парен К38: один пункт проверяет, что условие полно, другой — что
     /// оно не шире, и зелёный одного без другого ничего не значит.
     func test_k56_theEndOfTheEventWindowStopsNothingWhileTheTargetIsActual() async throws {
-        let (stand, event, _) = try await recording()
+        let staged = try await recording()
+        let stand = staged.stand
+        let event = staged.event
+
         for offset in [2000.0, 2100.0, 2200.0] {
             let now = moment.addingTimeInterval(offset)
             XCTAssertTrue(now > event.end, "вектор подаётся за концом окна")
@@ -99,13 +88,17 @@ final class SessionMachineStopTests: XCTestCase {
 
     /// Строка 10 срабатывает на каждом из двух условий порознь — срок §8.4 и команда.
     func test_k38_row10_firesOnBothOfItsConditionsSeparately() async throws {
-        let (bySilence, _, _) = try await recording()
+        let staged = try await recording()
+        let bySilence = staged.stand
+
         await bySilence.machine.tick(now: moment.addingTimeInterval(360))
         let silent = try unwrap(await bySilence.machine.sessions().first)
         XCTAssertEqual(silent.state, .stopping, "условие §8.4")
         await bySilence.machine.stop()
 
-        let (byCommand, _, recordingId) = try await recording()
+        let stagedSecond = try await recording()
+        let byCommand = stagedSecond.stand
+        let recordingId = stagedSecond.recordingId
         byCommand.capture.setStopManifest(RecordingManifestFixtures.unfinished)
         try await byCommand.machine.stopRecording(recordingId: recordingId, now: moment.addingTimeInterval(70))
         let commanded = try unwrap(await byCommand.machine.sessions().first)
@@ -119,7 +112,9 @@ final class SessionMachineStopTests: XCTestCase {
     /// МЕЖДУ командой и следующим `tick`. Реализация, складывающая команды до `tick`, зелена
     /// на всяком другом векторе плана и красна ровно здесь.
     func test_k58_commandsActAtTheMomentOfTheCallNotOnTheNextTick() async throws {
-        let (stand, _, recordingId) = try await recording()
+        let staged = try await recording()
+        let stand = staged.stand
+        let recordingId = staged.recordingId
         stand.capture.setStopManifest(RecordingManifestFixtures.unfinished)
         try await stand.machine.stopRecording(recordingId: recordingId, now: moment.addingTimeInterval(70))
         let between = try unwrap(await stand.machine.sessions().first)
@@ -163,7 +158,9 @@ final class SessionMachineStopTests: XCTestCase {
     /// `systemSilent` условием строки 10 не является НИ ПРИ КАКИХ значениях полей: остановка
     /// по тишине в тапе выключила бы запись созвона, где говорит только пользователь.
     func test_k59_systemSilentNeverStopsTheRecording() async throws {
-        let (stand, _, _) = try await recording()
+        let staged = try await recording()
+        let stand = staged.stand
+
         for sinceMs in [0, 1, 1_000, 600_000] {
             await stand.deliver(CaptureEvent.systemSilent(sinceMs: sinceMs))
             await stand.deliver(SessionMachineFixtures.audioOutput(
@@ -186,7 +183,9 @@ final class SessionMachineStopTests: XCTestCase {
     /// Сессия уходит в `failed` МИНУЯ `stopping`, и конечным состоянием это неотличимо от
     /// прохода через него — различает только последовательность потока.
     func test_k39_row11_goesToFailedWithoutPassingThroughStopping() async throws {
-        let (stand, _, recordingId) = try await recording()
+        let staged = try await recording()
+        let stand = staged.stand
+        let recordingId = staged.recordingId
         let stream = stand.machine.changes()
         await stand.deliver(CaptureEvent.failed(.systemUnavailable(message: "tap умер")))
         await stand.machine.tick(now: moment.addingTimeInterval(80))
@@ -206,7 +205,10 @@ final class SessionMachineStopTests: XCTestCase {
 
     /// Обе клаузы обязательны: получен `stopped(manifest)` И запись сохранена.
     func test_k40_row12_requiresBothTheManifestAndTheSavedRecord() async throws {
-        let (ok, event, recordingId) = try await recording()
+        let staged = try await recording()
+        let ok = staged.stand
+        let event = staged.event
+        let recordingId = staged.recordingId
         ok.capture.setStopManifest(RecordingManifestFixtures.unfinished)
         try await ok.machine.stopRecording(recordingId: recordingId, now: moment.addingTimeInterval(70))
         let manifest = try SessionMachineFixtures.manifest(recordingId: recordingId, meetingId: event.id)
@@ -223,7 +225,10 @@ final class SessionMachineStopTests: XCTestCase {
         XCTAssertEqual(ok.queue.submissions.count, 1, "и задача ровно одна")
         await ok.machine.stop()
 
-        let (failing, secondEvent, secondId) = try await recording()
+        let stagedSecond = try await recording()
+        let failing = stagedSecond.stand
+        let secondEvent = stagedSecond.event
+        let secondId = stagedSecond.recordingId
         failing.capture.setStopManifest(RecordingManifestFixtures.unfinished)
         failing.repositories.recordings.fail(with: .io(message: "диск"), on: .save)
         try await failing.machine.stopRecording(recordingId: secondId, now: moment.addingTimeInterval(70))
@@ -241,7 +246,9 @@ final class SessionMachineStopTests: XCTestCase {
 
     /// Переход наступает на каждом из двух условий; задача цепочки при этом НЕ ставится.
     func test_k41_row13_firesOnBothConditionsAndSubmitsNothing() async throws {
-        let (byThrow, _, recordingId) = try await recording()
+        let staged = try await recording()
+        let byThrow = staged.stand
+        let recordingId = staged.recordingId
         byThrow.capture.failStop(with: .systemUnavailable(message: "остановить нечем"))
         try await byThrow.machine.stopRecording(recordingId: recordingId, now: moment.addingTimeInterval(70))
         let failed = try unwrap(await byThrow.machine.sessions().first)
@@ -249,7 +256,9 @@ final class SessionMachineStopTests: XCTestCase {
         XCTAssertEqual(byThrow.queue.submissions.count, 0, "ноль `submit` за прогон")
         await byThrow.machine.stop()
 
-        let (byEvent, _, secondId) = try await recording()
+        let stagedSecond = try await recording()
+        let byEvent = stagedSecond.stand
+        let secondId = stagedSecond.recordingId
         byEvent.capture.setStopManifest(RecordingManifestFixtures.unfinished)
         try await byEvent.machine.stopRecording(recordingId: secondId, now: moment.addingTimeInterval(70))
         await byEvent.deliver(CaptureEvent.failed(.directoryUnusable(message: "каталог")))

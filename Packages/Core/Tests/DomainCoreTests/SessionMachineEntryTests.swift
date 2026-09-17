@@ -94,13 +94,16 @@ final class SessionMachineEntryTests: XCTestCase {
     /// подаётся в оба состояния и требует одинакового ответа: два места, где написано одно
     /// условие, расходятся молча, и ловит это только парная подача.
     func test_k36_row8_answersExactlyAsRow6OnTheSameVectors() async throws {
-        let cases: [(AppSettings.RecordingPolicy, Bool, MeetingStatus)] = [
-            (.auto, true, .recording),
-            (.auto, false, .awaitingSignal),
-            (.manual, true, .awaitingSignal),
-            (.ask, true, .awaitingSignal)
+        let vectors = [
+            Row8Vector(policy: .auto, hasTarget: true, expected: .recording),
+            Row8Vector(policy: .auto, hasTarget: false, expected: .awaitingSignal),
+            Row8Vector(policy: .manual, hasTarget: true, expected: .awaitingSignal),
+            Row8Vector(policy: .ask, hasTarget: true, expected: .awaitingSignal)
         ]
-        for (policy, hasTarget, expected) in cases {
+        for vector in vectors {
+            let policy = vector.policy
+            let hasTarget = vector.hasTarget
+            let expected = vector.expected
             let (stand, _) = try await standing(policy: policy, at: 60)
             stand.allowCaptureStart()
             if hasTarget {
@@ -122,7 +125,10 @@ final class SessionMachineEntryTests: XCTestCase {
     /// второй, а `stopping` держится ровно то окно, в которое второй созвон и начинается.
     func test_k47_oneGroupOneRecordingInBothCapturingStates() async throws {
         for stopHolder in [false, true] {
-            let (stand, event, holder) = try await standWithAdHocHolder()
+            let staged = try await standWithAdHocHolder()
+            let stand = staged.stand
+            let event = staged.event
+            let holder = staged.holder
             if stopHolder {
                 stand.capture.setStopManifest(RecordingManifestFixtures.unfinished)
                 let snapshot = try unwrap(await stand.machine.session(id: holder))
@@ -151,7 +157,10 @@ final class SessionMachineEntryTests: XCTestCase {
     /// `sessionId` в ошибке — ТОЙ СЕССИИ, КОТОРАЯ ЗАНИМАЕТ ЦЕЛЬ, а не той, что просит:
     /// по этому полю фасад показывает человеку, какая встреча уже пишется.
     func test_k48_commandThrowsAlreadyRecordingCarryingTheHolderSessionId() async throws {
-        let (stand, event, holder) = try await standWithAdHocHolder()
+        let staged = try await standWithAdHocHolder()
+        let stand = staged.stand
+        let event = staged.event
+        let holder = staged.holder
 
         // Ad-hoc: цель не отнесена ни к одной сессии, и она занята.
         await assertAlreadyRecording(
@@ -170,9 +179,24 @@ final class SessionMachineEntryTests: XCTestCase {
 
     // MARK: - Оснастка
 
+    /// Вектор строки 8: политика, наличие цели и ожидаемое состояние. Значением, а не
+    /// кортежем: линт считает кортеж длиннее двух элементов нарушением.
+    private struct Row8Vector {
+        let policy: AppSettings.RecordingPolicy
+        let hasTarget: Bool
+        let expected: MeetingStatus
+    }
+
+    /// Стенд, в котором цель занята идущей записью ad-hoc-сессии.
+    private struct AdHocHolder {
+        let stand: SessionMachineBench
+        let event: MeetingEvent
+        let holder: UUID
+    }
+
     /// Стенд, в котором цель `us.zoom.xos` ЗАНЯТА идущей записью ad-hoc-сессии, а вторая
     /// встреча того же провайдера ещё не взведена: её `armAt` — `moment + 3000`.
-    private func standWithAdHocHolder() async throws -> (SessionMachineBench, MeetingEvent, UUID) {
+    private func standWithAdHocHolder() async throws -> AdHocHolder {
         let stand = try bench(policy: .auto)
         let event = try SessionMachineFixtures.event(start: moment.addingTimeInterval(3600))
         stand.seed(event)
@@ -183,11 +207,11 @@ final class SessionMachineEntryTests: XCTestCase {
         await stand.machine.tick(now: moment)
 
         let prompt = try unwrap(await stand.machine.prompts().first)
-        try await stand.machine.answer(promptId: prompt.promptId, .record, now: moment)
+        try await stand.machine.answer(promptId: prompt.promptId, .record(sessionId: prompt.sessionId), now: moment)
         let holder = try unwrap(await stand.machine.session(id: prompt.sessionId))
         XCTAssertEqual(holder.state, .recording, "ad-hoc держит цель строкой 16")
         XCTAssertEqual(holder.origin, .adHoc)
-        return (stand, event, prompt.sessionId)
+        return AdHocHolder(stand: stand, event: event, holder: prompt.sessionId)
     }
 
     /// Довести вторую встречу до её окна: цель к ней отнесётся правилом 2, спора при этом

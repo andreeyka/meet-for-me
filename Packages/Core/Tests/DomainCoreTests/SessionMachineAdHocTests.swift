@@ -100,7 +100,7 @@ final class SessionMachineAdHocTests: XCTestCase {
         ))
         await byAnswer.machine.tick(now: moment)
         let prompt = try unwrap(await byAnswer.machine.prompts().first)
-        try await byAnswer.machine.answer(promptId: prompt.promptId, .record, now: moment)
+        try await byAnswer.machine.answer(promptId: prompt.promptId, .record(sessionId: prompt.sessionId), now: moment)
         let answered = try unwrap(await byAnswer.machine.session(id: prompt.sessionId))
         XCTAssertEqual(answered.state, .recording, "ответ уводит в `recording` строкой 16")
         XCTAssertNotNil(answered.recordingId)

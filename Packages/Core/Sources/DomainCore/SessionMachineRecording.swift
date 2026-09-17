@@ -146,15 +146,26 @@ extension SessionMachine {
     ///   группу. Команда `startRecording(meetingId: nil)` их НЕ снимает: она обязана дойти
     ///   до проверки §7.1 и ответить `alreadyRecording`, а не `nothingToRecord` (К48).
     func unattachedTargets(now: Date, excludingOwned: Bool) -> [MeetingSignal] {
-        let live = store.values.filter { !$0.state.isTerminalSession }
+        let known = Array(store.values)
+        let live = known.filter { !$0.state.isTerminalSession }
         return signals.values
             .filter { $0.kind == .clientAudioOutput && $0.group != nil }
             .filter { SessionMachineRules.isActual($0, now: now, weights: weights) }
             .filter { signal in
-                !live.contains { session in
-                    SessionMachineRules.relates(signal: signal, to: side(of: session), now: now)
-                        || (excludingOwned && session.adHocAppKey == signal.group?.appKey)
-                        || (excludingOwned && session.target?.appKey == signal.group?.appKey)
+                // ОТНЕСЕНИЕ ЧИТАЕТСЯ ПО ВСЕМ СЕССИЯМ, А НЕ ПО ЖИВЫМ, И ЭТО НЕСУЩЕЕ.
+                // Правила 2 и 3 §5.4 стоят на ОКНЕ события, а не на состоянии сессии:
+                // сигнал, попавший в окно встречи, отнесён к ней и тогда, когда её сессия
+                // уже терминальна. Читая только живых, машина подняла бы спрос ad-hoc на
+                // созвон встречи, которую человек только что пропустил командой `skip`, —
+                // то есть переспросила бы уже принятое решение. **Цена названа:** новый,
+                // настоящий ad-hoc того же клиента внутри чужого окна спроса не получит;
+                // предел цены — `graceEndsAt` этой встречи, и он же предел окна.
+                !known.contains { SessionMachineRules.relates(signal: signal, to: side(of: $0), now: now) }
+            }
+            .filter { signal in
+                guard excludingOwned else { return true }
+                return !live.contains {
+                    $0.adHocAppKey == signal.group?.appKey || $0.target?.appKey == signal.group?.appKey
                 }
             }
             .sorted { ($0.group?.appKey ?? "") < ($1.group?.appKey ?? "") }

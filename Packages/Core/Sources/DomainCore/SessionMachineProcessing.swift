@@ -62,12 +62,12 @@ extension SessionMachine {
     /// Манифест, пришедший событием `stopped` ИМЕННО ЭТОЙ записи.
     private func arrivedManifest(for recordingId: UUID?) -> RecordingManifest? {
         guard let recordingId else { return nil }
-        for event in arrivedCapture {
-            if case let .stopped(manifest) = event, manifest.recordingId == recordingId {
+        return arrivedCapture
+            .compactMap { event -> RecordingManifest? in
+                guard case let .stopped(manifest) = event else { return nil }
                 return manifest
             }
-        }
-        return nil
+            .first { $0.recordingId == recordingId }
     }
 
     // MARK: - §7, строка 12: вход в обработку

@@ -73,37 +73,39 @@ struct SessionMachineBench {
     }
 
     /// Подать сигнал и дождаться, пока его примет ящик машины. Счёт снимается ДО подачи:
-    /// после неё он уже мог вырасти, и ожидание стало бы гонкой.
+    /// после неё он уже мог вырасти, и ожидание стало бы гонкой. Чтение `receivedCount`
+    /// идёт через `await`: `mailbox` — хранимый `let` актора, и синхронно он читается
+    /// только внутри своего модуля, а тесты лежат в соседнем.
     func deliver(_ signal: MeetingSignal) async {
-        let before = machine.mailbox.receivedCount
+        let before = await machine.mailbox.receivedCount
         processes.emit(signal)
         await awaitDelivery(before + 1)
     }
 
     /// Подать событие захвата и дождаться его доставки.
     func deliver(_ event: CaptureEvent) async {
-        let before = machine.mailbox.receivedCount
+        let before = await machine.mailbox.receivedCount
         capture.emit(event)
         await awaitDelivery(before + 1)
     }
 
     /// Подать событие очереди и дождаться его доставки.
     func deliver(_ event: JobEvent) async {
-        let before = machine.mailbox.receivedCount
+        let before = await machine.mailbox.receivedCount
         queue.emit(event)
         await awaitDelivery(before + 1)
     }
 
     /// Подать изменение календаря и дождаться его доставки.
     func deliver(_ change: CalendarChange) async {
-        let before = machine.mailbox.receivedCount
+        let before = await machine.mailbox.receivedCount
         calendar.emit(change)
         await awaitDelivery(before + 1)
     }
 
     /// Подать событие питания и дождаться его доставки.
     func deliver(_ event: PowerEvent) async {
-        let before = machine.mailbox.receivedCount
+        let before = await machine.mailbox.receivedCount
         power.emit(event)
         await awaitDelivery(before + 1)
     }

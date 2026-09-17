@@ -232,14 +232,14 @@ extension SessionMachine {
                 steps += 1
                 guard let session = store[identifier], !session.state.isTerminalSession else { break }
                 let deadlines = session.event.map { SessionMachineRules.arm(for: $0, settings: settings) }
-                guard let row = SessionMachineRules.deadlineRow(
+                let input = SessionMachineRules.DeadlineInput(
                     state: session.state,
                     deadlines: deadlines,
                     eventGone: isGone(session),
                     gate: gate(for: session),
-                    silenceStopsAt: silenceDeadline(of: session),
-                    now: now
-                ) else {
+                    silenceStopsAt: silenceDeadline(of: session)
+                )
+                guard let row = SessionMachineRules.deadlineRow(input, now: now) else {
                     // Строк, наступающих по сроку, не подошло ни одной: дальше в порядке
                     // таблицы идут строки 11—15, наступающие по пришедшему входу.
                     let changed = (try? await applyArrivedRows(to: session, now: now)) ?? false

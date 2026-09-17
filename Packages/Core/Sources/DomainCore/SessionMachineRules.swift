@@ -265,27 +265,36 @@ enum SessionMachineRules {
         }
     }
 
+    /// То, что фаза сроков читает у сессии. Отдельным значением, а не пятью параметрами, по
+    /// тому же доводу, каким заведён `SessionSide`: шесть подряд линт считает нарушением, а
+    /// читатель — перечнем без предмета.
+    struct DeadlineInput {
+
+        let state: MeetingStatus
+        let deadlines: ScheduledArm?
+
+        /// Событие отменено (`isCancelled`) либо удалено — клауза строк 3, 4 и 9.
+        let eventGone: Bool
+
+        /// Три клаузы строк 6 и 8 разом (§5.3, §7.1, §8.2) — и отрицание этих же трёх в
+        /// клаузе строки 9.
+        let gate: RecordingGate
+
+        /// Момент §8.4 — `observedAt` последней актуальной цели плюс `signalTtlSeconds`
+        /// плюс `silenceStopSeconds`; `nil` — цели не было ни разу.
+        let silenceStopsAt: Date?
+    }
+
     /// Первая подошедшая строка в ПОРЯДКЕ ТАБЛИЦЫ, либо `nil` — ни одна не подошла.
-    ///
-    /// - Parameters:
-    ///   - eventGone: событие отменено (`isCancelled`) либо удалено — клауза строк 3, 4 и 9.
-    ///   - gate: три клаузы строк 6 и 8 разом (§5.3, §7.1, §8.2) — и отрицание этих же трёх
-    ///     в клаузе строки 9.
-    ///   - silenceStopsAt: момент §8.4 — `observedAt` последней актуальной цели плюс
-    ///     `signalTtlSeconds` плюс `silenceStopSeconds`; `nil` — цели не было ни разу.
     ///
     /// Команда `skip`, команды `startRecording`/`stopRecording` и ответ на спрос здесь не
     /// стоят намеренно: они исполняются В МОМЕНТ ВЫЗОВА (§«Поведение»), а не в фазе сроков,
     /// и красит это К58.
-    static func deadlineRow(
-        state: MeetingStatus,
-        deadlines: ScheduledArm?,
-        eventGone: Bool,
-        gate: RecordingGate,
-        silenceStopsAt: Date?,
-        now: Date
-    ) -> DeadlineRow? {
-        switch state {
+    static func deadlineRow(_ input: DeadlineInput, now: Date) -> DeadlineRow? {
+        let deadlines = input.deadlines
+        let eventGone = input.eventGone
+        let gate = input.gate
+        switch input.state {
         case .scheduled:
             return fromScheduled(deadlines: deadlines, eventGone: eventGone, now: now)
         case .armed:
@@ -295,7 +304,7 @@ enum SessionMachineRules {
                 deadlines: deadlines, eventGone: eventGone, gate: gate, now: now
             )
         case .recording:
-            return fromRecording(gate: gate, silenceStopsAt: silenceStopsAt, now: now)
+            return fromRecording(gate: gate, silenceStopsAt: input.silenceStopsAt, now: now)
         case .stopping, .processing:
             // Исходящие строки этих состояний — 11—15 — наступают по приходу
             // `CaptureEvent` и `JobEvent`, а не по сроку: фаза сроков их не читает.

@@ -36,11 +36,15 @@ final class SessionMachineOrderTests: XCTestCase {
 
         let deadlines = SessionMachineRules.arm(for: event, settings: SessionMachineFixtures.settings())
         let past = deadlines.graceEndsAt.addingTimeInterval(1)
+        let input = SessionMachineRules.DeadlineInput(
+            state: .scheduled,
+            deadlines: deadlines,
+            eventGone: false,
+            gate: .closed,
+            silenceStopsAt: nil
+        )
         XCTAssertEqual(
-            SessionMachineRules.deadlineRow(
-                state: .scheduled, deadlines: deadlines, eventGone: false, hasSoundingTarget: false,
-                now: past
-            ),
+            SessionMachineRules.deadlineRow(input, now: past),
             .row3ScheduledToSkipped,
             "строка 2 на этом `now` ложна, и подходит только строка 3"
         )

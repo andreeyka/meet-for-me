@@ -14,24 +14,9 @@ final class SessionMachinePowerTests: XCTestCase {
 
     private let moment = SessionMachineFixtures.start
 
-    /// Стенд, доведённый до `recording`, — тот же, что у `SessionMachineStopTests`.
-    private func recording() async throws -> (SessionMachineBench, MeetingEvent, UUID) {
-        let stand = SessionMachineBench(
-            settings: SessionMachineFixtures.settings(policy: .auto),
-            weights: try SessionMachineFixtures.weights()
-        )
-        let event = try SessionMachineFixtures.event()
-        stand.seed(event)
-        stand.allowCaptureStart()
-        await stand.machine.start(now: moment.addingTimeInterval(60))
-        await stand.machine.tick(now: moment.addingTimeInterval(60))
-        await stand.deliver(SessionMachineFixtures.audioOutput(
-            appKey: "us.zoom.xos", observedAt: moment.addingTimeInterval(60)
-        ))
-        await stand.machine.tick(now: moment.addingTimeInterval(60))
-        let live = try unwrap(await stand.machine.sessions().first)
-        XCTAssertEqual(live.state, .recording, "оснастка: сессия в записи")
-        return (stand, event, try XCTUnwrap(live.recordingId))
+    /// Стенд, доведённый до `recording`, — оснастка `SessionMachineStand`.
+    private func recording() async throws -> SessionMachineStand {
+        try await SessionMachineStand.recording(from: moment)
     }
 
     // MARK: - К67 (инв. 19) и К69 (§9.3, `willSleep`)
@@ -40,7 +25,10 @@ final class SessionMachinePowerTests: XCTestCase {
     /// одного после выхода из множества — ПО КАЖДОМУ из трёх путей, включая строку 11.
     func test_k67_thePowerTokenIsHeldThroughoutAndReleasedOnEveryExitPath() async throws {
         // Путь 10 → 12.
-        let (viaProcessing, event, recordingId) = try await recording()
+        let staged = try await recording()
+        let viaProcessing = staged.stand
+        let event = staged.event
+        let recordingId = staged.recordingId
         assertOneRecordingToken(viaProcessing, "путь 10 → 12, в `recording`")
         viaProcessing.capture.setStopManifest(RecordingManifestFixtures.unfinished)
         try await viaProcessing.machine.stopRecording(
@@ -54,7 +42,9 @@ final class SessionMachinePowerTests: XCTestCase {
         await viaProcessing.machine.stop()
 
         // Путь 10 → 13.
-        let (viaStopFailure, _, secondId) = try await recording()
+        let stagedSecond = try await recording()
+        let viaStopFailure = stagedSecond.stand
+        let secondId = stagedSecond.recordingId
         viaStopFailure.capture.failStop(with: .notRunning)
         try await viaStopFailure.machine.stopRecording(
             recordingId: secondId, now: moment.addingTimeInterval(70)
@@ -64,7 +54,9 @@ final class SessionMachinePowerTests: XCTestCase {
 
         // Путь строки 11 — различающий: реализация, отпускающая токен «при выходе из
         // `stopping`», течёт ровно здесь, и Mac остаётся не спящим после отказа захвата.
-        let (viaRow11, _, _) = try await recording()
+        let stagedThird = try await recording()
+        let viaRow11 = stagedThird.stand
+
         await viaRow11.deliver(CaptureEvent.failed(.systemUnavailable(message: "отказ")))
         await viaRow11.machine.tick(now: moment.addingTimeInterval(80))
         assertNoTokensLeft(viaRow11, "путь строки 11")
@@ -74,7 +66,9 @@ final class SessionMachinePowerTests: XCTestCase {
     /// `willSleep` записи не останавливает: состояние не меняется, токен не отпускается,
     /// `stop()` захвата не зовётся. Проверяется в обоих состояниях множества.
     func test_k69_willSleepStopsNothingInEitherCapturingState() async throws {
-        let (inRecording, _, recordingId) = try await recording()
+        let staged = try await recording()
+        let inRecording = staged.stand
+        let recordingId = staged.recordingId
         await inRecording.deliver(PowerEvent.willSleep)
         await inRecording.machine.tick(now: moment.addingTimeInterval(80))
         let stillRecording = try unwrap(await inRecording.machine.sessions().first)

@@ -10,36 +10,11 @@ final class SessionMachineChainTests: XCTestCase {
 
     private let moment = SessionMachineFixtures.start
 
-    /// Стенд, доведённый до `processing` строкой 12. Идентификаторы задач заданы наперёд:
-    /// иначе `job(id:)` нечем удовлетворить, а К63 требует именно его.
-    private func processing() async throws -> (SessionMachineBench, MeetingEvent, UUID, [UUID]) {
-        let stand = SessionMachineBench(
-            settings: SessionMachineFixtures.settings(policy: .auto),
-            weights: try SessionMachineFixtures.weights()
-        )
-        let event = try SessionMachineFixtures.event()
-        stand.seed(event)
-        stand.allowCaptureStart()
-        stand.capture.setStopManifest(RecordingManifestFixtures.unfinished)
-        let ids = [UUID(), UUID(), UUID(), UUID()]
-        stand.queue.setNextSubmitIds(ids)
-
-        await stand.machine.start(now: moment.addingTimeInterval(60))
-        await stand.machine.tick(now: moment.addingTimeInterval(60))
-        await stand.deliver(SessionMachineFixtures.audioOutput(
-            appKey: "us.zoom.xos", observedAt: moment.addingTimeInterval(60)
-        ))
-        await stand.machine.tick(now: moment.addingTimeInterval(60))
-        let live = try unwrap(await stand.machine.sessions().first)
-        let recordingId = try XCTUnwrap(live.recordingId)
-
-        try await stand.machine.stopRecording(recordingId: recordingId, now: moment.addingTimeInterval(70))
-        let manifest = try SessionMachineFixtures.manifest(recordingId: recordingId, meetingId: event.id)
-        await stand.deliver(CaptureEvent.stopped(manifest))
-        await stand.machine.tick(now: moment.addingTimeInterval(80))
-        let inProcessing = try unwrap(await stand.machine.sessions().first)
-        XCTAssertEqual(inProcessing.state, .processing, "оснастка: сессия в обработке")
-        return (stand, event, recordingId, ids)
+    /// Стенд, доведённый до `processing` строкой 12, — оснастка `SessionMachineStand`.
+    /// Идентификаторы задач заданы наперёд: иначе `job(id:)` нечем удовлетворить, а К63
+    /// требует именно его.
+    private func processing() async throws -> SessionMachineStand {
+        try await SessionMachineStand.processing(from: moment)
     }
 
     /// Провести цепочку до конца: на каждый `succeeded` предыдущей ставится следующая.
@@ -66,7 +41,10 @@ final class SessionMachineChainTests: XCTestCase {
     /// Порядок цепочки и «первая ставится при входе в `processing` строкой 12». Реализация,
     /// ставящая всю цепочку сразу, красна журналом: четыре `submit` вместо одного.
     func test_k62_theChainIsSubmittedOneLinkAtATimeInTheNamedOrder() async throws {
-        let (stand, _, recordingId, ids) = try await processing()
+        let staged = try await processing()
+        let stand = staged.stand
+        let recordingId = staged.recordingId
+        let ids = staged.jobIds
         XCTAssertEqual(stand.queue.submissions.count, 1, "при входе в `processing` — ровно одна")
         XCTAssertEqual(stand.queue.submissions.first?.payload, .transcode(recordingId: recordingId))
 
@@ -83,7 +61,10 @@ final class SessionMachineChainTests: XCTestCase {
     /// «Ни по какому иному событию»: ни `tick`, ни `blocked`, ни `failed(willRetry: true)`,
     /// ни чужой `succeeded` следующей задачи не ставят.
     func test_k62_noOtherEventEverAdvancesTheChain() async throws {
-        let (stand, _, recordingId, ids) = try await processing()
+        let staged = try await processing()
+        let stand = staged.stand
+        let recordingId = staged.recordingId
+        let ids = staged.jobIds
         stand.queue.setJobs([SessionMachineFixtures.job(
             id: ids[0], payload: .transcode(recordingId: recordingId)
         )])
@@ -107,7 +88,11 @@ final class SessionMachineChainTests: XCTestCase {
     /// Поля каждой задачи: `profileId` из настроек, `runAfter == now`, `language == nil`,
     /// `transcriptId` — ИЗ ХРАНИЛИЩА, `meetingId` — сессии.
     func test_k63_everyFieldOfEveryChainJobComesFromItsNamedSource() async throws {
-        let (stand, event, recordingId, ids) = try await processing()
+        let staged = try await processing()
+        let stand = staged.stand
+        let event = staged.event
+        let recordingId = staged.recordingId
+        let ids = staged.jobIds
         let header = try await stand.repositories.transcripts.save(
             try SessionMachineFixtures.transcript(recordingId: recordingId)
         )
@@ -174,7 +159,10 @@ final class SessionMachineChainTests: XCTestCase {
     /// `blocked` и `failed(willRetry: true)` — не отказ: состояние не меняется, следующая
     /// задача не ставится, `setStatus` не зовётся.
     func test_k64_blockedAndRetryableFailureChangeNothing() async throws {
-        let (stand, _, recordingId, ids) = try await processing()
+        let staged = try await processing()
+        let stand = staged.stand
+        let recordingId = staged.recordingId
+        let ids = staged.jobIds
         stand.queue.setJobs([SessionMachineFixtures.job(
             id: ids[0], payload: .transcode(recordingId: recordingId)
         )])
@@ -203,7 +191,10 @@ final class SessionMachineChainTests: XCTestCase {
 
     /// Переход в `ready` наступает ТОЛЬКО на `succeeded` своей `attribute`.
     func test_k42_row14_firesOnlyOnTheOwnAttributeJob() async throws {
-        let (stand, _, recordingId, ids) = try await processing()
+        let staged = try await processing()
+        let stand = staged.stand
+        let recordingId = staged.recordingId
+        let ids = staged.jobIds
         _ = try await stand.repositories.transcripts.save(
             try SessionMachineFixtures.transcript(recordingId: recordingId)
         )
@@ -231,7 +222,10 @@ final class SessionMachineChainTests: XCTestCase {
     /// `failed(willRetry: false)` и `cancelled` ЛЮБОЙ задачи цепочки уводят в `failed`.
     func test_k43_row15_firesOnAPermanentFailureOrCancellationOfAnyChainJob() async throws {
         for isCancelled in [false, true] {
-            let (stand, _, recordingId, ids) = try await processing()
+            let staged = try await processing()
+        let stand = staged.stand
+        let recordingId = staged.recordingId
+        let ids = staged.jobIds
             stand.queue.setJobs([SessionMachineFixtures.job(
                 id: ids[0], payload: .transcode(recordingId: recordingId)
             )])
@@ -253,7 +247,10 @@ final class SessionMachineChainTests: XCTestCase {
     /// `summarize` не ставится НИ РАЗУ: обработчик её в Срезе 1 не зарегистрирован, и задача
     /// повисла бы в очереди навсегда.
     func test_k65_summarizeIsNeverSubmitted() async throws {
-        let (stand, _, recordingId, ids) = try await processing()
+        let staged = try await processing()
+        let stand = staged.stand
+        let recordingId = staged.recordingId
+        let ids = staged.jobIds
         _ = try await stand.repositories.transcripts.save(
             try SessionMachineFixtures.transcript(recordingId: recordingId)
         )
@@ -278,7 +275,10 @@ final class SessionMachineChainTests: XCTestCase {
     /// Сессия в `failed` остаётся в `failed`: строка 14 из терминального состояния не
     /// срабатывает, и `setStatus` в `ready` машина не зовёт.
     func test_k66_aRepeatedProcessingDoesNotReviveATerminalSession() async throws {
-        let (stand, _, recordingId, ids) = try await processing()
+        let staged = try await processing()
+        let stand = staged.stand
+        let recordingId = staged.recordingId
+        let ids = staged.jobIds
         stand.queue.setJobs([SessionMachineFixtures.job(
             id: ids[0], payload: .transcode(recordingId: recordingId)
         )])
