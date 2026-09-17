@@ -2,26 +2,23 @@
 //
 //  Модуль: domain-core · Владелец: DEV-2 · Слой: домен
 //
-//  ЧАСТЬ A задачи MEE-298 — ВСЁ ДО ВХОДА В ЗАПИСЬ, и граница названа здесь, а не оставлена
-//  читателю. Реализованы: тождество и терминальность (§1, §3.1), время параметром (§4),
-//  вход и подписки (§2), собственный календарный сигнал (§5.2), звучащая цель и отнесение
-//  (§5.3, §5.4), оценка (§6), девять строк таблицы §7 из восемнадцати — 1, 1а, 1б, 2, 3, 4,
-//  5, 7, 9 — и политики §8.1—§8.3.
+//  ЧАСТИ A (MEE-298) и B (MEE-300). Частью A реализованы: тождество и терминальность
+//  (§1, §3.1), время параметром (§4), вход и подписки (§2), собственный календарный сигнал
+//  (§5.2), звучащая цель и отнесение (§5.3, §5.4), оценка (§6), девять строк таблицы §7 —
+//  1, 1а, 1б, 2, 3, 4, 5, 7, 9 — и политики §8.1—§8.3. Частью B добавлены: строки 6, 8 и
+//  10—16, §7.1, §8.4, §8.6, §8.7, питание §9.3 и календарь §9.2 в состояниях записи.
 //
 //  ЧЕГО ЗДЕСЬ НЕТ, И ЭТО ПРЕДМЕТ ДРУГОЙ ЗАДАЧИ, А НЕ ДОЛГ ЭТОЙ:
-//  — строки 6, 8 (вход в запись), 10—16 (остановка, отказ, обработка, ad-hoc) — часть B;
-//    состояний `recording`, `stopping` и `processing` эта реализация не заводит НИ ОДНИМ
-//    входом, и потому их в таблице ниже нет ни строкой;
-//  — §7.1 (одна группа — одна запись), §8.4, §8.6, §8.7, питание §9.3 — часть B;
-//  — восстановление §10 и `Scheduler` (§3.2, §9.1 `plan`, §9.2) — часть C. `start(now:)`
-//    здесь ставит подписки §2 и НЕ восстанавливает: восстановительное заведение таблицей §7
-//    не описывается (инвариант 2, исключение), и заводить его вне своей задачи нельзя.
+//  — восстановление §10 и `Scheduler` (§3.2, §9.1 `plan`, §9.2 `reschedule`) — часть C.
+//    `start(now:)` здесь ставит подписки §2 и НЕ восстанавливает: восстановительное
+//    заведение таблицей §7 не описывается (инвариант 2, исключение), и заводить его вне
+//    своей задачи нельзя.
 //
 //  ПОЧЕМУ АКТОР, А ПОТОК — ПОД ЗАМКОМ. §«Поведение» требует изоляции актором, и она здесь
 //  есть; но `changes()` объявлен §3.1 НЕ `async`, и подписка обязана работать до заведения
 //  сессии и до `start(now:)` (условие `П` плана MEE-288 §2). Изолированный метод был бы
 //  `async` и подписи не покрыл бы. Отсюда `nonisolated changes()` поверх `SessionChangeHub`
-//  — разбор и цена в шапке того файла и в отчёте.
+//  — разбор и цена в шапке того файла и в отчёте MEE-298.
 //
 //  ПУБЛИЧНОСТЬ ТИПА НАЗВАНА РЕШЕНИЕМ. Контракт объявляет протокол и говорит, что машину
 //  зовут «из любого контекста, UI — через фасад»: собрать её обязан composition root, и без
@@ -50,12 +47,22 @@ struct SessionMachineSession {
     var event: MeetingEvent?
     /// Спрос `.recordThisMeeting`, поднятый этой сессией.
     var promptId: UUID?
-    /// Пришёл ли ответ `.record`: политика `.ask` открыта (§8.2). Строки 6 и 8, которые
-    /// этим ответом разрешаются, — часть B задачи.
+    /// Пришёл ли ответ `.record`: политика `.ask` открыта (§8.2).
     var recordAnswered: Bool
+    /// `appKey` цели, ради которой заведена ad-hoc-сессия. Живёт всю её жизнь и не
+    /// обнуляется вместе с `target`: §8.6 снимает спрос, когда цель перестала быть
+    /// АКТУАЛЬНОЙ, а `target` к этой минуте уже `nil` — по нему причину не прочесть.
+    /// У `origin == .scheduled` всегда `nil`.
+    var adHocAppKey: String?
+    /// `observedAt` последней актуальной звучащей цели — момент отсчёта §8.4.
+    /// Момент замечания машиной здесь не хранится и храниться не должен: К57 подаёт
+    /// задержку замечания именно затем, чтобы эти два момента различались.
+    var lastTargetObservedAt: Date?
+    /// Токен удержания C-008, взятый при входе в `recording` (инвариант 19).
+    var powerToken: PowerActivityToken?
 }
 
-/// Реализация `SessionCoordinator` — часть A.
+/// Реализация `SessionCoordinator`.
 public actor SessionMachine: SessionCoordinator {
 
     // MARK: - Входы §2
@@ -63,11 +70,28 @@ public actor SessionMachine: SessionCoordinator {
     let processes: ProcessMonitorPort
     let calendar: CalendarPort
     let meetings: MeetingRepository
+    let recordings: RecordingRepository
+    let transcripts: TranscriptRepository
     let capture: AudioCapturePort
     let queue: JobQueue
     let power: PowerPort
     let settings: AppSettings
     let weights: SignalWeights
+
+    // MARK: - Четыре поля `CaptureRequest`, у которых источника в контрактах нет
+
+    /// Каталог записи. По §«Данные на границе» машина получает его ОТ ХРАНИЛИЩА и передаёт
+    /// в захват не разбирая; средство — `FileLayout` (C-010 §1) — в дереве не объявлено
+    /// вовсе. Взято по конвенции §3 правил проекта: каталог приходит функцией от
+    /// `recordingId`, машина его не строит и не читает. Разбор и цена — в отчёте MEE-300.
+    let recordingDirectory: @Sendable (UUID) -> URL
+
+    /// `input`, `systemFormat`, `micFormat` `CaptureRequest`: ни C-018, ни `AppSettings`
+    /// (C-016 §2) не называют для них ни значения, ни источника. Тот же исход, тот же
+    /// довод — берутся у composition root, машина своих чисел не заводит.
+    let captureInput: InputSelection
+    let systemFormat: TrackFormat
+    let micFormat: TrackFormat
 
     // MARK: - Состояние
 
@@ -97,6 +121,17 @@ public actor SessionMachine: SessionCoordinator {
     /// Поднятые спросы `.whichMeeting`: `appKey` спорной цели → `promptId`.
     var disputes: [String: UUID] = [:]
 
+    /// Задачи цепочки §8.7: `jobId` → `sessionId`. Чужой `jobId` в ней не лежит, и на этом
+    /// стоит «на чужой `attribute` не происходит ничего» (К42).
+    var chainJobs: [UUID: UUID] = [:]
+
+    /// События захвата и очереди, пришедшие к ЭТОМУ `tick`. Живут от первой фазы до фазы
+    /// сроков одного хода и чистятся в его конце: строки 11—15 читаются в порядке таблицы
+    /// вместе со строками 10 и 12, а не прежде них. Разбор и цена — в шапке
+    /// `SessionMachineProcessing.swift`.
+    var arrivedCapture: [CaptureEvent] = []
+    var arrivedJobs: [JobEvent] = []
+
     var subscriptions: [Task<Void, Never>] = []
     var isStarted = false
 
@@ -104,24 +139,37 @@ public actor SessionMachine: SessionCoordinator {
     ///   - weights: значения таблицы весов C-009, прочитанные публичным членом `domain-core`
     ///     (`SignalWeights.current()`). Машина не читает файла, не знает пути к нему и
     ///     своего декодера не заводит (§5.2, последний абзац).
+    ///   - recordingDirectory: каталог записи по её `recordingId` — см. поле выше.
     public init(
         processes: ProcessMonitorPort,
         calendar: CalendarPort,
         meetings: MeetingRepository,
+        recordings: RecordingRepository,
+        transcripts: TranscriptRepository,
         capture: AudioCapturePort,
         queue: JobQueue,
         power: PowerPort,
         settings: AppSettings,
-        weights: SignalWeights
+        weights: SignalWeights,
+        recordingDirectory: @escaping @Sendable (UUID) -> URL,
+        captureInput: InputSelection,
+        systemFormat: TrackFormat,
+        micFormat: TrackFormat
     ) {
         self.processes = processes
         self.calendar = calendar
         self.meetings = meetings
+        self.recordings = recordings
+        self.transcripts = transcripts
         self.capture = capture
         self.queue = queue
         self.power = power
         self.settings = settings
         self.weights = weights
+        self.recordingDirectory = recordingDirectory
+        self.captureInput = captureInput
+        self.systemFormat = systemFormat
+        self.micFormat = micFormat
     }
 
     // MARK: - Чтение §3.1
@@ -148,72 +196,6 @@ public actor SessionMachine: SessionCoordinator {
     /// `nonisolated`: подпись §3.1 не `async`, и подписка обязана работать до `start(now:)`.
     public nonisolated func changes() -> AsyncStream<SessionChange> {
         hub.subscribe()
-    }
-
-    // MARK: - Команды §3.1; исполняются В МОМЕНТ ВЫЗОВА
-
-    /// Часть A вход в `recording` не заводит ни одним ходом: строки 6, 8 и 16 — часть B
-    /// задачи. Здесь исполнены только те ответы команды, которые от них не зависят.
-    public func startRecording(meetingId: UUID?, now: Date) async throws -> UUID {
-        guard let meetingId else {
-            // Строка 16 (ad-hoc) — часть B.
-            throw SessionError.nothingToRecord
-        }
-        guard let session = latestSession(meeting: meetingId) else {
-            throw SessionError.noSuchMeeting(meetingId: meetingId)
-        }
-        try requireLive(session)
-        // Строки 6 и 8 — часть B.
-        throw SessionError.nothingToRecord
-    }
-
-    /// Часть A в `recording` не входит, и потому записи, которую эта команда останавливает,
-    /// у неё нет ни одной. Строка 10 — часть B задачи.
-    public func stopRecording(recordingId: UUID, now: Date) async throws {
-        guard let session = store.values.first(where: { $0.recordingId == recordingId }) else {
-            throw SessionError.noRecordingInProgress(recordingId: recordingId)
-        }
-        try requireLive(session)
-        throw SessionError.noRecordingInProgress(recordingId: recordingId)
-    }
-
-    /// Команда `skip` — строки 3, 4 и 9 таблицы §7.
-    ///
-    /// Управление не возвращается раньше, чем исход записан `setStatus`-ом (инвариант 18,
-    /// вторая половина): запись стоит на пути возврата, а не рядом с ним.
-    public func skip(meetingId: UUID, now: Date) async throws {
-        guard let session = latestSession(meeting: meetingId) else {
-            throw SessionError.noSuchMeeting(meetingId: meetingId)
-        }
-        try requireLive(session)
-        try await transition(session.sessionId, to: .skipped, now: now)
-    }
-
-    /// Ответ на спрос §8.2 и §8.6.
-    public func answer(promptId: UUID, _ answer: SessionPromptAnswer, now: Date) async throws {
-        guard let stored = raised[promptId] else {
-            throw SessionError.noSuchPrompt(promptId: promptId)
-        }
-        guard let session = store[stored.prompt.sessionId] else {
-            throw SessionError.noSuchSession(sessionId: stored.prompt.sessionId)
-        }
-        // Порядок существен: К6 требует `sessionIsTerminal`, а НЕ `noSuchPrompt`, — значит
-        // терминальность читается прежде, чем снятость спроса.
-        try requireLive(session)
-        guard !stored.isWithdrawn else {
-            throw SessionError.noSuchPrompt(promptId: promptId)
-        }
-        switch answer {
-        case .skip:
-            try await transition(session.sessionId, to: .skipped, now: now)
-        case .record:
-            // Политика `.ask` открыта; строки 6 и 8, которые ею разрешаются, — часть B.
-            var updated = session
-            updated.recordAnswered = true
-            updated.updatedAt = now
-            store[session.sessionId] = updated
-            withdrawPrompt(promptId)
-        }
     }
 
     // MARK: - Жизнь машины §3.1
@@ -251,10 +233,14 @@ public actor SessionMachine: SessionCoordinator {
         await runDeadlines(now: now)                    // фаза 3: сроки в порядке строк §7
         raiseDuePrompts(now: now)
         updateDisputePrompts(now: now)
+        await updateAdHoc(now: now)
+        arrivedCapture.removeAll()                      // вход живёт один ход, не дольше
+        arrivedJobs.removeAll()
     }
 
-    /// Снятие подписок. Идущей записи у части A нет ни одной, и `stop()` захвата она не
-    /// зовёт ни разу — §«Поведение» требует именно этого.
+    /// Снятие подписок. Идущую запись `stop()` НЕ останавливает: `stop()` захвата не
+    /// зовётся, токен не отпускается, состояние `recording` сохраняется — §«Поведение»
+    /// требует именно этого, и красит обратное К85 (i).
     public func stop() async {
         for task in subscriptions { task.cancel() }
         subscriptions.removeAll()
@@ -264,15 +250,26 @@ public actor SessionMachine: SessionCoordinator {
     // MARK: - Переход и публикация
 
     /// Инвариант 18: запись `setStatus` идёт ПРЕЖДЕ публикации снимка, и порядок значим.
+    ///
+    /// Здесь же исполняется вторая половина инварианта 19: токен питания отпускается при
+    /// выходе из множества `{recording, stopping}` — ПО ЛЮБОМУ пути таблицы, включая
+    /// строку 11 (`recording → failed`, минуя `stopping`). Место одно намеренно:
+    /// отпускание, приделанное к строкам порознь, течёт на той строке, которую забыли.
     func transition(_ identifier: UUID, to state: MeetingStatus, now: Date) async throws {
         guard var session = store[identifier], session.state != state else { return }
         if let meetingId = session.meetingId {
             try await meetings.setStatus(state, meetingId: meetingId)
             storedStatuses[meetingId] = state
         }
+        let wasCapturing = session.state == .recording || session.state == .stopping
+        let isCapturing = state == .recording || state == .stopping
         session.state = state
         session.enteredStateAt = now
         session.updatedAt = now
+        if wasCapturing, !isCapturing {
+            session.powerToken?.end()
+            session.powerToken = nil
+        }
         store[identifier] = session
         hub.publish(.session(snapshot(of: session)))
         if state.isTerminalSession, let promptId = session.promptId {
@@ -307,12 +304,12 @@ public actor SessionMachine: SessionCoordinator {
 
     /// Сессия встречи: живая, если она есть, иначе последняя терминальная — её и адресуют
     /// команды, и на ней стоит К6.
-    private func latestSession(meeting meetingId: UUID) -> SessionMachineSession? {
+    func latestSession(meeting meetingId: UUID) -> SessionMachineSession? {
         let owned = store.values.filter { $0.meetingId == meetingId }
         return owned.first { !$0.state.isTerminalSession } ?? owned.first
     }
 
-    private func requireLive(_ session: SessionMachineSession) throws {
+    func requireLive(_ session: SessionMachineSession) throws {
         guard session.state.isTerminalSession else { return }
         throw SessionError.sessionIsTerminal(sessionId: session.sessionId, state: session.state)
     }

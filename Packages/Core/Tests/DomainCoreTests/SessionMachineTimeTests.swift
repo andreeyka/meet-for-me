@@ -197,10 +197,16 @@ final class SessionMachineTimeTests: XCTestCase {
     ///
     /// Полный ответ пункта — «переходит в `recording`» — часть B задачи: строки 8 в части A
     /// нет ни одной, и вектор на неё был бы красен на верной реализации.
+    /// ПОЛНЫМ ОТВЕТОМ (часть B): сессия, заведённая посреди идущего созвона, находит цель в
+    /// снимке подписки и переходит в `recording` НА ПЕРВОМ ЖЕ `tick` после `start` — то есть
+    /// ДО истечения `signalTtlSeconds` от момента подписки. Часть A наблюдала здесь только
+    /// половину — «цель найдена»: строки 8 у неё не было, и вектор на полный ответ был бы
+    /// красен на верной реализации.
     func test_k15_aSignalOlderThanTheSubscriptionIsFoundAtOnce() async throws {
         let stand = try bench()
         let event = try SessionMachineFixtures.event()
         stand.seed(event)
+        stand.allowCaptureStart()
 
         let subscribedAt = moment.addingTimeInterval(120)
         await stand.machine.start(now: subscribedAt)
@@ -213,8 +219,9 @@ final class SessionMachineTimeTests: XCTestCase {
 
         let probe13 = await stand.machine.sessions().first
         let live = try XCTUnwrap(probe13)
-        XCTAssertEqual(live.state, .awaitingSignal)
         XCTAssertEqual(live.target?.appKey, "us.zoom.xos", "цель найдена сразу, а не через `signalTtlSeconds`")
+        XCTAssertEqual(live.state, .recording, "и запись начата на первом же `tick` после `start`")
+        XCTAssertNotNil(live.recordingId)
         await stand.machine.stop()
     }
 }

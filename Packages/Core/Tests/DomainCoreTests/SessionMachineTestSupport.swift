@@ -46,12 +46,66 @@ struct SessionMachineBench {
             processes: processes,
             calendar: calendar,
             meetings: repositories.meetings,
+            recordings: repositories.recordings,
+            transcripts: repositories.transcripts,
             capture: capture,
             queue: queue,
             power: power,
             settings: settings,
-            weights: weights
+            weights: weights,
+            recordingDirectory: SessionMachineFixtures.recordingDirectory,
+            captureInput: SessionMachineFixtures.captureInput,
+            systemFormat: SessionMachineFixtures.systemFormat,
+            micFormat: SessionMachineFixtures.micFormat
         )
+    }
+
+    /// Задать исход `start` захвата так, чтобы он совпал с запрошенным `recordingId`.
+    /// Значение `CaptureStarted` машина не читает ни одним полем (К3: снимок равен полю
+    /// ЗАПРОСА), и здесь оно — согласие фейка, а не вход правила.
+    func allowCaptureStart() {
+        capture.setStartResult(CaptureStarted(
+            recordingId: UUID(),
+            startedAt: SessionMachineFixtures.start,
+            tracks: [],
+            captureGroupKey: nil
+        ))
+    }
+
+    /// Подать сигнал и дождаться, пока его примет ящик машины. Счёт снимается ДО подачи:
+    /// после неё он уже мог вырасти, и ожидание стало бы гонкой.
+    func deliver(_ signal: MeetingSignal) async {
+        let before = machine.mailbox.receivedCount
+        processes.emit(signal)
+        await awaitDelivery(before + 1)
+    }
+
+    /// Подать событие захвата и дождаться его доставки.
+    func deliver(_ event: CaptureEvent) async {
+        let before = machine.mailbox.receivedCount
+        capture.emit(event)
+        await awaitDelivery(before + 1)
+    }
+
+    /// Подать событие очереди и дождаться его доставки.
+    func deliver(_ event: JobEvent) async {
+        let before = machine.mailbox.receivedCount
+        queue.emit(event)
+        await awaitDelivery(before + 1)
+    }
+
+    /// Подать изменение календаря и дождаться его доставки.
+    func deliver(_ change: CalendarChange) async {
+        let before = machine.mailbox.receivedCount
+        calendar.emit(change)
+        await awaitDelivery(before + 1)
+    }
+
+    /// Подать событие питания и дождаться его доставки.
+    func deliver(_ event: PowerEvent) async {
+        let before = machine.mailbox.receivedCount
+        power.emit(event)
+        await awaitDelivery(before + 1)
     }
 
     /// Дождаться, пока ящик машины примет `total` входов за свою жизнь. Ровно то событие,
@@ -165,6 +219,86 @@ enum SessionMachineFixtures {
         )
     }
 
+    // MARK: - Четыре поля `CaptureRequest`, у которых источника в контрактах нет
+
+    /// Каталог записи. Средство, которым машина обязана его получать, — `FileLayout`
+    /// (C-010 §1) — в дереве не объявлено; здесь стоит то, что взято по конвенции §3
+    /// правил: функция от `recordingId`. Разбор — в отчёте MEE-300.
+    static let recordingDirectory: @Sendable (UUID) -> URL = { recordingId in
+        URL(fileURLWithPath: "/tmp/meet-for-me/\(recordingId.uuidString)", isDirectory: true)
+    }
+
+    static let captureInput: InputSelection = .systemDefault
+    static let systemFormat = TrackFormat(sampleRate: 48_000, channelCount: 2)
+    static let micFormat = TrackFormat(sampleRate: 48_000, channelCount: 1)
+
+    /// Манифест записи с заданным `recordingId` — вход строки 12. Готовых манифестов набор
+    /// `RecordingManifestFixtures` даёт семь, и `recordingId` у каждого свой и неподвижный;
+    /// строке 12 нужен манифест ТОЙ САМОЙ записи, которую машина назначила сама.
+    static func manifest(recordingId: UUID, meetingId: UUID?) throws -> RecordingManifest {
+        try RecordingManifest(
+            recordingId: recordingId,
+            meetingId: meetingId,
+            directoryName: recordingId.uuidString,
+            startedAt: start,
+            endedAt: start.addingTimeInterval(600),
+            tracks: [
+                try RecordingManifest.Track(
+                    channel: .system, fileName: "audio-system.m4a", sampleRate: 48_000,
+                    channelCount: 2, format: "aac-m4a"
+                )
+            ],
+            markers: [],
+            capturedProcesses: [],
+            captureGroupKey: "us.zoom.xos",
+            inputDevices: [],
+            discontinuities: [],
+            isFinalized: true
+        )
+    }
+
+    /// Задача очереди с заданным номером и нагрузкой — тем, что отдаёт `job(id:)` (К63).
+    /// Поля, которых ни один пункт части B не читает, заполнены нейтрально.
+    static func job(id: UUID, payload: JobPayload) -> Job {
+        Job(
+            id: id,
+            type: payload.type,
+            payload: payload,
+            status: .succeeded,
+            priority: 0,
+            attempts: 1,
+            maxAttempts: 3,
+            runAfter: start,
+            conditions: JobConditions(
+                requiresACPower: false,
+                forbidWhileRecording: false,
+                maxThermalPressure: .nominal,
+                requiresProfileReady: nil
+            ),
+            dedupKey: nil,
+            leaseExpiresAt: nil,
+            attemptStartedAt: nil,
+            lastError: nil,
+            createdAt: start,
+            updatedAt: start
+        )
+    }
+
+    /// Транскрипт записи — его заголовок машина читает из хранилища для `attribute` (К63).
+    /// Готовые транскрипты набора `TranscriptFixtures` несут свой неподвижный `recordingId`,
+    /// а здесь нужен ТОТ САМЫЙ, который машина назначила сама.
+    static func transcript(recordingId: UUID) throws -> Transcript {
+        try Transcript(
+            recordingId: recordingId,
+            language: "ru",
+            engine: "gigaam-sherpa-onnx",
+            modelVersion: "v3.0.1",
+            createdAt: start,
+            segments: [],
+            speakers: []
+        )
+    }
+
     /// Сигнал `clientAudioOutput` с группой — звучащая цель по §5.3.
     static func audioOutput(
         appKey: String,
@@ -236,4 +370,19 @@ extension SessionChange {
         if case let .promptWithdrawn(promptId) = self { return promptId }
         return nil
     }
+}
+
+/// `XCTUnwrap` для значения, снятого `await`.
+///
+/// НУЖЕН, А НЕ УДОБЕН: у `XCTUnwrap` аргумент объявлен синхронным автозамыканием
+/// (`@autoclosure () throws -> Value?`), и `await` внутри него не компилируется вовсе —
+/// «'async' call in an autoclosure that does not support concurrency». Здесь параметр
+/// обычный, и значение снимается ДО вызова; на само утверждение это не влияет ни на знак.
+func unwrap<Value>(
+    _ value: Value?,
+    _ message: @autoclosure () -> String = "",
+    file: StaticString = #filePath,
+    line: UInt = #line
+) throws -> Value {
+    try XCTUnwrap(value, message(), file: file, line: line)
 }

@@ -123,6 +123,7 @@ final class SessionMachinePolicyTests: XCTestCase {
             XCTAssertTrue(probe8, "на смещении \(offset) спроса нет")
         }
         // Звучащая цель есть — и записи всё равно не начинает.
+        stand.allowCaptureStart()
         stand.processes.emit(SessionMachineFixtures.audioOutput(
             appKey: "us.zoom.xos", observedAt: moment.addingTimeInterval(600)))
         await stand.awaitDelivery(1)
@@ -132,8 +133,22 @@ final class SessionMachinePolicyTests: XCTestCase {
         let probe10 = await stand.machine.prompts().isEmpty
         XCTAssertTrue(probe10)
 
+        // ЦЕЛЬ ПОДАЁТСЯ ЗАНОВО, И ЭТО НЕСУЩЕЕ. Вход пункта говорит «звучащая цель есть» —
+        // то есть АКТУАЛЬНАЯ в момент `graceEndsAt`; сигнал, поданный в `moment + 600`, к
+        // `moment + 1200` старше `signalTtlSeconds` оснастки (60 с) вдесятеро, и `skipped`
+        // приходил бы по клаузе «цели нет», а не вопреки политике. Разбор — MEE-299, §1.
+        stand.processes.emit(SessionMachineFixtures.audioOutput(
+            appKey: "us.zoom.xos", observedAt: moment.addingTimeInterval(1180)))
+        await stand.awaitDelivery(2)
+        await stand.machine.tick(now: moment.addingTimeInterval(1199))
+        let probe11 = await stand.machine.sessions().first
+        let alive = try XCTUnwrap(probe11)
+        XCTAssertEqual(alive.state, .awaitingSignal, "до срока живёт")
+        XCTAssertEqual(alive.target?.appKey, "us.zoom.xos", "и цель у неё актуальна")
+
         await stand.machine.tick(now: moment.addingTimeInterval(1200))
         XCTAssertEqual(stand.meetings.storedRecords.first?.status, .skipped)
+        XCTAssertEqual(stand.capture.recordedCalls.count, 0, "строки 6 и 8 не срабатывали ни разу")
         await stand.machine.stop()
 
         // Клауза «`askAt == nil`» проверяется на самой функции сроков, а не на `plan(now:)`:

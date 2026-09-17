@@ -1,17 +1,18 @@
 //  Правила машины сессий чистыми функциями — контракт C-018 (MEE-276): §5.2, §5.3, §5.4,
-//  §6, §7 (строки до входа в запись), §9.1.
+//  §6, §7 (строки, наступающие по сроку), §7.1, §8.2, §8.4, §9.1.
 //
 //  Модуль: domain-core · Владелец: DEV-2 · Слой: домен
 //
-//  ЧАСТЬ A задачи MEE-298. Здесь нет ни состояния, ни портов, ни `Date()`: всякой функции
-//  «сейчас» приходит параметром (§4). Разведение сделано затем, чтобы правило проверялось
-//  отдельно от хода машины, и затем же, чтобы `plan(now:)` части C строил `ScheduledArm`
-//  ТОЙ ЖЕ функцией, а не второй, разошедшейся с этой на первой же правке настроек.
+//  ЧАСТИ A (MEE-298) и B (MEE-300). Здесь нет ни состояния, ни портов, ни `Date()`: всякой
+//  функции «сейчас» приходит параметром (§4). Разведение сделано затем, чтобы правило
+//  проверялось отдельно от хода машины, и затем же, чтобы `plan(now:)` части C строил
+//  `ScheduledArm` ТОЙ ЖЕ функцией, а не второй, разошедшейся с этой на первой же правке
+//  настроек.
 //
-//  ЧЕГО ЗДЕСЬ НЕТ И ПОЧЕМУ. Строк 6, 8 и 10—16 таблицы §7 нет ни одной: вход в запись,
-//  остановка и обработка — часть B задачи, и их отсутствие есть предмет части B, а не долг
-//  этой. Восстановительного заведения §10 нет вовсе — часть C. Ни одна функция этого файла
-//  не заводит состояний `recording`, `stopping` и `processing` ни одним ходом.
+//  ЧЕГО ЗДЕСЬ НЕТ И ПОЧЕМУ. Строк 11—16 таблицы §7 нет ни одной, и это не пропуск: они
+//  наступают ПО ПРИХОДУ НАЗВАННОГО ВХОДА (`CaptureEvent`, `JobEvent`, команда, ответ на
+//  спрос), а не по сроку, и фазе сроков не принадлежат — §«Поведение» разводит эти два
+//  случая прямо. Восстановительного заведения §10 нет вовсе — часть C.
 //
 //  ТЕРМИНОВ C-009 ЭТОТ ФАЙЛ НЕ ОПРЕДЕЛЯЕТ НИ ОДНОГО (§0 контракта, инвариант 6). Он их
 //  ПРИМЕНЯЕТ: актуальность и пара «вид + источник» взяты у C-009 §1 дословно, а срок
@@ -192,6 +193,19 @@ enum SessionMachineRules {
     /// одной пары по инварианту 25 C-009 не бывает. Ответ поэтому не зависит ни от порядка
     /// подачи, ни от порядка обхода набора (К21).
     static func soundingTarget(among signals: [MeetingSignal], sessionProvider: String?) -> ProcessGroup? {
+        soundingTargetSignal(among: signals, sessionProvider: sessionProvider)?.group
+    }
+
+    /// Тот же выбор, но ответом служит САМ СИГНАЛ, а не его группа.
+    ///
+    /// Второй функции здесь нет — есть одна, и `soundingTarget` отдаёт её `group`: §8.4
+    /// отсчитывает срок остановки от `observedAt` последней актуальной цели, а `ProcessGroup`
+    /// несёт свой `observedAt`, который сигналу равен не по правилу, а по совпадению у
+    /// сегодняшнего производителя. Два определения «момента цели» разошлись бы молча.
+    static func soundingTargetSignal(
+        among signals: [MeetingSignal],
+        sessionProvider: String?
+    ) -> MeetingSignal? {
         let candidates = signals.filter { $0.kind == .clientAudioOutput && $0.group != nil }
         guard !candidates.isEmpty else { return nil }
 
@@ -203,11 +217,10 @@ enum SessionMachineRules {
         }
 
         // Ступени 2 и 3.
-        let best = strongest.min { lhs, rhs in
+        return strongest.min { lhs, rhs in
             if lhs.observedAt != rhs.observedAt { return lhs.observedAt > rhs.observedAt }
             return (lhs.group?.appKey ?? "") < (rhs.group?.appKey ?? "")
         }
-        return best?.group
     }
 
     // MARK: - §6: оценка
@@ -220,16 +233,19 @@ enum SessionMachineRules {
 
     // MARK: - §7: строки таблицы, наступающие по сроку
 
-    /// Строка таблицы §7, срабатывающая в фазе сроков. Строк здесь ДЕВЯТЬ ИЗ ВОСЕМНАДЦАТИ —
-    /// те, что до входа в запись, — и три из девяти (1, 1а, 1б) суть заведение, а не переход
-    /// живой сессии, и живут в `openingState`.
+    /// Строка таблицы §7, срабатывающая в фазе сроков. Строк здесь ДВЕНАДЦАТЬ ИЗ
+    /// ВОСЕМНАДЦАТИ — три заводящие (1, 1а, 1б) живут в `openingState`, а строки 11—16
+    /// наступают по приходу названного входа, а не по сроку.
     enum DeadlineRow: Equatable {
         case row2ScheduledToArmed
         case row3ScheduledToSkipped
         case row4ArmedToSkipped
         case row5ArmedToScheduled
+        case row6ArmedToRecording
         case row7ArmedToAwaitingSignal
+        case row8AwaitingSignalToRecording
         case row9AwaitingSignalToSkipped
+        case row10RecordingToStopping
 
         var target: MeetingStatus {
             switch self {
@@ -239,8 +255,12 @@ enum SessionMachineRules {
                 return .skipped
             case .row5ArmedToScheduled:
                 return .scheduled
+            case .row6ArmedToRecording, .row8AwaitingSignalToRecording:
+                return .recording
             case .row7ArmedToAwaitingSignal:
                 return .awaitingSignal
+            case .row10RecordingToStopping:
+                return .stopping
             }
         }
     }
@@ -249,29 +269,39 @@ enum SessionMachineRules {
     ///
     /// - Parameters:
     ///   - eventGone: событие отменено (`isCancelled`) либо удалено — клауза строк 3, 4 и 9.
-    ///   - hasSoundingTarget: есть ли у сессии звучащая цель — клауза строки 9.
+    ///   - gate: три клаузы строк 6 и 8 разом (§5.3, §7.1, §8.2) — и отрицание этих же трёх
+    ///     в клаузе строки 9.
+    ///   - silenceStopsAt: момент §8.4 — `observedAt` последней актуальной цели плюс
+    ///     `signalTtlSeconds` плюс `silenceStopSeconds`; `nil` — цели не было ни разу.
     ///
-    /// Команда `skip` и ответ `.skip` здесь не стоят намеренно: они исполняются В МОМЕНТ
-    /// ВЫЗОВА (§«Поведение»), а не в фазе сроков, и красит это К58.
+    /// Команда `skip`, команды `startRecording`/`stopRecording` и ответ на спрос здесь не
+    /// стоят намеренно: они исполняются В МОМЕНТ ВЫЗОВА (§«Поведение»), а не в фазе сроков,
+    /// и красит это К58.
     static func deadlineRow(
         state: MeetingStatus,
         deadlines: ScheduledArm?,
         eventGone: Bool,
-        hasSoundingTarget: Bool,
+        gate: RecordingGate,
+        silenceStopsAt: Date?,
         now: Date
     ) -> DeadlineRow? {
         switch state {
         case .scheduled:
             return fromScheduled(deadlines: deadlines, eventGone: eventGone, now: now)
         case .armed:
-            return fromArmed(deadlines: deadlines, eventGone: eventGone, now: now)
+            return fromArmed(deadlines: deadlines, eventGone: eventGone, gate: gate, now: now)
         case .awaitingSignal:
             return fromAwaitingSignal(
-                deadlines: deadlines, eventGone: eventGone, hasSoundingTarget: hasSoundingTarget, now: now
+                deadlines: deadlines, eventGone: eventGone, gate: gate, now: now
             )
-        case .recording, .stopping, .processing, .ready, .failed, .skipped:
+        case .recording:
+            return fromRecording(gate: gate, silenceStopsAt: silenceStopsAt, now: now)
+        case .stopping, .processing:
+            // Исходящие строки этих состояний — 11—15 — наступают по приходу
+            // `CaptureEvent` и `JobEvent`, а не по сроку: фаза сроков их не читает.
+            return nil
+        case .ready, .failed, .skipped:
             // Терминальные — исходящих переходов нет ни одного (инвариант 3).
-            // Состояния записи и обработки эта часть не заводит ни одним входом.
             return nil
         }
     }
@@ -286,25 +316,64 @@ enum SessionMachineRules {
         return nil
     }
 
-    /// Строки 4, 5 и 7 в порядке таблицы. Строки 6 (`armed → recording`) здесь нет — часть B.
-    private static func fromArmed(deadlines: ScheduledArm?, eventGone: Bool, now: Date) -> DeadlineRow? {
+    /// Строки 4, 5, 6 и 7 в порядке таблицы.
+    ///
+    /// Строка 6 стоит ПРЕЖДЕ строки 7, и порядок здесь несущий: при звучащей цели и
+    /// `now ≥ e.start` истинны обе, и побеждает строка с меньшим номером — К45 (ii) и К35.
+    /// Реализация, читающая сроковые строки прежде сигнальных, уводит сессию в
+    /// `awaitingSignal` и теряет начало созвона.
+    private static func fromArmed(
+        deadlines: ScheduledArm?,
+        eventGone: Bool,
+        gate: RecordingGate,
+        now: Date
+    ) -> DeadlineRow? {
         if eventGone { return .row4ArmedToSkipped }
         if let deadlines, now < deadlines.armAt { return .row5ArmedToScheduled }
+        if gate.maySwitchToRecording { return .row6ArmedToRecording }   // ранний вход §8.1
         if let deadlines, now >= deadlines.startsAt { return .row7ArmedToAwaitingSignal }
         return nil
     }
 
-    /// Строка 9. Строки 8 (`awaitingSignal → recording`) здесь нет — часть B.
+    /// Строки 8 и 9 в порядке таблицы.
+    ///
+    /// КЛАУЗА СТРОКИ 9 ЧИТАЕТ ВСЕ ТРИ ПРИЧИНЫ, А НЕ ОДНУ, И ЭТО ПРАВКА ПОД C-018 v5.
+    /// До v5 здесь стояло `!hasSoundingTarget`, то есть одна причина из трёх; клауза
+    /// строки 9 в v5 называет их перечнем: «цели нет (§8.3), либо цель есть, но занята
+    /// (§7.1) или не отдана политикой (§8.2)». Отрицание условия строки 8 даёт ровно эти
+    /// три случая и ни одного четвёртого — спор §5.4 закрыт первым из них, потому что
+    /// оспариваемая цель звучащей целью не является. Реализация со старой клаузой
+    /// оставляла сессию при `.manual` и при `.ask` без ответа со звучащей целью висеть в
+    /// `awaitingSignal` навсегда, при том что §8.2 и §8.3 обещают ей `skipped` дословно.
+    ///
+    /// Короткая форма «либо `now ≥ graceEndsAt`» здесь отвергнута контрактом вслух: в
+    /// полной машине она даёт тот же ответ, потому что строка 8 стоит раньше, — но
+    /// читается как отмена строки 8.
     private static func fromAwaitingSignal(
         deadlines: ScheduledArm?,
         eventGone: Bool,
-        hasSoundingTarget: Bool,
+        gate: RecordingGate,
         now: Date
     ) -> DeadlineRow? {
         if eventGone { return .row9AwaitingSignalToSkipped }
-        if let deadlines, now >= deadlines.graceEndsAt, !hasSoundingTarget {
+        if gate.maySwitchToRecording { return .row8AwaitingSignalToRecording }
+        if let deadlines, now >= deadlines.graceEndsAt, !gate.maySwitchToRecording {
             return .row9AwaitingSignalToSkipped
         }
         return nil
+    }
+
+    /// Строка 10 в её сроковой половине — §8.4, правило 2.
+    ///
+    /// `e.end` здесь не стоит ни одной клаузой, и это требование §8.4 правила 1 дословно:
+    /// конец окна события запись не останавливает (К38, К56). Команда `stopRecording` —
+    /// вторая половина строки 10 — исполняется в момент вызова и сюда не приходит (К58).
+    private static func fromRecording(
+        gate: RecordingGate,
+        silenceStopsAt: Date?,
+        now: Date
+    ) -> DeadlineRow? {
+        guard !gate.hasTarget, let stopsAt = silenceStopsAt, now >= stopsAt else { return nil }
+        return .row10RecordingToStopping
     }
 }

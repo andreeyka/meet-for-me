@@ -27,9 +27,16 @@ extension SessionMachine {
                 remember(signal)
             case let .calendar(change):
                 apply(change)
-            case .capture, .job, .power:
-                // Ни одна строка таблицы части A этих входов не называет: состояния не
-                // меняются и ошибки не даётся (инвариант 2, тотальность).
+            case let .capture(event):
+                // Событие КЛАДЁТСЯ, а переход по нему читается фазой сроков в порядке
+                // строк §7: разбор и цена — в шапке `SessionMachineProcessing.swift`.
+                arrivedCapture.append(event)
+            case let .job(event):
+                arrivedJobs.append(event)
+            case .power:
+                // `willSleep` записи не останавливает и состояния не меняет (§9.3, К69);
+                // `didWake` зовёт `reschedule(now:)` — это `Scheduler`, часть C. Оба входа
+                // состояния не меняют и ошибки не дают (инвариант 2, тотальность).
                 continue
             }
         }
@@ -101,7 +108,10 @@ extension SessionMachine {
                 updatedAt: now,
                 event: event,
                 promptId: nil,
-                recordAnswered: false
+                recordAnswered: false,
+                adHocAppKey: nil,
+                lastTargetObservedAt: nil,
+                powerToken: nil
             )
             opened.append(identifier)
         }
@@ -139,14 +149,45 @@ extension SessionMachine {
             // единственное чтение, при котором обе половины §5.4 истинны разом: «до ответа
             // не записывает ни одна» и «нет ответа — каждая уходит в `skipped` по своему
             // `graceEndsAt`» (строка 9 читает клаузу «звучащей цели нет»).
-            session.target = SessionMachineRules.soundingTarget(
+            let chosen = SessionMachineRules.soundingTargetSignal(
                 among: related.filter { !disputed.contains($0.group?.appKey ?? "") },
                 sessionProvider: session.event?.conference?.provider
             )
+            session.target = chosen?.group ?? adHocTarget(for: session, now: now)
+            if let observedAt = chosen?.observedAt {
+                session.lastTargetObservedAt = observedAt
+            } else if let appKey = session.target?.appKey,
+                      let signal = actualSignal(appKey: appKey, now: now) {
+                session.lastTargetObservedAt = signal.observedAt
+            }
             session.estimate = SessionMachineRules.estimate(over: related)
             session.updatedAt = now
             store[identifier] = session
         }
+    }
+
+    /// Цель ad-hoc-сессии до входа в запись.
+    ///
+    /// НАЗВАНО, А НЕ УМОЛЧАНО: правила §5.4 не относят к такой сессии ни одного сигнала —
+    /// правила 2 и 3 требуют либо окна события (`armAt ≤ now ≤ graceEndsAt`), которого у
+    /// ad-hoc нет, либо состояния из `{recording, stopping}`, в которое она ещё не вошла.
+    /// То есть §5.4 и §8.6 отвечают на разные вопросы, а не спорят: §5.4 распределяет
+    /// сигналы между сессиями СОБЫТИЙ, а ad-hoc есть вход для цели, которую он никому не
+    /// отдал (правило 4). Цель такой сессии поэтому держится её `appKey` и проверяется на
+    /// актуальность прямо — ровно то, что §8.6 называет причиной спроса.
+    private func adHocTarget(for session: SessionMachineSession, now: Date) -> ProcessGroup? {
+        guard session.origin == .adHoc, let appKey = session.adHocAppKey else { return nil }
+        return actualSignal(appKey: appKey, now: now)?.group
+    }
+
+    /// То, что правило §5.4 читает у сессии.
+    func side(of session: SessionMachineSession) -> SessionMachineRules.SessionSide {
+        SessionMachineRules.SessionSide(
+            meetingId: session.meetingId,
+            state: session.state,
+            provider: session.event?.conference?.provider,
+            deadlines: session.event.map { SessionMachineRules.arm(for: $0, settings: settings) }
+        )
     }
 
     /// Сигналы, отнесённые к сессии (§5.4) и актуальные (C-009 §1), вместе с её собственным
@@ -191,22 +232,59 @@ extension SessionMachine {
                 steps += 1
                 guard let session = store[identifier], !session.state.isTerminalSession else { break }
                 let deadlines = session.event.map { SessionMachineRules.arm(for: $0, settings: settings) }
-                let gone = isGone(session)
                 guard let row = SessionMachineRules.deadlineRow(
                     state: session.state,
                     deadlines: deadlines,
-                    eventGone: gone,
-                    hasSoundingTarget: session.target != nil,
+                    eventGone: isGone(session),
+                    gate: gate(for: session),
+                    silenceStopsAt: silenceDeadline(of: session),
                     now: now
-                ) else { break }
+                ) else {
+                    // Строк, наступающих по сроку, не подошло ни одной: дальше в порядке
+                    // таблицы идут строки 11—15, наступающие по пришедшему входу.
+                    let changed = (try? await applyArrivedRows(to: session, now: now)) ?? false
+                    if changed { continue }
+                    break
+                }
                 do {
-                    try await transition(identifier, to: row.target, now: now)
+                    try await apply(row, to: session, now: now)
                 } catch {
                     // Исход не записан — значит перехода не было (инвариант 18). Срок
                     // наступит на следующем `tick`: терять решение молча дороже, чем ждать.
                     break
                 }
             }
+        }
+    }
+
+    /// Строка, подошедшая по сроку, исполняется своим ходом: строки 6 и 8 зовут захват и
+    /// берут токен питания, строка 10 зовёт `stop()`, прочие — один переход.
+    private func apply(
+        _ row: SessionMachineRules.DeadlineRow,
+        to session: SessionMachineSession,
+        now: Date
+    ) async throws {
+        switch row {
+        case .row6ArmedToRecording, .row8AwaitingSignalToRecording:
+            guard let target = session.target else { return }
+            let observedAt = session.lastTargetObservedAt ?? target.observedAt
+            try await enterRecording(
+                session.sessionId, target: target, observedAt: observedAt, now: now
+            )
+        case .row10RecordingToStopping:
+            try await enterStopping(session.sessionId, now: now)
+        case .row2ScheduledToArmed, .row3ScheduledToSkipped, .row4ArmedToSkipped,
+             .row5ArmedToScheduled, .row7ArmedToAwaitingSignal, .row9AwaitingSignalToSkipped:
+            try await transition(session.sessionId, to: row.target, now: now)
+        }
+    }
+
+    /// Момент §8.4 для этой сессии; `nil` — цели не было ни разу, и отсчитывать не от чего.
+    private func silenceDeadline(of session: SessionMachineSession) -> Date? {
+        session.lastTargetObservedAt.map {
+            SessionMachineRules.silenceStopsAt(
+                lastTargetObservedAt: $0, settings: settings, weights: weights
+            )
         }
     }
 
@@ -224,7 +302,12 @@ extension SessionMachine {
         guard settings.recordingPolicy == .ask else { return }
         for identifier in store.keys.sorted(by: SessionMachineOrder.ascending) {
             guard var session = store[identifier] else { continue }
-            guard !session.state.isTerminalSession, session.promptId == nil, !session.recordAnswered else {
+            // Состояния записи и обработки спроса не получают: спрос §8.2 существует затем,
+            // чтобы разрешить строки 6 и 8, а они читаются только из `armed` и
+            // `awaitingSignal`. Спросить «записать?» у сессии, которая уже пишет, — шум.
+            guard session.state == .armed || session.state == .awaitingSignal
+                || session.state == .scheduled else { continue }
+            guard session.promptId == nil, !session.recordAnswered else {
                 continue
             }
             guard let event = session.event else { continue }
