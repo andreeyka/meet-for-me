@@ -159,10 +159,12 @@ extension SessionMachine {
             .filter {
                 SessionMachineRules.relates(
                     signal: $0,
-                    sessionMeetingId: session.meetingId,
-                    sessionState: session.state,
-                    sessionProvider: session.event?.conference?.provider,
-                    deadlines: deadlines,
+                    to: SessionMachineRules.SessionSide(
+                        meetingId: session.meetingId,
+                        state: session.state,
+                        provider: session.event?.conference?.provider,
+                        deadlines: deadlines
+                    ),
                     now: now
                 )
             }
@@ -258,10 +260,12 @@ extension SessionMachine {
             let related = live.filter { session in
                 SessionMachineRules.relates(
                     signal: signal,
-                    sessionMeetingId: session.meetingId,
-                    sessionState: session.state,
-                    sessionProvider: session.event?.conference?.provider,
-                    deadlines: session.event.map { SessionMachineRules.arm(for: $0, settings: settings) },
+                    to: SessionMachineRules.SessionSide(
+                        meetingId: session.meetingId,
+                        state: session.state,
+                        provider: session.event?.conference?.provider,
+                        deadlines: session.event.map { SessionMachineRules.arm(for: $0, settings: settings) }
+                    ),
                     now: now
                 )
             }

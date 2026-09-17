@@ -143,18 +143,25 @@ enum SessionMachineRules {
 
     // MARK: - §5.4: отнесение сигнала к сессии
 
+    /// То, что правило §5.4 читает у сессии. Отдельным значением, а не шестью параметрами:
+    /// шесть подряд линт считает нарушением, а читатель — перечнем без предмета.
+    struct SessionSide {
+        let meetingId: UUID?
+        let state: MeetingStatus
+        let provider: String?
+        let deadlines: ScheduledArm?
+    }
+
     /// Относится ли сигнал к сессии в момент `now` — по ПЕРВОМУ подошедшему правилу.
     ///
     /// Порядок правил 1—4 существен и проверяется К23: реализация, читающая их в порядке
     /// «сперва по провайдеру», отнесёт календарный сигнал к чужой сессии с открытым окном.
-    static func relates(
-        signal: MeetingSignal,
-        sessionMeetingId: UUID?,
-        sessionState: MeetingStatus,
-        sessionProvider: String?,
-        deadlines: ScheduledArm?,
-        now: Date
-    ) -> Bool {
+    static func relates(signal: MeetingSignal, to side: SessionSide, now: Date) -> Bool {
+        let sessionMeetingId = side.meetingId
+        let sessionState = side.state
+        let sessionProvider = side.provider
+        let deadlines = side.deadlines
+
         // Правило 1.
         if signal.kind == .calendarWindow {
             guard let signalMeeting = signal.meetingId, let sessionMeeting = sessionMeetingId else {

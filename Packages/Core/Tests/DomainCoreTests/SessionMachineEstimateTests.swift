@@ -11,6 +11,13 @@ final class SessionMachineEstimateTests: XCTestCase {
     private let moment = SessionMachineFixtures.start
     private let now = SessionMachineFixtures.start.addingTimeInterval(60)
 
+    /// Строка таблицы §6 контракта. Тип, а не трёхчленный кортеж (`large_tuple`).
+    private struct EstimateVector {
+        let name: String
+        let signals: [MeetingSignal]
+        let expected: Double
+    }
+
     /// Сессия в `awaitingSignal` внутри окна события; событие несёт провайдера `zoom`,
     /// и потому сигналы БЕЗ провайдера относятся к ней правилом 3, а с чужим — не относятся.
     private func standing(
@@ -52,26 +59,24 @@ final class SessionMachineEstimateTests: XCTestCase {
     /// Слияние идёт по парам «вид + источник»: каждый клиент — свой множитель.
     func test_k26_estimateReproducesTheContractsTable() async throws {
         let weights = try SessionMachineFixtures.weights()
-        let vectors: [(String, [MeetingSignal], Double)] = [
-            ("окно события", [], 0.2),
-            ("окно + 1 клиент", clients(1), 0.52),
-            ("окно + 1 клиент + микрофон", clients(1) + [microphone()], 0.712),
-            ("окно + 3 клиента + микрофон", clients(3) + [microphone()], 0.89632),
-            ("окно + 5 клиентов", clients(5), 0.937792),
-            ("окно + 6 клиентов", clients(6), 0.9626752)
+        let vectors: [EstimateVector] = [
+            EstimateVector(name: "окно события", signals: [], expected: 0.2),
+            EstimateVector(name: "окно + 1 клиент", signals: clients(1), expected: 0.52),
+            EstimateVector(name: "окно + 1 клиент + микрофон",
+                           signals: clients(1) + [microphone()], expected: 0.712),
+            EstimateVector(name: "окно + 3 клиента + микрофон",
+                           signals: clients(3) + [microphone()], expected: 0.89632),
+            EstimateVector(name: "окно + 5 клиентов", signals: clients(5), expected: 0.937792),
+            EstimateVector(name: "окно + 6 клиентов", signals: clients(6), expected: 0.9626752)
         ]
 
-        for (name, signals, expected) in vectors {
+        for vector in vectors {
             let stand = try await standing(weights: weights)
-            for signal in signals { stand.processes.emit(signal) }
-            await stand.awaitDelivery(signals.count)
+            for signal in vector.signals { stand.processes.emit(signal) }
+            await stand.awaitDelivery(vector.signals.count)
             await stand.machine.tick(now: now)
             let probe0 = await stand.machine.sessions().first?.estimate ?? -1
-            XCTAssertEqual(probe0,
-                expected,
-                accuracy: 1e-9,
-                "строка «\(name)»"
-            )
+            XCTAssertEqual(probe0, vector.expected, accuracy: 1e-9, "строка «\(vector.name)»")
             await stand.machine.stop()
         }
     }
@@ -83,7 +88,7 @@ final class SessionMachineEstimateTests: XCTestCase {
 
         // Чужой провайдер — правило 2 не отнесло, правило 3 не применимо (provider != nil).
         stand.processes.emit(SessionMachineFixtures.signal(
-            kind: .clientRunning, weight: 0.4, appKey: "alien", provider: "meet", observedAt: now, pid: 900))
+            kind: .clientRunning, weight: 0.4, appKey: "alien", observedAt: now, provider: "meet", pid: 900))
         // Вышедший по сроку: возраст 61 с при `signalTtlSeconds` 60.
         stand.processes.emit(SessionMachineFixtures.signal(
             kind: .clientRunning, weight: 0.4, appKey: "stale",

@@ -145,22 +145,22 @@ final class SessionMachineIdentityTests: XCTestCase {
         let identifier = try XCTUnwrap(probe6)
         try await stand.machine.skip(meetingId: event.id, now: moment.addingTimeInterval(-50))
 
-        await assertSessionIsTerminal(identifier) {
+        await assertSessionIsTerminal(identifier, body: {
             _ = try await stand.machine.startRecording(meetingId: event.id, now: self.moment)
-        }
-        await assertSessionIsTerminal(identifier) {
+        })
+        await assertSessionIsTerminal(identifier, body: {
             try await stand.machine.skip(meetingId: event.id, now: self.moment)
-        }
-        await assertSessionIsTerminal(identifier) {
+        })
+        await assertSessionIsTerminal(identifier, body: {
             try await stand.machine.answer(promptId: prompt.promptId, .skip, now: self.moment)
-        }
+        })
     }
 
     private func assertSessionIsTerminal(
         _ identifier: UUID,
+        body: () async throws -> Void,
         file: StaticString = #filePath,
-        line: UInt = #line,
-        _ body: () async throws -> Void
+        line: UInt = #line
     ) async {
         do {
             try await body()

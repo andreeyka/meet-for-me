@@ -135,6 +135,23 @@ final class SessionMachinePolicyTests: XCTestCase {
         await stand.machine.tick(now: moment.addingTimeInterval(1200))
         XCTAssertEqual(stand.meetings.storedRecords.first?.status, .skipped)
         await stand.machine.stop()
+
+        // Клауза «`askAt == nil`» проверяется на самой функции сроков, а не на `plan(now:)`:
+        // `askAt` есть функция события и настроек, а `plan` лишь отдаёт её ответ. Та же
+        // клауза стоит дословно в К50, и по ней К50 отнесён постановкой к части C —
+        // расхождение названо строкой отчёта.
+        let manual = SessionMachineRules.arm(
+            for: event, settings: SessionMachineFixtures.settings(policy: .manual)
+        )
+        XCTAssertNil(manual.askAt, "при `.manual` спрашивать не о чем, и срока спроса нет")
+        let auto = SessionMachineRules.arm(
+            for: event, settings: SessionMachineFixtures.settings(policy: .auto)
+        )
+        XCTAssertNil(auto.askAt, "при `.auto` — тоже")
+        let ask = SessionMachineRules.arm(
+            for: event, settings: SessionMachineFixtures.settings(policy: .ask)
+        )
+        XCTAssertEqual(ask.askAt, event.start.addingTimeInterval(-90), "и только при `.ask` он есть")
     }
 
     // MARK: - К53 (§8.2, «спрос — выход, а не состояние»)

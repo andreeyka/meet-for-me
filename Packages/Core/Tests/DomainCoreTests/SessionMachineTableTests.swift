@@ -15,6 +15,14 @@ final class SessionMachineTableTests: XCTestCase {
 
     private let moment = SessionMachineFixtures.start
 
+    /// Вектор на одну клаузу условия §9.1. Тип, а не кортеж: трёхчленный кортеж линт
+    /// считает нарушением (`large_tuple`), и MEE-289 уже платил за это прогоном.
+    private struct ClauseVector {
+        let name: String
+        let event: MeetingEvent
+        let stored: MeetingStatus
+    }
+
     private func bench(
         policy: AppSettings.RecordingPolicy = .auto
     ) throws -> (SessionMachineBench, AppSettings) {
@@ -43,20 +51,20 @@ final class SessionMachineTableTests: XCTestCase {
         let allDay = MeetingEventFixtures.allDayMoscow
         let cancelled = try SessionMachineFixtures.event(isCancelled: true)
         let ordinary = try SessionMachineFixtures.event()
-        let vectors: [(String, MeetingEvent, MeetingStatus)] = [
-            ("isAllDay", allDay, .scheduled),
-            ("isCancelled", cancelled, .scheduled),
-            ("ready", ordinary, .ready),
-            ("failed", ordinary, .failed),
-            ("skipped", ordinary, .skipped)
+        let vectors: [ClauseVector] = [
+            ClauseVector(name: "isAllDay", event: allDay, stored: .scheduled),
+            ClauseVector(name: "isCancelled", event: cancelled, stored: .scheduled),
+            ClauseVector(name: "ready", event: ordinary, stored: .ready),
+            ClauseVector(name: "failed", event: ordinary, stored: .failed),
+            ClauseVector(name: "skipped", event: ordinary, stored: .skipped)
         ]
 
-        for (name, event, status) in vectors {
+        for vector in vectors {
             let (stand, _) = try bench()
-            stand.seed(event, status: status)
-            await stand.machine.tick(now: event.start.addingTimeInterval(-900))
+            stand.seed(vector.event, status: vector.stored)
+            await stand.machine.tick(now: vector.event.start.addingTimeInterval(-900))
             let live = await stand.machine.sessions()
-            XCTAssertTrue(live.isEmpty, "на векторе «\(name)» не заводится ни одна сессия")
+            XCTAssertTrue(live.isEmpty, "на векторе «\(vector.name)» не заводится ни одна сессия")
         }
     }
 

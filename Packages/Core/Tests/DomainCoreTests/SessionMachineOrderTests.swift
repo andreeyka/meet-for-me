@@ -10,6 +10,13 @@ final class SessionMachineOrderTests: XCTestCase {
 
     private let moment = SessionMachineFixtures.start
 
+    /// Состояние перебора и момент, в который оно достижимо. Тип, а не трёхчленный кортеж.
+    private struct StateVector {
+        let name: String
+        let offset: TimeInterval
+        let expected: MeetingStatus
+    }
+
     private func bench(policy: AppSettings.RecordingPolicy = .auto) throws -> SessionMachineBench {
         SessionMachineBench(
             settings: SessionMachineFixtures.settings(policy: policy),
@@ -105,13 +112,16 @@ final class SessionMachineOrderTests: XCTestCase {
     /// `stopping`, `processing` она не заводит ни одним входом, а `ready` и `failed` — часть
     /// B. Терминальное `skipped` покрыто К5.
     func test_k46_kind1_unnamedInputsChangeNothingInEveryReachableState() async throws {
-        let states: [(String, TimeInterval, MeetingStatus)] = [
-            ("scheduled", -900, .scheduled),
-            ("armed", -300, .armed),
-            ("awaitingSignal", 60, .awaitingSignal)
+        let states: [StateVector] = [
+            StateVector(name: "scheduled", offset: -900, expected: .scheduled),
+            StateVector(name: "armed", offset: -300, expected: .armed),
+            StateVector(name: "awaitingSignal", offset: 60, expected: .awaitingSignal)
         ]
 
-        for (name, offset, expected) in states {
+        for state in states {
+            let name = state.name
+            let offset = state.offset
+            let expected = state.expected
             let stand = try bench()
             let event = try SessionMachineFixtures.event()
             stand.seed(event)

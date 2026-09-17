@@ -44,7 +44,7 @@ final class SessionMachinePublishTests: XCTestCase {
         let reader = Task { () -> MeetingStatus? in
             for await change in stream where change.session?.state == .skipped {
                 guard let record = try? await repository.meeting(id: identifier) else { return nil }
-                return record?.status
+                return record.status
             }
             return nil
         }
@@ -53,7 +53,11 @@ final class SessionMachinePublishTests: XCTestCase {
         try await stand.machine.skip(meetingId: event.id, now: moment.addingTimeInterval(-880))
 
         let seenByConsumer = await reader.value
-        XCTAssertEqual(seenByConsumer, .skipped, "по событию потребитель читает уже записанное значение")
+        XCTAssertEqual(
+            seenByConsumer,
+            MeetingStatus.skipped,
+            "по событию потребитель читает уже записанное значение"
+        )
     }
 
     /// И порядок в журнале: `setStatus` встал в него ПРЕЖДЕ, чем команда вернулась.

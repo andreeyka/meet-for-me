@@ -10,6 +10,13 @@ final class SessionMachineSignalTests: XCTestCase {
 
     private let moment = SessionMachineFixtures.start
 
+    /// Набор §5.3 и ответ по нему. Тип, а не трёхчленный кортеж (`large_tuple`).
+    private struct TargetVector {
+        let name: String
+        let hasTarget: Bool
+        let signal: MeetingSignal
+    }
+
     private func bench(
         weights: SignalWeights? = nil,
         policy: AppSettings.RecordingPolicy = .auto
@@ -136,24 +143,25 @@ final class SessionMachineSignalTests: XCTestCase {
     /// Звучащая цель есть ТОЛЬКО у актуального `clientAudioOutput` с группой.
     func test_k20_onlyAnActualClientAudioOutputWithAGroupIsASoundingTarget() async throws {
         let now = moment.addingTimeInterval(60)
-        let vectors: [(String, MeetingSignal, Bool)] = [
-            ("clientRunning", SessionMachineFixtures.signal(
-                kind: .clientRunning, weight: 0.4, appKey: "us.zoom.xos", observedAt: now), false),
-            ("microphoneInUse", SessionMachineFixtures.signal(
-                kind: .microphoneInUse, weight: 0.4, appKey: nil, observedAt: now), false),
-            ("вышедший по сроку", SessionMachineFixtures.audioOutput(
-                appKey: "us.zoom.xos", observedAt: now.addingTimeInterval(-61)), false),
-            ("актуальный clientAudioOutput", SessionMachineFixtures.audioOutput(
-                appKey: "us.zoom.xos", observedAt: now), true)
+        let vectors: [TargetVector] = [
+            TargetVector(name: "clientRunning", hasTarget: false, signal: SessionMachineFixtures.signal(
+                kind: .clientRunning, weight: 0.4, appKey: "us.zoom.xos", observedAt: now)),
+            TargetVector(name: "microphoneInUse", hasTarget: false, signal: SessionMachineFixtures.signal(
+                kind: .microphoneInUse, weight: 0.4, appKey: nil, observedAt: now)),
+            TargetVector(name: "вышедший по сроку", hasTarget: false,
+                         signal: SessionMachineFixtures.audioOutput(
+                             appKey: "us.zoom.xos", observedAt: now.addingTimeInterval(-61))),
+            TargetVector(name: "актуальный clientAudioOutput", hasTarget: true,
+                         signal: SessionMachineFixtures.audioOutput(appKey: "us.zoom.xos", observedAt: now))
         ]
 
-        for (name, signal, hasTarget) in vectors {
+        for vector in vectors {
             let (stand, _) = try await standing()
-            stand.processes.emit(signal)
+            stand.processes.emit(vector.signal)
             await stand.awaitDelivery(1)
             await stand.machine.tick(now: now)
             let target = await stand.machine.sessions().first?.target
-            XCTAssertEqual(target != nil, hasTarget, "набор «\(name)»")
+            XCTAssertEqual(target != nil, vector.hasTarget, "набор «\(vector.name)»")
             await stand.machine.stop()
         }
 
@@ -174,9 +182,9 @@ final class SessionMachineSignalTests: XCTestCase {
         // «Прочий» обязан относиться к сессии, иначе ступень 1 не с чем сравнивать: сигнал
         // ЧУЖОГО провайдера правило 2 к ней не относит вовсе, и до §5.3 он не доходит.
         byProvider.processes.emit(SessionMachineFixtures.audioOutput(
-            appKey: "com.other.app", provider: nil, observedAt: now))
+            appKey: "com.other.app", observedAt: now, provider: nil))
         byProvider.processes.emit(SessionMachineFixtures.audioOutput(
-            appKey: "us.zoom.xos", provider: "zoom", observedAt: now.addingTimeInterval(-10), pid: 502))
+            appKey: "us.zoom.xos", observedAt: now.addingTimeInterval(-10), provider: "zoom", pid: 502))
         await byProvider.awaitDelivery(2)
         await byProvider.machine.tick(now: now)
         let probe4 = await byProvider.machine.sessions().first?.target?.appKey
@@ -186,9 +194,9 @@ final class SessionMachineSignalTests: XCTestCase {
         // Ступень 2: провайдер не различает — побеждает больший `observedAt`.
         let (byMoment, _) = try await standing(provider: nil)
         byMoment.processes.emit(SessionMachineFixtures.audioOutput(
-            appKey: "aaa.app", provider: nil, observedAt: now.addingTimeInterval(-20)))
+            appKey: "aaa.app", observedAt: now.addingTimeInterval(-20), provider: nil))
         byMoment.processes.emit(SessionMachineFixtures.audioOutput(
-            appKey: "zzz.app", provider: nil, observedAt: now, pid: 502))
+            appKey: "zzz.app", observedAt: now, provider: nil, pid: 502))
         await byMoment.awaitDelivery(2)
         await byMoment.machine.tick(now: now)
         let probe5 = await byMoment.machine.sessions().first?.target?.appKey
@@ -198,9 +206,9 @@ final class SessionMachineSignalTests: XCTestCase {
         // Ступень 3: `observedAt` равны — побеждает лексикографически меньший `appKey`.
         // Набор подаётся в порядке, ОБРАТНОМ ответу, и повторно: «первый в массиве» краснеет.
         let (byKey, _) = try await standing(provider: nil)
-        byKey.processes.emit(SessionMachineFixtures.audioOutput(appKey: "zzz.app", provider: nil, observedAt: now))
+        byKey.processes.emit(SessionMachineFixtures.audioOutput(appKey: "zzz.app", observedAt: now, provider: nil))
         byKey.processes.emit(SessionMachineFixtures.audioOutput(
-            appKey: "aaa.app", provider: nil, observedAt: now, pid: 502))
+            appKey: "aaa.app", observedAt: now, provider: nil, pid: 502))
         await byKey.awaitDelivery(2)
         for _ in 0..<3 {
             await byKey.machine.tick(now: now)
@@ -218,7 +226,7 @@ final class SessionMachineSignalTests: XCTestCase {
         let now = moment.addingTimeInterval(60)
         let (stand, _) = try await standing()
         stand.processes.emit(SessionMachineFixtures.signal(
-            kind: .clientAudioOutput, weight: 0.8, appKey: nil, provider: "zoom", observedAt: now))
+            kind: .clientAudioOutput, weight: 0.8, appKey: nil, observedAt: now, provider: "zoom"))
         stand.processes.emit(SessionMachineFixtures.audioOutput(
             appKey: "us.zoom.xos", observedAt: now, pid: 502))
         await stand.awaitDelivery(2)
@@ -245,11 +253,17 @@ final class SessionMachineSignalTests: XCTestCase {
         let deadlines = SessionMachineRules.arm(for: other, settings: SessionMachineFixtures.settings())
 
         XCTAssertTrue(SessionMachineRules.relates(
-            signal: signal, sessionMeetingId: mine.id, sessionState: .awaitingSignal,
-            sessionProvider: "zoom", deadlines: deadlines, now: now))
+            signal: signal,
+            to: SessionMachineRules.SessionSide(
+                meetingId: mine.id, state: .awaitingSignal, provider: "zoom", deadlines: deadlines
+            ),
+            now: now))
         XCTAssertFalse(SessionMachineRules.relates(
-            signal: signal, sessionMeetingId: other.id, sessionState: .awaitingSignal,
-            sessionProvider: "zoom", deadlines: deadlines, now: now),
+            signal: signal,
+            to: SessionMachineRules.SessionSide(
+                meetingId: other.id, state: .awaitingSignal, provider: "zoom", deadlines: deadlines
+            ),
+            now: now),
             "чужая сессия с открытым окном его не получает — правило 1 стоит первым")
     }
 
@@ -261,125 +275,44 @@ final class SessionMachineSignalTests: XCTestCase {
         let inside = moment.addingTimeInterval(60)
         let outside = moment.addingTimeInterval(1201)   // за `graceEndsAt`
 
-        let zoom = SessionMachineFixtures.audioOutput(appKey: "us.zoom.xos", provider: "zoom", observedAt: inside)
-        let meet = SessionMachineFixtures.audioOutput(appKey: "com.google", provider: "meet", observedAt: inside)
-        let plain = SessionMachineFixtures.audioOutput(appKey: "browser", provider: nil, observedAt: inside)
+        let zoom = SessionMachineFixtures.audioOutput(appKey: "us.zoom.xos", observedAt: inside, provider: "zoom")
+        let meet = SessionMachineFixtures.audioOutput(appKey: "com.google", observedAt: inside, provider: "meet")
+        let plain = SessionMachineFixtures.audioOutput(appKey: "browser", observedAt: inside, provider: nil)
 
         // Правило 2: провайдер совпал и окно открыто.
         XCTAssertTrue(SessionMachineRules.relates(
-            signal: zoom, sessionMeetingId: event.id, sessionState: .awaitingSignal,
-            sessionProvider: "zoom", deadlines: deadlines, now: inside))
+            signal: zoom,
+            to: SessionMachineRules.SessionSide(
+                meetingId: event.id, state: .awaitingSignal, provider: "zoom", deadlines: deadlines
+            ),
+            now: inside))
         // ...и вторая половина оговорки: вне окна, но в `recording`/`stopping`.
         XCTAssertTrue(SessionMachineRules.relates(
-            signal: zoom, sessionMeetingId: event.id, sessionState: .recording,
-            sessionProvider: "zoom", deadlines: deadlines, now: outside))
+            signal: zoom,
+            to: SessionMachineRules.SessionSide(
+                meetingId: event.id, state: .recording, provider: "zoom", deadlines: deadlines
+            ),
+            now: outside))
         // Правило 4: провайдер не совпал ни с одним.
         XCTAssertFalse(SessionMachineRules.relates(
-            signal: meet, sessionMeetingId: event.id, sessionState: .awaitingSignal,
-            sessionProvider: "zoom", deadlines: deadlines, now: inside))
+            signal: meet,
+            to: SessionMachineRules.SessionSide(
+                meetingId: event.id, state: .awaitingSignal, provider: "zoom", deadlines: deadlines
+            ),
+            now: inside))
         // Правило 3: провайдера нет — решает окно.
         XCTAssertTrue(SessionMachineRules.relates(
-            signal: plain, sessionMeetingId: event.id, sessionState: .awaitingSignal,
-            sessionProvider: "zoom", deadlines: deadlines, now: inside))
+            signal: plain,
+            to: SessionMachineRules.SessionSide(
+                meetingId: event.id, state: .awaitingSignal, provider: "zoom", deadlines: deadlines
+            ),
+            now: inside))
         XCTAssertFalse(SessionMachineRules.relates(
-            signal: plain, sessionMeetingId: event.id, sessionState: .awaitingSignal,
-            sessionProvider: "zoom", deadlines: deadlines, now: outside),
+            signal: plain,
+            to: SessionMachineRules.SessionSide(
+                meetingId: event.id, state: .awaitingSignal, provider: "zoom", deadlines: deadlines
+            ),
+            now: outside),
             "окно закрыто — сигнал не относится и оценки не поднимает")
-    }
-
-    // MARK: - К24 (§5.4, «спор, а не выбор»)
-
-    /// Цель, отнесённая правилом 3 к двум сессиям сразу: ОДИН спрос `.whichMeeting`,
-    /// кандидаты по возрастанию, `sessionId` спроса — первый из них; ответа нет — КАЖДАЯ
-    /// уходит в `skipped` по СВОЕМУ `graceEndsAt`, а не по общему.
-    func test_k24_aDisputeRaisesOneWhichMeetingPromptAndEachSideKeepsItsOwnGrace() async throws {
-        let stand = try bench()
-        let early = try SessionMachineFixtures.event(provider: nil)
-        let late = try SessionMachineFixtures.event(start: moment.addingTimeInterval(300), provider: nil)
-        stand.seed(early)
-        stand.seed(late)
-
-        let now = moment.addingTimeInterval(400)
-        await stand.machine.start(now: now)
-        await stand.machine.tick(now: now)
-        let probe8 = await stand.machine.sessions().count
-        XCTAssertEqual(probe8, 2, "обе сессии живы")
-
-        stand.processes.emit(SessionMachineFixtures.audioOutput(appKey: "browser", provider: nil, observedAt: now))
-        await stand.awaitDelivery(1)
-        await stand.machine.tick(now: now)
-
-        let prompts = await stand.machine.prompts()
-        XCTAssertEqual(prompts.count, 1, "один спрос на спор, а не по одному на кандидата")
-        let prompt = try XCTUnwrap(prompts.first)
-        guard case let .whichMeeting(candidates) = prompt.kind else {
-            return XCTFail("вид спроса — `.whichMeeting`")
-        }
-        XCTAssertEqual(candidates.count, 2)
-        XCTAssertEqual(candidates, candidates.sorted { SessionMachineOrder.ascending($0, $1) }, "по возрастанию")
-        XCTAssertEqual(prompt.sessionId, candidates[0], "`sessionId` — первый кандидат")
-        XCTAssertNil(prompt.expiresAt)
-        for session in await stand.machine.sessions() {
-            XCTAssertNil(session.target, "до ответа спорная цель не принадлежит ни одной")
-        }
-
-        // Ответа нет: каждая уходит по СВОЕМУ сроку, а не по общему.
-        await stand.machine.tick(now: moment.addingTimeInterval(1200))
-        let afterFirstGrace = await stand.machine.sessions()
-        XCTAssertEqual(afterFirstGrace.count, 1, "ушла та, чей `graceEndsAt` наступил")
-        XCTAssertEqual(afterFirstGrace.first?.meetingId, late.id)
-
-        await stand.machine.tick(now: moment.addingTimeInterval(1500))
-        let probe9 = await stand.machine.sessions().isEmpty
-        XCTAssertTrue(probe9, "и вторая — в свой срок")
-        await stand.machine.stop()
-    }
-
-    // MARK: - К25 (§5.4, «правило 2 отнесло ровно к одной»)
-
-    func test_k25_rule2SinglesOutOneSessionAndNoPromptIsRaised() async throws {
-        let stand = try bench()
-        let zoomMeeting = try SessionMachineFixtures.event(provider: "zoom")
-        let meetMeeting = try SessionMachineFixtures.event(start: moment.addingTimeInterval(300), provider: "meet")
-        stand.seed(zoomMeeting)
-        stand.seed(meetMeeting)
-
-        let now = moment.addingTimeInterval(400)
-        await stand.machine.start(now: now)
-        await stand.machine.tick(now: now)
-        stand.processes.emit(SessionMachineFixtures.audioOutput(
-            appKey: "us.zoom.xos", provider: "zoom", observedAt: now))
-        await stand.awaitDelivery(1)
-        await stand.machine.tick(now: now)
-
-        let probe10 = await stand.machine.prompts().isEmpty
-        XCTAssertTrue(probe10, "спора нет: правило 2 отнесло цель к одной")
-        let owner = await stand.machine.sessions().first { $0.meetingId == zoomMeeting.id }
-        XCTAssertEqual(owner?.target?.appKey, "us.zoom.xos", "и она же держит цель")
-        let stranger = await stand.machine.sessions().first { $0.meetingId == meetMeeting.id }
-        XCTAssertNil(stranger?.target)
-        await stand.machine.stop()
-    }
-
-    /// Вход-цена, названный контрактом: два пересекающихся созвона ОДНОГО провайдера
-    /// спрашивают пользователя ВСЕГДА. Цена названа автором и «исправлению» не подлежит.
-    func test_k25_twoOverlappingMeetingsOfOneProviderAlwaysAsk() async throws {
-        let stand = try bench()
-        let first = try SessionMachineFixtures.event(provider: "zoom")
-        let second = try SessionMachineFixtures.event(start: moment.addingTimeInterval(300), provider: "zoom")
-        stand.seed(first)
-        stand.seed(second)
-
-        let now = moment.addingTimeInterval(400)
-        await stand.machine.start(now: now)
-        await stand.machine.tick(now: now)
-        stand.processes.emit(SessionMachineFixtures.audioOutput(
-            appKey: "us.zoom.xos", provider: "zoom", observedAt: now))
-        await stand.awaitDelivery(1)
-        await stand.machine.tick(now: now)
-
-        let probe11 = await stand.machine.prompts().count
-        XCTAssertEqual(probe11, 1, "правило 2 отнесло цель к обеим — спрос")
-        await stand.machine.stop()
     }
 }

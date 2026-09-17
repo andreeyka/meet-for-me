@@ -168,8 +168,8 @@ enum SessionMachineFixtures {
     /// Сигнал `clientAudioOutput` с группой — звучащая цель по §5.3.
     static func audioOutput(
         appKey: String,
-        provider: String? = "zoom",
         observedAt: Date,
+        provider: String? = "zoom",
         weight: Double = 0.8,
         pid: Int32 = 501
     ) -> MeetingSignal {
@@ -190,8 +190,8 @@ enum SessionMachineFixtures {
         kind: MeetingSignalKind,
         weight: Double,
         appKey: String?,
-        provider: String? = nil,
         observedAt: Date,
+        provider: String? = nil,
         pid: Int32 = 601
     ) -> MeetingSignal {
         MeetingSignal(
