@@ -158,7 +158,11 @@ final class SessionMachineSeamRowsTests: XCTestCase {
         XCTAssertEqual(before.target?.appKey, "us.zoom.xos", "хотя цель есть")
 
         let prompt = try unwrap(await stand.machine.prompts().first)
-        try await stand.machine.answer(promptId: prompt.promptId, .record(sessionId: prompt.sessionId), now: moment.addingTimeInterval(70))
+        try await stand.machine.answer(
+            promptId: prompt.promptId,
+            .record(sessionId: prompt.sessionId),
+            now: moment.addingTimeInterval(70)
+        )
         await stand.deliver(SessionMachineFixtures.audioOutput(
             appKey: "us.zoom.xos", observedAt: moment.addingTimeInterval(70)
         ))
