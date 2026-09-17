@@ -153,7 +153,22 @@ public struct JobSubmission: Codable, Equatable, Sendable {
 
 public enum JobOutcome: Equatable, Sendable {
     case success
-    case retry(after: TimeInterval, error: String)   // явная задержка от обработчика
+    /// Явная задержка от обработчика, в секундах.
+    ///
+    /// Контракт пишет здесь `TimeInterval`; тип тот же — `TimeInterval` есть
+    /// `typealias` к `Double`, — а написание другое, и это НЕ вольность.
+    /// Шаг «Символьный граф» разбирает USR: на macOS `TimeInterval` приходит
+    /// псевдонимом C/ObjC (`CFTimeInterval`), в базовый набор модулей не входит
+    /// и краснит барьер по модулю объявления — прогон CI 140, `DomainCore:
+    /// <C/ObjC> — TimeInterval`, по нарушению в каждом из двух пакетов. На Linux
+    /// того же прогона нарушений ноль: там это чистый псевдоним Foundation.
+    /// В дереве `57a2ca3` `TimeInterval` не стоял в публичной сигнатуре ни разу —
+    /// все его вхождения внутренние либо тестовые (свой прогон).
+    /// Ровно этот класс называют инвариант 9 C-005 и инвариант 19 C-010:
+    /// «`TimeInterval` и `CFTimeInterval` (есть `Double`)» — в разрешённые списки
+    /// не входят. Ответа правка не меняет ни на одном входе; контракт не тронут
+    /// ни символом. Находка — строка владельцу C-013, отчёт MEE-289.
+    case retry(after: Double, error: String)
     case permanentFailure(error: String)             // повторять бессмысленно
 }
 

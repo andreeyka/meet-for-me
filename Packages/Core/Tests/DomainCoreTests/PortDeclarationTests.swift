@@ -126,17 +126,26 @@ final class PortDeclarationTests: XCTestCase {
         "func stop() async"
     ]
 
-    /// Протокол → (файл исходника, ожидаемый блок контракта).
-    static let contracts: [(name: String, file: String, expected: [String])] = [
-        ("AudioCapturePort", "AudioCapturePort.swift", audioCapturePort),
-        ("CalendarPort", "CalendarPort.swift", calendarPort),
-        ("MeetingRepository", "Repositories.swift", meetingRepository),
-        ("RecordingRepository", "Repositories.swift", recordingRepository),
-        ("TranscriptRepository", "Repositories.swift", transcriptRepository),
-        ("JobHandler", "JobQueue.swift", jobHandler),
-        ("JobQueue", "JobQueue.swift", jobQueue),
-        ("SessionCoordinator", "SessionCoordinator.swift", sessionCoordinator),
-        ("Scheduler", "SessionCoordinator.swift", scheduler)
+    /// Протокол, файл его исходника и ожидаемый блок контракта.
+    ///
+    /// Тип, а не кортеж из трёх членов: `large_tuple` SwiftLint разрешает два,
+    /// и при `--strict` третий член — отказ работы (прогон CI 140).
+    struct PortContract {
+        let name: String
+        let file: String
+        let expected: [String]
+    }
+
+    static let contracts: [PortContract] = [
+        PortContract(name: "AudioCapturePort", file: "AudioCapturePort.swift", expected: audioCapturePort),
+        PortContract(name: "CalendarPort", file: "CalendarPort.swift", expected: calendarPort),
+        PortContract(name: "MeetingRepository", file: "Repositories.swift", expected: meetingRepository),
+        PortContract(name: "RecordingRepository", file: "Repositories.swift", expected: recordingRepository),
+        PortContract(name: "TranscriptRepository", file: "Repositories.swift", expected: transcriptRepository),
+        PortContract(name: "JobHandler", file: "JobQueue.swift", expected: jobHandler),
+        PortContract(name: "JobQueue", file: "JobQueue.swift", expected: jobQueue),
+        PortContract(name: "SessionCoordinator", file: "SessionCoordinator.swift", expected: sessionCoordinator),
+        PortContract(name: "Scheduler", file: "SessionCoordinator.swift", expected: scheduler)
     ]
 
     // MARK: - Состав
