@@ -260,26 +260,4 @@ final class SessionMachineRowsTests: XCTestCase {
         await byDeadline.machine.tick(now: moment.addingTimeInterval(1200))
         XCTAssertEqual(byDeadline.meetings.storedRecords.first?.status, .skipped, "знак `≥`, а не `>`")
     }
-
-    /// Различающий по цели: при звучащей цели в момент `graceEndsAt` строка 9 НЕ срабатывает.
-    /// Полный ответ пункта — «сессия уходит в `recording` строкой 8» — часть B задачи.
-    func test_k37_row9_doesNotFireWhileASoundingTargetIsPresent() async throws {
-        let (stand, _) = try bench()
-        let event = try SessionMachineFixtures.event()
-        stand.seed(event)
-
-        await stand.machine.start(now: moment.addingTimeInterval(60))
-        await stand.machine.tick(now: moment.addingTimeInterval(60))
-        stand.processes.emit(SessionMachineFixtures.audioOutput(
-            appKey: "us.zoom.xos", observedAt: moment.addingTimeInterval(1180)
-        ))
-        await stand.awaitDelivery(1)
-        await stand.machine.tick(now: moment.addingTimeInterval(1200))
-
-        let probe7 = await stand.machine.sessions().first
-        let live = try XCTUnwrap(probe7)
-        XCTAssertEqual(live.state, .awaitingSignal, "в `skipped` не ушла: клауза «цели нет» ложна")
-        XCTAssertEqual(live.target?.appKey, "us.zoom.xos")
-        await stand.machine.stop()
-    }
 }

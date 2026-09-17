@@ -109,11 +109,17 @@ final class SessionMachineTableTests: XCTestCase {
             processes: stand.processes,
             calendar: stand.calendar,
             meetings: stand.meetings,
+            recordings: stand.repositories.recordings,
+            transcripts: stand.repositories.transcripts,
             capture: stand.capture,
             queue: stand.queue,
             power: stand.power,
             settings: settings,
-            weights: try SessionMachineFixtures.weights()
+            weights: try SessionMachineFixtures.weights(),
+            recordingDirectory: SessionMachineFixtures.recordingDirectory,
+            captureInput: SessionMachineFixtures.captureInput,
+            systemFormat: SessionMachineFixtures.systemFormat,
+            micFormat: SessionMachineFixtures.micFormat
         )
         await restarted.tick(now: moment.addingTimeInterval(-200))  // всё ещё внутри окна
 

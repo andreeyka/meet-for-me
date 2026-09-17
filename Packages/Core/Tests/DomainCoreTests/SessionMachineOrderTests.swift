@@ -36,11 +36,15 @@ final class SessionMachineOrderTests: XCTestCase {
 
         let deadlines = SessionMachineRules.arm(for: event, settings: SessionMachineFixtures.settings())
         let past = deadlines.graceEndsAt.addingTimeInterval(1)
+        let input = SessionMachineRules.DeadlineInput(
+            state: .scheduled,
+            deadlines: deadlines,
+            eventGone: false,
+            gate: .closed,
+            silenceStopsAt: nil
+        )
         XCTAssertEqual(
-            SessionMachineRules.deadlineRow(
-                state: .scheduled, deadlines: deadlines, eventGone: false, hasSoundingTarget: false,
-                now: past
-            ),
+            SessionMachineRules.deadlineRow(input, now: past),
             .row3ScheduledToSkipped,
             "строка 2 на этом `now` ложна, и подходит только строка 3"
         )
@@ -194,9 +198,13 @@ final class SessionMachineOrderTests: XCTestCase {
         XCTAssertTrue(probe4, "контроль: без цели строка 9 срабатывает")
 
         // Вектор: сигнал приходит между двумя `tick` и применяется В ТОМ ЖЕ `tick`, что срок.
+        // ПОЛНЫМ ОТВЕТОМ (часть B): срок решается на новой цели, и побеждает строка 8 —
+        // сессия уходит в `recording`. Часть A наблюдала это ослабленно, «не ушла в
+        // `skipped`»: строки 8 у неё не было ни одной.
         let stand = try bench()
         let generated = try SessionMachineFixtures.event()
-            stand.seed(generated)
+        stand.seed(generated)
+        stand.allowCaptureStart()
         await stand.machine.start(now: moment.addingTimeInterval(60))
         await stand.machine.tick(now: moment.addingTimeInterval(60))
         stand.processes.emit(SessionMachineFixtures.audioOutput(
@@ -206,7 +214,7 @@ final class SessionMachineOrderTests: XCTestCase {
 
         let probe5 = await stand.machine.sessions().first
         let live = try XCTUnwrap(probe5)
-        XCTAssertEqual(live.state, .awaitingSignal, "срок решён на цели, пришедшей этим же `tick`")
+        XCTAssertEqual(live.state, .recording, "срок решён на цели, пришедшей этим же `tick`")
         XCTAssertEqual(live.target?.appKey, "us.zoom.xos")
         await stand.machine.stop()
     }

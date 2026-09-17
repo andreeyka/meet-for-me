@@ -27,9 +27,16 @@ extension SessionMachine {
                 remember(signal)
             case let .calendar(change):
                 apply(change)
-            case .capture, .job, .power:
-                // Ни одна строка таблицы части A этих входов не называет: состояния не
-                // меняются и ошибки не даётся (инвариант 2, тотальность).
+            case let .capture(event):
+                // Событие КЛАДЁТСЯ, а переход по нему читается фазой сроков в порядке
+                // строк §7: разбор и цена — в шапке `SessionMachineProcessing.swift`.
+                arrivedCapture.append(event)
+            case let .job(event):
+                arrivedJobs.append(event)
+            case .power:
+                // `willSleep` записи не останавливает и состояния не меняет (§9.3, К69);
+                // `didWake` зовёт `reschedule(now:)` — это `Scheduler`, часть C. Оба входа
+                // состояния не меняют и ошибки не дают (инвариант 2, тотальность).
                 continue
             }
         }
@@ -101,7 +108,10 @@ extension SessionMachine {
                 updatedAt: now,
                 event: event,
                 promptId: nil,
-                recordAnswered: false
+                recordAnswered: false,
+                adHocAppKey: nil,
+                lastTargetObservedAt: nil,
+                powerToken: nil
             )
             opened.append(identifier)
         }
@@ -139,14 +149,45 @@ extension SessionMachine {
             // единственное чтение, при котором обе половины §5.4 истинны разом: «до ответа
             // не записывает ни одна» и «нет ответа — каждая уходит в `skipped` по своему
             // `graceEndsAt`» (строка 9 читает клаузу «звучащей цели нет»).
-            session.target = SessionMachineRules.soundingTarget(
+            let chosen = SessionMachineRules.soundingTargetSignal(
                 among: related.filter { !disputed.contains($0.group?.appKey ?? "") },
                 sessionProvider: session.event?.conference?.provider
             )
+            session.target = chosen?.group ?? adHocTarget(for: session, now: now)
+            if let observedAt = chosen?.observedAt {
+                session.lastTargetObservedAt = observedAt
+            } else if let appKey = session.target?.appKey,
+                      let signal = actualSignal(appKey: appKey, now: now) {
+                session.lastTargetObservedAt = signal.observedAt
+            }
             session.estimate = SessionMachineRules.estimate(over: related)
             session.updatedAt = now
             store[identifier] = session
         }
+    }
+
+    /// Цель ad-hoc-сессии до входа в запись.
+    ///
+    /// НАЗВАНО, А НЕ УМОЛЧАНО: правила §5.4 не относят к такой сессии ни одного сигнала —
+    /// правила 2 и 3 требуют либо окна события (`armAt ≤ now ≤ graceEndsAt`), которого у
+    /// ad-hoc нет, либо состояния из `{recording, stopping}`, в которое она ещё не вошла.
+    /// То есть §5.4 и §8.6 отвечают на разные вопросы, а не спорят: §5.4 распределяет
+    /// сигналы между сессиями СОБЫТИЙ, а ad-hoc есть вход для цели, которую он никому не
+    /// отдал (правило 4). Цель такой сессии поэтому держится её `appKey` и проверяется на
+    /// актуальность прямо — ровно то, что §8.6 называет причиной спроса.
+    private func adHocTarget(for session: SessionMachineSession, now: Date) -> ProcessGroup? {
+        guard session.origin == .adHoc, let appKey = session.adHocAppKey else { return nil }
+        return actualSignal(appKey: appKey, now: now)?.group
+    }
+
+    /// То, что правило §5.4 читает у сессии.
+    func side(of session: SessionMachineSession) -> SessionMachineRules.SessionSide {
+        SessionMachineRules.SessionSide(
+            meetingId: session.meetingId,
+            state: session.state,
+            provider: session.event?.conference?.provider,
+            deadlines: session.event.map { SessionMachineRules.arm(for: $0, settings: settings) }
+        )
     }
 
     /// Сигналы, отнесённые к сессии (§5.4) и актуальные (C-009 §1), вместе с её собственным
@@ -175,134 +216,5 @@ extension SessionMachine {
             related.append(own)
         }
         return related
-    }
-
-    // MARK: - Фаза 3: сроки в порядке строк §7
-
-    /// Строки проверяются до неподвижной точки: срок, пройденный во сне, исполняется ПЕРВЫМ
-    /// `tick` после него, а не по одному переходу на `tick` (инвариант 14, К11, К31).
-    /// Предел обхода — число состояний перечисления: больше переходов подряд одной сессии
-    /// таблица дать не может, а цикла строки части A не образуют (строка 5 уводит в
-    /// `scheduled`, откуда строка 2 при том же `now` ложна).
-    func runDeadlines(now: Date) async {
-        for identifier in store.keys.sorted(by: SessionMachineOrder.ascending) {
-            var steps = 0
-            while steps < 9 {
-                steps += 1
-                guard let session = store[identifier], !session.state.isTerminalSession else { break }
-                let deadlines = session.event.map { SessionMachineRules.arm(for: $0, settings: settings) }
-                let gone = isGone(session)
-                guard let row = SessionMachineRules.deadlineRow(
-                    state: session.state,
-                    deadlines: deadlines,
-                    eventGone: gone,
-                    hasSoundingTarget: session.target != nil,
-                    now: now
-                ) else { break }
-                do {
-                    try await transition(identifier, to: row.target, now: now)
-                } catch {
-                    // Исход не записан — значит перехода не было (инвариант 18). Срок
-                    // наступит на следующем `tick`: терять решение молча дороже, чем ждать.
-                    break
-                }
-            }
-        }
-    }
-
-    func isGone(_ session: SessionMachineSession) -> Bool {
-        guard let meetingId = session.meetingId else { return false }
-        if deletedEvents.contains(meetingId) { return true }
-        return knownEvents[meetingId]?.isCancelled ?? session.event?.isCancelled ?? false
-    }
-
-    // MARK: - §8.2: спрос при политике `.ask`
-
-    /// Спрос поднимается в момент `askAt`, а у сессии, заведённой при уже прошедшем `askAt`,
-    /// — в момент заведения: срок не «догоняется» и не пропускается.
-    func raiseDuePrompts(now: Date) {
-        guard settings.recordingPolicy == .ask else { return }
-        for identifier in store.keys.sorted(by: SessionMachineOrder.ascending) {
-            guard var session = store[identifier] else { continue }
-            guard !session.state.isTerminalSession, session.promptId == nil, !session.recordAnswered else {
-                continue
-            }
-            guard let event = session.event else { continue }
-            guard let askAt = SessionMachineRules.arm(for: event, settings: settings).askAt else { continue }
-            guard now >= askAt else { continue }
-
-            let prompt = SessionPrompt(
-                promptId: UUID(),
-                sessionId: identifier,
-                kind: .recordThisMeeting,
-                raisedAt: now,
-                expiresAt: nil
-            )
-            session.promptId = prompt.promptId
-            store[identifier] = session
-            raised[prompt.promptId] = (prompt: prompt, isWithdrawn: false)
-            promptOrder.append(prompt.promptId)
-            hub.publish(.promptRaised(prompt))
-        }
-    }
-
-    // MARK: - §5.4: спор о звучащей цели
-
-    /// Цели, отнесённые сразу к двум и более живым сессиям: `appKey` → кандидаты по
-    /// возрастанию `sessionId`. Правило 2, отнёсшее цель ровно к одной сессии, спора не
-    /// даёт — счёт отнесённых его и различает.
-    func contestedTargets(now: Date) -> [String: [UUID]] {
-        let live = store.values.filter { !$0.state.isTerminalSession }
-        var found: [String: [UUID]] = [:]
-        for signal in signals.values {
-            guard signal.kind == .clientAudioOutput, let appKey = signal.group?.appKey else { continue }
-            guard SessionMachineRules.isActual(signal, now: now, weights: weights) else { continue }
-            let related = live.filter { session in
-                SessionMachineRules.relates(
-                    signal: signal,
-                    to: SessionMachineRules.SessionSide(
-                        meetingId: session.meetingId,
-                        state: session.state,
-                        provider: session.event?.conference?.provider,
-                        deadlines: session.event.map { SessionMachineRules.arm(for: $0, settings: settings) }
-                    ),
-                    now: now
-                )
-            }
-            if related.count >= 2 {
-                found[appKey] = related.map(\.sessionId).sorted(by: SessionMachineOrder.ascending)
-            }
-        }
-        return found
-    }
-
-    /// Спрос `.whichMeeting` — один на спор, а не по одному на кандидата. Снимается сам,
-    /// когда спор разошёлся: цель перестала быть актуальной либо отнеслась к одной сессии.
-    func updateDisputePrompts(now: Date) {
-        for (appKey, promptId) in Array(disputes) where contested[appKey] == nil {
-            withdrawPrompt(promptId)
-            disputes[appKey] = nil
-        }
-        for (appKey, candidates) in contested.sorted(by: { $0.key < $1.key }) where disputes[appKey] == nil {
-            guard let first = candidates.first else { continue }
-            let prompt = SessionPrompt(
-                promptId: UUID(),
-                sessionId: first,
-                kind: .whichMeeting(candidates: candidates),
-                raisedAt: now,
-                expiresAt: nil
-            )
-            disputes[appKey] = prompt.promptId
-            raised[prompt.promptId] = (prompt: prompt, isWithdrawn: false)
-            promptOrder.append(prompt.promptId)
-            hub.publish(.promptRaised(prompt))
-        }
-    }
-
-    func withdrawPrompt(_ promptId: UUID) {
-        guard var stored = raised[promptId], !stored.isWithdrawn else { return }
-        stored.isWithdrawn = true
-        raised[promptId] = stored
-        hub.publish(.promptWithdrawn(promptId: promptId))
     }
 }
