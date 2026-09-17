@@ -7,8 +7,9 @@
 //  КРАСЕН НА ВЕРНОЙ реализации. Здесь поданы вторые половины — и вместе с ними три входа,
 //  на которых ответ сменило издание C-018 v5 (клауза строки 9 читает три причины, а не одну).
 //
-//  Файл отдельный ещё и по механическому доводу: линт считает тело типа длиннее двухсот
-//  пятидесяти строк нарушением, а оба файла-донора к нему подошли вплотную.
+//  Файл отдельный ещё и по механическому доводу: линт считает файл длиннее четырёхсот строк
+//  нарушением (`file_length`), а `SessionMachineRowsTests.swift` — 263 строки, и эти
+//  векторы увели бы его за предел.
 
 import Foundation
 import XCTest
@@ -110,6 +111,63 @@ final class SessionMachineSeamRowsTests: XCTestCase {
             XCTAssertEqual(stand.meetings.storedRecords.first?.status, .skipped)
             await stand.machine.stop()
         }
+    }
+
+    /// ТРЕТИЙ ВХОД v5, И ДО НЕЁ ОН НЕ БЫЛ ПОКРЫТ НИЧЕМ: цель есть, она актуальна, политика
+    /// её отдаёт — и всё же строка 8 не срабатывает, потому что цель ЗАНЯТА чужой записью
+    /// (§7.1). В v4 такая сессия не уходила ни одной строкой и висела в `awaitingSignal`
+    /// навсегда; v5 велит ей уйти в `skipped` в момент `graceEndsAt`.
+    ///
+    /// ЗАНИМАЕТ ЦЕЛЬ AD-HOC-СЕССИЯ, И ЭТО НЕСУЩЕЕ: две сессии событий одного провайдера с
+    /// пересекающимися окнами дают не занятость, а СПОР (§5.4) — цель не становится
+    /// звучащей ни у одной, и `skipped` пришёл бы по клаузе «цели нет», то есть мимо
+    /// проверяемого входа. К ad-hoc-держателю сигнал с провайдером не относится ни одним
+    /// правилом §5.4, и спора нет: цель занята по-настоящему.
+    ///
+    /// ЦЕЛЬ ПОДАЁТСЯ ЗАНОВО ПЕРЕД КАЖДЫМ `tick` по той же причине, что и в К52: сигнал
+    /// старше `signalTtlSeconds` не актуален, и вход пункта им не подан.
+    func test_k37_row9_firesOnATargetTakenByAnotherRecording() async throws {
+        let (stand, settings) = try bench()
+        let event = try SessionMachineFixtures.event(start: moment.addingTimeInterval(900))
+        stand.seed(event)
+        stand.allowCaptureStart()
+        let deadlines = SessionMachineRules.arm(for: event, settings: settings)
+
+        // Держатель: цель звучит ДО окна события (`armAt` — `moment + 300`), и потому не
+        // отнесена к его сессии ни одним правилом — заводится ad-hoc-сессия (§8.6).
+        await stand.machine.start(now: moment)
+        await stand.machine.tick(now: moment)
+        await stand.deliver(SessionMachineFixtures.audioOutput(appKey: "us.zoom.xos", observedAt: moment))
+        await stand.machine.tick(now: moment)
+        let prompt = try unwrap(await stand.machine.prompts().first)
+        try await stand.machine.answer(
+            promptId: prompt.promptId,
+            .record(sessionId: prompt.sessionId),
+            now: moment
+        )
+        let holder = try unwrap(await stand.machine.session(id: prompt.sessionId))
+        XCTAssertEqual(holder.state, .recording, "цель занята идущей записью")
+
+        // Окно сессии события открыто, цель у неё есть и актуальна — и записи нет.
+        await stand.deliver(SessionMachineFixtures.audioOutput(
+            appKey: "us.zoom.xos", observedAt: moment.addingTimeInterval(990)
+        ))
+        await stand.machine.tick(now: moment.addingTimeInterval(1000))
+        let waiting = try unwrap(await stand.machine.sessions().first { $0.meetingId == event.id })
+        XCTAssertEqual(waiting.state, .awaitingSignal, "строка 8 не срабатывает: цель занята")
+        XCTAssertEqual(waiting.target?.appKey, "us.zoom.xos", "хотя цель у неё есть и актуальна")
+
+        // Срок: v4 не уводил её никуда, v5 уводит в `skipped`.
+        await stand.deliver(SessionMachineFixtures.audioOutput(
+            appKey: "us.zoom.xos", observedAt: deadlines.graceEndsAt.addingTimeInterval(-10)
+        ))
+        await stand.machine.tick(now: deadlines.graceEndsAt)
+        let gone = await stand.machine.session(id: waiting.sessionId)
+        XCTAssertEqual(gone?.state, .skipped, "в `graceEndsAt` уходит в `skipped` по клаузе занятости")
+        XCTAssertEqual(stand.meetings.storedRecords.first?.status, .skipped)
+        let stillRecording = try unwrap(await stand.machine.session(id: prompt.sessionId))
+        XCTAssertEqual(stillRecording.state, .recording, "а держатель пишет дальше")
+        await stand.machine.stop()
     }
 
     // MARK: - К49 (§8.1, вторая половина) и К51 (§8.2, `.ask`)
