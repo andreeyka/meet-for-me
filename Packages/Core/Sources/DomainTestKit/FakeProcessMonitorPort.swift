@@ -16,6 +16,17 @@
 //  отсутствие: ФЕЙК НЕ ЭТАЛОН ПОВЕДЕНИЯ ПОРТА. Из того, что он отдаёт, не следует ни одного
 //  разрешения реализатору `detector` — поведение порта описывает контракт, и только он.
 //
+//  MEE-290 ДОБАВИЛ СЮДА СЧЁТЧИК ВЫЗОВОВ `signals()`, и ни одного ответа это не меняет.
+//  Он условие `О` плана MEE-288 §2 и нужен К13, который без него не исполняется ничем:
+//  реализацию, подписывающуюся на `signals()` при заведении каждой сессии, красит только
+//  счёт подписок — поведение обеих сессий на фейке, отдающем всем подписчикам одно и то же,
+//  совпадает. Текст контракта C-009 не тронут ни символом: §«Фейк для тестов» называет счёт
+//  `startObserving`/`stopObserving` и счёта подписок не называет и не запрещает.
+//
+//  ЖУРНАЛА ВЫЗОВОВ У ЭТОГО ФЕЙКА НЕТ, И ЭТО НЕ ПРОПУСК: условие `Н` перечисляет фейки
+//  репозиториев C-010, очереди C-013, захвата C-004 и питания C-008 — наблюдения C-009 в нём
+//  нет, и ни один пункт плана порядка вызовов этого порта не требует.
+//
 //  `@unchecked Sendable` с замком, а не актор: `ProcessMonitorPort` объявлен `: Sendable`,
 //  а его методы — не `async` целиком (`signals()` синхронен), и актором протокол не покрыть.
 
@@ -31,6 +42,7 @@ public final class FakeProcessMonitorPort: ProcessMonitorPort, @unchecked Sendab
     private var startFailure: ProcessMonitorError?
     private var startCalls = 0
     private var stopCalls = 0
+    private var signalsCalls = 0
 
     public init() {}
 
@@ -84,6 +96,19 @@ public final class FakeProcessMonitorPort: ProcessMonitorPort, @unchecked Sendab
         locked { stopCalls }
     }
 
+    /// Счётчик вызовов `signals()` — условие `О` плана MEE-288 §2, нужен К13.
+    ///
+    /// **Зачем он, если поведение подписчиков и так наблюдаемо.** К13 красит реализацию,
+    /// подписывающуюся на `signals()` ПРИ ЗАВЕДЕНИИ КАЖДОЙ СЕССИИ, — и красит её ТОЛЬКО
+    /// этим счётчиком: поведение двух сессий на фейке, отдающем всем подписчикам одно и то
+    /// же, совпадает, и различить одну подписку от двух больше нечем.
+    ///
+    /// **Граница названа:** счётчик считает вызовы `signals()`, а не число ЖИВЫХ
+    /// подписок. Подписчик, бросивший поток, из счёта не уходит — его тут и не считают.
+    public var signalsCallCount: Int {
+        locked { signalsCalls }
+    }
+
     // MARK: - ProcessMonitorPort
 
     public func audioProcesses() async throws -> [AudioProcess] {
@@ -98,7 +123,8 @@ public final class FakeProcessMonitorPort: ProcessMonitorPort, @unchecked Sendab
     }
 
     public func signals() -> AsyncStream<MeetingSignal> {
-        AsyncStream { continuation in
+        locked { signalsCalls += 1 }
+        return AsyncStream { continuation in
             locked { continuations.append(continuation) }
         }
     }
