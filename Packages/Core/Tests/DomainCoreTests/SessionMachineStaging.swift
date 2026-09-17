@@ -30,6 +30,10 @@ struct SessionMachineStand {
         let event = try SessionMachineFixtures.event()
         stand.seed(event)
         stand.allowCaptureStart()
+        // Исход `stop()` задан заранее: строка 10 зовёт его сама, и незаданный исход увёл бы
+        // сессию строкой 13 в `failed` вместо `stopping`. Тест, которому нужен отказ
+        // `stop()`, задаёт его сам (`failStop`) — К41.
+        stand.capture.setStopManifest(RecordingManifestFixtures.unfinished)
         let ids = [UUID(), UUID(), UUID(), UUID()]
         stand.queue.setNextSubmitIds(ids)
 
@@ -54,7 +58,6 @@ struct SessionMachineStand {
     /// затем `CaptureEvent.stopped(manifest)` с манифестом ЭТОЙ записи.
     static func processing(from moment: Date) async throws -> SessionMachineStand {
         let staged = try await recording(from: moment)
-        staged.stand.capture.setStopManifest(RecordingManifestFixtures.unfinished)
         try await staged.stand.machine.stopRecording(
             recordingId: staged.recordingId, now: moment.addingTimeInterval(70)
         )

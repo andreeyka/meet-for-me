@@ -251,7 +251,8 @@ final class SessionMachineStopTests: XCTestCase {
         let recordingId = staged.recordingId
         byThrow.capture.failStop(with: .systemUnavailable(message: "остановить нечем"))
         try await byThrow.machine.stopRecording(recordingId: recordingId, now: moment.addingTimeInterval(70))
-        let failed = try unwrap(await byThrow.machine.sessions().first)
+        // Сессия терминальна, и `sessions()` её уже не отдаёт: читается она по `id`.
+        let failed = try unwrap(await byThrow.machine.session(id: staged.sessionId))
         XCTAssertEqual(failed.state, .failed, "`stop()` бросил")
         XCTAssertEqual(byThrow.queue.submissions.count, 0, "ноль `submit` за прогон")
         await byThrow.machine.stop()
@@ -263,7 +264,7 @@ final class SessionMachineStopTests: XCTestCase {
         try await byEvent.machine.stopRecording(recordingId: secondId, now: moment.addingTimeInterval(70))
         await byEvent.deliver(CaptureEvent.failed(.directoryUnusable(message: "каталог")))
         await byEvent.machine.tick(now: moment.addingTimeInterval(80))
-        let broken = try unwrap(await byEvent.machine.sessions().first)
+        let broken = try unwrap(await byEvent.machine.session(id: stagedSecond.sessionId))
         XCTAssertEqual(broken.state, .failed, "`CaptureEvent.failed` в `stopping`")
         XCTAssertEqual(byEvent.queue.submissions.count, 0)
         await byEvent.machine.stop()
