@@ -212,7 +212,7 @@ extension SessionMachine {
             raisedAt: now,
             expiresAt: nil
         )
-        let session = SessionMachineSession(
+        var session = SessionMachineSession(
             sessionId: identifier,
             origin: .adHoc,
             meetingId: nil,
@@ -231,6 +231,19 @@ extension SessionMachine {
             powerToken: nil
         )
         store[identifier] = session
+        // ОЦЕНКА СЧИТАЕТСЯ СРАЗУ, А НЕ СЛЕДУЮЩИМ `tick`, И ЭТО ЧАСТЬ ОТВЕТА К26 (вид ii).
+        // Цель этой сессии назначена ЭТИМ ЖЕ ходом (§5.4, правило `1а`), и снимок, ушедший
+        // наружу с нулевой оценкой, был бы ложен на свой собственный момент: §6 считает её
+        // над сигналами, отнесёнными к сессии, а отнесённый у неё уже есть. Фаза 2 хода
+        // времени пересчитает её на следующем `tick` тем же правилом — двух ответов здесь
+        // нет, есть один и тот же, посчитанный вовремя.
+        if var opened = store[identifier] {
+            opened.estimate = SessionMachineRules.estimate(
+                over: relatedSignals(for: opened, now: now).map(\.signal)
+            )
+            store[identifier] = opened
+            session = opened
+        }
         // СНИМОК ПУБЛИКУЕТ ТОЛЬКО СТРОКА 1в, И ЭТО ЧАСТЬ ОТВЕТА ОБОИХ ПУНКТОВ. К95 требует
         // у строки 1в «снимков ровно один, и его `state` равен `awaitingSignal`»; К44
         // требует у строки 16 «снимков ровно один, его `state` равен `recording`». Строка
