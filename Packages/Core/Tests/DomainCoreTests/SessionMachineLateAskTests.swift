@@ -164,7 +164,8 @@ final class SessionMachineLateAskTests: XCTestCase {
 
         await stand.machine.start(now: late)
         await stand.machine.tick(now: late)
-        XCTAssertEqual(await stand.machine.sessions().count, 1, "оснастка: заведена поздно")
+        let opened = await stand.machine.sessions()
+        XCTAssertEqual(opened.count, 1, "оснастка: заведена поздно")
 
         // Вектор непустоты: до своего срока сессия жива.
         await stand.machine.tick(now: arm.graceEndsAt.addingTimeInterval(-1))
