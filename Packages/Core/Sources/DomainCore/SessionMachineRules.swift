@@ -157,6 +157,30 @@ enum SessionMachineRules {
         /// `appKey` цели, НАЗНАЧЕННЫЙ ad-hoc-сессии при заведении (§8.6) — предмет правила
         /// `1а`. У `origin == .scheduled` всегда `nil`.
         let adHocAppKey: String?
+
+        /// УМОЛЧАНИЯ У ДВУХ ПОЛЕЙ ПРАВИЛА `1а` — РЕШЕНИЕ, И ОНО НАЗВАНО. `origin` по
+        /// умолчанию `.scheduled`, `adHocAppKey` — `nil`: то есть сторона, собранная без
+        /// них, есть сессия события, к которой правило `1а` не применяется ни на одном
+        /// входе. **Довод:** вызовов в дереве два класса — `side(of:)`, который заполняет
+        /// оба поля всегда, и векторы §5.4, проверяющие правила 1, 2 и 3 на стороне с
+        /// событием; вторым умолчание отвечает ровно то, чего они и хотят. **Цена названа:**
+        /// сторона ad-hoc, собранная вручную и забывшая `adHocAppKey`, правила `1а` не
+        /// получит молча — потому `side(of:)` и объявлен одним местом на все три чтения.
+        init(
+            meetingId: UUID?,
+            origin: SessionOrigin = .scheduled,
+            state: MeetingStatus,
+            provider: String?,
+            deadlines: ScheduledArm?,
+            adHocAppKey: String? = nil
+        ) {
+            self.meetingId = meetingId
+            self.origin = origin
+            self.state = state
+            self.provider = provider
+            self.deadlines = deadlines
+            self.adHocAppKey = adHocAppKey
+        }
     }
 
     /// Правило §5.4, отнёсшее сигнал к сессии; `nil` — правило 4, не отнесло ни одно.
