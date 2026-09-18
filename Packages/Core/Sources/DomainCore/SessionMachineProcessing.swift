@@ -22,6 +22,31 @@
 
 import Foundation
 
+extension JobEvent {
+
+    /// Номер задачи, которую несёт событие очереди; `nil` — событие его не несёт.
+    /// Нужен затем, чтобы отобрать события ЦЕПОЧКИ ЭТОЙ СЕССИИ прежде чтения строк: без
+    /// отбора «порядок таблицы» пришлось бы писать в каждой строке порознь.
+    var chainJobId: UUID? {
+        switch self {
+        case let .submitted(jobId, _):
+            return jobId
+        case let .started(jobId, _):
+            return jobId
+        case let .progressed(jobId, _):
+            return jobId
+        case let .succeeded(jobId, _):
+            return jobId
+        case let .failed(jobId, _, _, _):
+            return jobId
+        case let .cancelled(jobId, _):
+            return jobId
+        case let .blocked(jobId, _, _):
+            return jobId
+        }
+    }
+}
+
 extension SessionMachine {
 
     // MARK: - Фаза сроков: строки 11—15 в порядке таблицы
@@ -97,30 +122,54 @@ extension SessionMachine {
 
     /// Строки 14 и 15 в порядке таблицы и продолжение цепочки §8.7.
     ///
+    /// ПОРЯДОК ЗДЕСЬ — ПОРЯДОК ТАБЛИЦЫ, А НЕ ПОРЯДОК ПРИХОДА, И ЭТО ПРАВКА ЧАСТИ C. §7
+    /// говорит дословно: «строки проверяются в порядке таблицы: первое подошедшее условие
+    /// побеждает», а 14 стоит раньше 15. Часть B читала `arrivedJobs` ОДНИМ проходом и
+    /// возвращалась на первом подошедшем событии — то есть при `succeeded` задачи
+    /// `attribute` и `cancelled` другой задачи цепочки в ОДИН `tick` побеждала та строка,
+    /// чьё событие пришло раньше. Вход этот назван К45 пересечением (ix) поимённо, и ответ
+    /// у него один: `ready`, строка 14. Ни один вектор части B его не подавал.
+    ///
     /// `blocked` — НЕ отказ: сессия остаётся в `processing`, следующая задача не ставится,
     /// `setStatus` не зовётся (К64). `failed(willRetry: true)` — то же: очередь собирается
     /// повторить, и уводить встречу в `failed` значило бы похоронить её раньше очереди.
     /// Событие чужой задачи не делает ничего: `jobId`, которого машина не ставила, в
     /// `chainJobs` не лежит — на этом стоит «на чужой `attribute` не происходит ничего».
     private func applyChainEvents(to session: SessionMachineSession, now: Date) async throws -> Bool {
-        for event in arrivedJobs {
+        let identifier = session.sessionId
+        let mine = arrivedJobs.filter { event in
+            guard let jobId = event.chainJobId else { return false }
+            return chainJobs[jobId] == identifier
+        }
+
+        // Строка 14.
+        if mine.contains(where: { event in
+            if case let .succeeded(_, type) = event { return type == .attribute }
+            return false
+        }) {
+            try await transition(identifier, to: .ready, now: now)
+            return true
+        }
+
+        // Строка 15.
+        if mine.contains(where: { event in
             switch event {
-            case let .succeeded(jobId, type) where chainJobs[jobId] == session.sessionId:
-                if type == .attribute {
-                    try await transition(session.sessionId, to: .ready, now: now)   // строка 14
-                    return true
-                }
-                await continueChain(after: jobId, type: type, for: session.sessionId, now: now)
-            case let .failed(jobId, _, _, willRetry)
-                where !willRetry && chainJobs[jobId] == session.sessionId:
-                try await transition(session.sessionId, to: .failed, now: now)      // строка 15
-                return true
-            case let .cancelled(jobId, _) where chainJobs[jobId] == session.sessionId:
-                try await transition(session.sessionId, to: .failed, now: now)      // строка 15
+            case let .failed(_, _, _, willRetry):
+                return !willRetry
+            case .cancelled:
                 return true
             default:
-                continue
+                return false
             }
+        }) {
+            try await transition(identifier, to: .failed, now: now)
+            return true
+        }
+
+        // Ни одна строка не подошла — цепочка идёт дальше по `succeeded` предыдущей (§8.7).
+        for event in mine {
+            guard case let .succeeded(jobId, type) = event else { continue }
+            await continueChain(after: jobId, type: type, for: identifier, now: now)
         }
         return false
     }
