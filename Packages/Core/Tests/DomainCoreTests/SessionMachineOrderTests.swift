@@ -159,10 +159,24 @@ final class SessionMachineOrderTests: XCTestCase {
         }
     }
 
-    /// Вид 2: `start(now:)` на всяком содержимом хранилища. Часть A сессий вне таблицы не
-    /// заводит НИ ОДНОЙ — восстановление §10 есть часть C задачи, и «ровно два способа»
-    /// проверяется там. Здесь проверяется ровно то, что верно сегодня: их ноль.
-    func test_k46_kind2_startOpensNoSessionOutsideTheTableInThisPart() async throws {
+    /// Вид 2: `start(now:)` на всяком содержимом хранилища — СЧЁТ ЗАВЕДЕНИЙ ВНЕ ТАБЛИЦЫ.
+    ///
+    /// **ВЕКТОР ПЕРЕПИСАН ЧАСТЬЮ C, И ЭТО НЕ ПРАВКА ПУНКТА, А ЕГО ИСПОЛНЕНИЕ.** Прежняя
+    /// редакция этого теста требовала, чтобы `start(now:)` не заводил НИ ОДНОЙ сессии, и
+    /// говорила об этом прямо: «часть A сессий вне таблицы не заводит ни одной —
+    /// восстановление §10 есть часть C задачи». То есть счёт у неё был **ноль**, тогда как
+    /// К46 требует **двух** и запрещает третий; на частях A и B пункт был частичным, и
+    /// приёмка [MEE-300](https://linear.app/easypto/issue/MEE-300) назвала его таким с
+    /// адресом части C. Здесь он закрывается.
+    ///
+    /// **Два способа — и оба в перечне А §10:** вход в `processing` и вход в `failed`.
+    /// Заведение по §9.1 (строки 1, 1а, 1б) заведением ВНЕ таблицы не является, и перечень
+    /// Б третьего способа не заводит — встрече в `recording` при нулевом числе записей
+    /// машина ставит `failed` и сессии не заводит (К78, издание v7).
+    ///
+    /// Разбор каждого способа и оба различающих вектора — `SessionMachineRecoveryTests` и
+    /// `SessionMachineRestoreTests`; здесь стоит СЧЁТ, ради которого пункт и написан.
+    func test_k46_kind2_startOpensSessionsOutsideTheTableInExactlyTwoWays() async throws {
         for status in [
             MeetingStatus.scheduled, .armed, .awaitingSignal, .recording,
             .stopping, .processing, .ready, .failed, .skipped
@@ -172,12 +186,60 @@ final class SessionMachineOrderTests: XCTestCase {
             stand.seed(event, status: status)
 
             await stand.machine.start(now: moment)
-            let probe3 = await stand.machine.sessions().isEmpty
-            XCTAssertTrue(probe3,
-                "`start(now:)` при хранимом \(status) сессий не заводит"
-            )
+            let live = await stand.machine.sessions()
+            let openable: Set<MeetingStatus> = [.scheduled, .armed, .awaitingSignal]
+            if openable.contains(status) {
+                // Заведение по §9.1 — строками таблицы, а не вне её.
+                XCTAssertEqual(live.count, 1, "\(status): заведено строкой 1, 1а либо 1б")
+            } else {
+                XCTAssertTrue(live.isEmpty, "\(status): записей нет — заведений вне таблицы ноль")
+            }
             await stand.machine.stop()
         }
+    }
+
+    /// Счёт заведений вне таблицы — РОВНО ДВА, и оба в перечне А: вход в `processing` и
+    /// вход в `failed`. Третьего нет ни одного, и перебор показывает это отсутствием.
+    func test_k46_kind2_theTwoOutsideTheTableEntriesAndNoThird() async throws {
+        // Способ 1: `recover` удался — вход в `processing`.
+        let first = try bench()
+        let firstId = UUID()
+        let goodManifest = try SessionMachineFixtures.manifest(recordingId: firstId, meetingId: nil)
+        first.repositories.recordings.seed([
+            RecordingRecord(manifest: goodManifest, status: .recording)
+        ])
+        first.capture.setRecoverManifest(goodManifest)
+        await first.machine.start(now: moment)
+        let opened = await first.machine.sessions()
+        XCTAssertEqual(opened.first?.state, .processing, "способ 1 — вход в `processing`")
+        await first.machine.stop()
+
+        // Способ 2: `recover` бросил — вход в `failed`.
+        let second = try bench()
+        let secondId = UUID()
+        let badManifest = try SessionMachineFixtures.manifest(recordingId: secondId, meetingId: nil)
+        second.repositories.recordings.seed([
+            RecordingRecord(manifest: badManifest, status: .recording)
+        ])
+        second.capture.failRecover(with: .recoveryFailed(
+            directoryName: secondId.uuidString, message: "вектор"
+        ))
+        let stream = second.machine.changes()
+        await second.machine.start(now: moment)
+        let published = await collect(stream, count: 1)
+        XCTAssertEqual(published.first?.session?.state, .failed, "способ 2 — вход в `failed`")
+        await second.machine.stop()
+
+        // Третьего нет: встреча в `recording` при НУЛЕВОМ числе записей — пара, которой
+        // перебор по двум перечислениям не даёт, — даёт `failed` встрече и НИ ОДНОЙ сессии.
+        let third = try bench()
+        let event = try SessionMachineFixtures.event()
+        third.seed(event, status: .recording)
+        await third.machine.start(now: moment)
+        let none = await third.machine.sessions()
+        XCTAssertTrue(none.isEmpty, "третьего способа нет ни одного")
+        XCTAssertEqual(third.meetings.storedRecords.first?.status, .failed, "и статус ложен")
+        await third.machine.stop()
     }
 
     // MARK: - К86 («Поведение», порядок фаз в один `tick`)

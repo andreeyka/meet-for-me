@@ -7,6 +7,14 @@
 //  механические: `--strict` линта считает файл длиннее четырёхсот строк нарушением, а тело
 //  типа длиннее двухсот — вторым; расширение в тело типа не входит.
 //
+//  КАЖДАЯ КОМАНДА НАЧИНАЕТСЯ С `absorbArrivals()`, И ЭТО НЕ ОСНАСТКА. Команда исполняется
+//  В МОМЕНТ ВЫЗОВА, а вход §2 приходит потоком и лежит в ящике до ближайшего `tick`:
+//  команда, не забравшая ящик, решает по миру, каким он был на прошлом ходу. Цена этого
+//  не бумажная — §8.6 ставит условие заведения на «такой сигнал ЕСТЬ», и `startRecording
+//  (meetingId: nil)`, поданная до первого `tick` по сигналу, ответила бы `nothingToRecord`
+//  на созвон, который в эту минуту звучит (К95, вектор (б′); К44). Состояния ни одной
+//  сессии `absorbArrivals()` при этом не меняет — разбор и граница в его шапке.
+//
 //  КОМАНДЫ ИСПОЛНЯЮТСЯ В МОМЕНТ ВЫЗОВА, А НЕ НА БЛИЖАЙШЕМ `tick`, и это единственное
 //  исключение из «вход, пришедший между двумя `tick`, до `tick` состояния не меняет»
 //  (§«Поведение»). Реализация, складывающая команды до следующего `tick`, зелена на всяком
@@ -21,15 +29,32 @@ extension SessionMachine {
 
     /// `startRecording(meetingId:now:)` — строки 6, 8 и 16 по команде человека.
     ///
+    /// КОМАНДА ОТДАЁТ ЦЕЛЬ, А УВОДИТ СЕССИЮ СТРОКА ТАБЛИЦЫ, И ЭТО ПРАВКА ПОД v7. §8.2
+    /// дословно: «Отдаёт цель команда `startRecording(meetingId:)` — и с момента её вызова
+    /// третья клауза строк 6 и 8 („запись разрешена политикой“) истинна, сессия уходит в
+    /// `recording` строкой 6 либо 8, ровно тем же способом, каким при `.ask` её уводит
+    /// ответ `.record`». Прежняя редакция §8.2 отвечала на этот вход двумя способами в
+    /// одном предложении — «строки 6 и 8 не срабатывают никогда» и той же скобкой «команда
+    /// даёт цель, и та уходит строкой 6 либо 8», — и часть B исполняла первую половину:
+    /// записывала ПОМИМО таблицы. Такая реализация даёт верное конечное состояние,
+    /// нарушает инвариант 2 («всякий иной переход запрещён») и краснеет К52, К34 (пятый
+    /// вектор) и К36 (i, пятый вектор), которым номер строки есть часть Ответа.
+    ///
+    /// КЛАУЗА ОТКРЫВАЕТСЯ ДО ПРОВЕРКИ §7.1, А НЕ ПОСЛЕ, и это чтение «с момента её вызова»
+    /// дословно: клауза третья — про ПОЛИТИКУ, а занятость цели есть клауза вторая, и
+    /// команда, упёршаяся во вторую, первой не отменяет. Отсюда: цель, освободившаяся
+    /// позже, уводит сессию строкой 6 либо 8 ближайшим `tick` без второй команды.
+    ///
     /// Команда сильнее политики: она начинает запись при `recordingPolicy == .manual` и при
     /// висящем спросе (§«Поведение», К58). Единственное, чего она не пересиливает, — §7.1:
     /// цель, занятая идущей записью другой сессии, не отдаётся и команде, и та бросает
     /// `alreadyRecording(sessionId:)` с идентификатором ЗАНИМАЮЩЕЙ сессии (К48).
     public func startRecording(meetingId: UUID?, now: Date) async throws -> UUID {
+        absorbArrivals()
         guard let meetingId else {
             return try await startAdHocRecording(now: now)
         }
-        guard let session = latestSession(meeting: meetingId) else {
+        guard var session = latestSession(meeting: meetingId) else {
             throw SessionError.noSuchMeeting(meetingId: meetingId)
         }
         try requireLive(session)
@@ -41,19 +66,44 @@ extension SessionMachine {
             return recordingId
         }
 
+        session.commandGaveTarget = true
+        session.updatedAt = now
+        store[session.sessionId] = session
+
         let fresh = relatedSignals(for: session, now: now)
+            .filter { !$0.relation.isDisputeParty || !contested.keys.contains($0.signal.group?.appKey ?? "") }
+            .map(\.signal)
         guard let signal = SessionMachineRules.soundingTargetSignal(
-            among: fresh.filter { !contested.keys.contains($0.group?.appKey ?? "") },
+            among: fresh,
             sessionProvider: session.event?.conference?.provider
         ), let group = signal.group else {
+            // СТРОКА: чем `startRecording(meetingId:)` отвечает сессии события без звучащей
+            // цели, издание v7 не называет (§«Ломающие изменения против v6»); владелец —
+            // архитектор C-018, срок «не позже выдачи части C». Исходов два законных —
+            // отказ и молчание; дерево выбрало ОТКАЗ частью B, и часть C его не меняет.
             throw SessionError.nothingToRecord
         }
         if let occupant = sessionHolding(appKey: group.appKey, excluding: session.sessionId) {
             throw SessionError.alreadyRecording(sessionId: occupant)
         }
-        return try await enterRecording(
-            session.sessionId, target: group, observedAt: signal.observedAt, now: now
-        )
+        guard let row = SessionMachineRules.commandRow(from: session.state) else {
+            // СТРОКА: та же, что выше. Строк 6 и 8 нет ни одной из `scheduled` и из
+            // `processing`, и переход помимо таблицы запрещён инвариантом 2; отказ здесь
+            // есть тот же выбор реализатора, названный строкой архитектора.
+            throw SessionError.nothingToRecord
+        }
+        // Цель, выбранная В МОМЕНТ ВЫЗОВА, кладётся сессии прежде строки: строка 6 и
+        // строка 8 читают `target` сессии, а последний пересчёт был на прошлом `tick` и
+        // мог видеть другой сигнал (К52, клауза Входа об актуальности).
+        session.target = group
+        session.lastTargetObservedAt = signal.observedAt
+        store[session.sessionId] = session
+
+        try await applyDeadlineRow(row, to: session, now: now)
+        guard let recordingId = store[session.sessionId]?.recordingId else {
+            throw SessionError.nothingToRecord
+        }
+        return recordingId
     }
 
     // MARK: - §3.1: остановить запись
@@ -63,6 +113,7 @@ extension SessionMachine {
     /// Переводит в `stopping` НЕМЕДЛЕННО, в момент вызова, а не на следующем `tick`, и
     /// останавливает запись, которую §8.4 останавливать не собирался (К58).
     public func stopRecording(recordingId: UUID, now: Date) async throws {
+        absorbArrivals()
         guard let session = store.values.first(where: { $0.recordingId == recordingId }) else {
             throw SessionError.noRecordingInProgress(recordingId: recordingId)
         }
@@ -89,6 +140,7 @@ extension SessionMachine {
     /// тотальность того же инварианта. Названо здесь, а не умолчано: остановку идущей записи
     /// человек просит командой `stopRecording`, и она у него есть.
     public func skip(meetingId: UUID, now: Date) async throws {
+        absorbArrivals()
         guard let session = latestSession(meeting: meetingId) else {
             throw SessionError.noSuchMeeting(meetingId: meetingId)
         }
@@ -106,6 +158,7 @@ extension SessionMachine {
     /// Ответ `.skip` уводит сессию в `skipped` (строки 4, 9). Ответ `.record` открывает
     /// политику `.ask`, а у ad-hoc-сессии — уводит её в `recording` строкой 16 (§8.6).
     public func answer(promptId: UUID, _ answer: SessionPromptAnswer, now: Date) async throws {
+        absorbArrivals()
         guard let stored = raised[promptId] else {
             throw SessionError.noSuchPrompt(promptId: promptId)
         }
@@ -158,8 +211,12 @@ extension SessionMachine {
         if let occupant = sessionHolding(appKey: group.appKey, excluding: session.sessionId) {
             throw SessionError.alreadyRecording(sessionId: occupant)
         }
-        _ = try await enterRecording(
-            session.sessionId, target: group, observedAt: signal.observedAt, now: now
-        )
+        // СТРОКОЙ 8, А НЕ 16: издание v6 сняло ответ `.record` из строки 16 и оставило там
+        // одну команду. Сессия уже заведена строкой 1в и стоит в `awaitingSignal`; ответ
+        // отдаёт ей цель, и уводит её строка таблицы (§8.6; К36 (ii), К44 вектор (а)).
+        updated.target = group
+        updated.lastTargetObservedAt = signal.observedAt
+        store[session.sessionId] = updated
+        try await applyDeadlineRow(.row8AwaitingSignalToRecording, to: updated, now: now)
     }
 }

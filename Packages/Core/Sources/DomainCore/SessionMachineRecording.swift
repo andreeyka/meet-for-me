@@ -116,9 +116,14 @@ extension SessionMachine {
         // запланированное, а незапланированный созвон человек не планировал», — то есть
         // политика цель такой сессии не отдаёт ни при одном значении, и строки 6 и 8 у неё
         // не срабатывают. Заводит её ответ `.record` либо команда, и обе идут строкой 16.
-        let allowed = session.origin == .scheduled && SessionMachineRules.policyAllowsRecording(
-            policy: settings.recordingPolicy,
-            recordAnswered: session.recordAnswered
+        // Поводов у третьей клаузы два, и второй заведён изданием v7: политика ЛИБО
+        // команда. «Команда сильнее политики» (§«Поведение»), и с момента её вызова клауза
+        // истинна при любом `recordingPolicy`, включая `.manual` (§8.2; К52, К34, К36).
+        let allowed = session.origin == .scheduled && (
+            session.commandGaveTarget || SessionMachineRules.policyAllowsRecording(
+                policy: settings.recordingPolicy,
+                recordAnswered: session.recordAnswered
+            )
         )
         return SessionMachineRules.RecordingGate(
             hasTarget: true,
@@ -138,36 +143,37 @@ extension SessionMachine {
 
     // MARK: - §8.6: ad-hoc созвон без события
 
-    /// Актуальные звучащие цели, не отнесённые ни к одной живой сессии (§5.4, правило 4),
-    /// по возрастанию `appKey` — порядок ответа не зависит от порядка обхода набора.
+    /// Актуальные звучащие цели, которые §8.6 считает ВХОДОМ ad-hoc: не отнесённые ни к
+    /// одной сессии правилами §5.4 (правило 4), по возрастанию `appKey` — порядок ответа не
+    /// зависит от порядка обхода набора.
     ///
-    /// - Parameter excludingOwned: снимать ли цели, которые уже держит живая сессия. Спрос
-    ///   §8.6 их снимает — иначе он поднимался бы заново каждым `tick` на одну и ту же
-    ///   группу. Команда `startRecording(meetingId: nil)` их НЕ снимает: она обязана дойти
-    ///   до проверки §7.1 и ответить `alreadyRecording`, а не `nothingToRecord` (К48).
-    func unattachedTargets(now: Date, excludingOwned: Bool) -> [MeetingSignal] {
+    /// ОТНЕСЕНИЕ ЧИТАЕТСЯ ПО ВСЕМ СЕССИЯМ, А НЕ ПО ЖИВЫМ, И ЭТО НЕСУЩЕЕ. Правила 2 и 3
+    /// §5.4 стоят на ОКНЕ события, а не на состоянии сессии: сигнал, попавший в окно
+    /// встречи, отнесён к ней и тогда, когда её сессия уже терминальна. Читая только живых,
+    /// машина подняла бы спрос ad-hoc на созвон встречи, которую человек только что
+    /// пропустил командой `skip`, — то есть переспросила бы уже принятое решение. **Цена
+    /// названа:** новый, настоящий ad-hoc того же клиента внутри чужого окна спроса не
+    /// получит; предел цены — `graceEndsAt` этой встречи, и он же предел окна.
+    ///
+    /// ОТДЕЛЬНОЙ КЛАУЗЫ «ЦЕЛЬ УЖЕ ДЕРЖИТ ЖИВАЯ СЕССИЯ» ЗДЕСЬ БОЛЬШЕ НЕТ, И ЭТО СЛЕДСТВИЕ
+    /// ПРАВИЛА `1а`. Часть B снимала такие цели своим фильтром, потому что §5.4 не относил
+    /// сигнал к уже заведённой ad-hoc-сессии ни одним правилом и тот оставался «не
+    /// отнесённым» вечно. Правило `1а` относит его к ней самой, а сессию события в
+    /// `{recording, stopping}` покрывают правила 2 и 3 клаузой состояния, — то есть прежний
+    /// фильтр стал вторым ответом на тот же вопрос, и снят он ровно поэтому.
+    func unattachedTargets(now: Date) -> [MeetingSignal] {
         let known = Array(store.values)
-        let live = known.filter { !$0.state.isTerminalSession }
-        return signals.values
-            .filter { $0.kind == .clientAudioOutput && $0.group != nil }
-            .filter { SessionMachineRules.isActual($0, now: now, weights: weights) }
+        return soundingSignals(now: now)
             .filter { signal in
-                // ОТНЕСЕНИЕ ЧИТАЕТСЯ ПО ВСЕМ СЕССИЯМ, А НЕ ПО ЖИВЫМ, И ЭТО НЕСУЩЕЕ.
-                // Правила 2 и 3 §5.4 стоят на ОКНЕ события, а не на состоянии сессии:
-                // сигнал, попавший в окно встречи, отнесён к ней и тогда, когда её сессия
-                // уже терминальна. Читая только живых, машина подняла бы спрос ad-hoc на
-                // созвон встречи, которую человек только что пропустил командой `skip`, —
-                // то есть переспросила бы уже принятое решение. **Цена названа:** новый,
-                // настоящий ad-hoc того же клиента внутри чужого окна спроса не получит;
-                // предел цены — `graceEndsAt` этой встречи, и он же предел окна.
                 !known.contains { SessionMachineRules.relates(signal: signal, to: side(of: $0), now: now) }
             }
-            .filter { signal in
-                guard excludingOwned else { return true }
-                return !live.contains {
-                    $0.adHocAppKey == signal.group?.appKey || $0.target?.appKey == signal.group?.appKey
-                }
-            }
+    }
+
+    /// Актуальные сигналы, годные в звучащую цель по §5.3, по возрастанию `appKey`.
+    func soundingSignals(now: Date) -> [MeetingSignal] {
+        signals.values
+            .filter { $0.kind == .clientAudioOutput && $0.group != nil }
+            .filter { SessionMachineRules.isActual($0, now: now, weights: weights) }
             .sorted { ($0.group?.appKey ?? "") < ($1.group?.appKey ?? "") }
     }
 
@@ -177,33 +183,11 @@ extension SessionMachine {
     /// говорит «только по команде», и спрос был бы её нарушением (§8.6). При `.auto`
     /// спрашивается ТОЖЕ: `.auto` есть согласие записывать запланированное, а незапланированный
     /// созвон человек не планировал (К60).
-    func updateAdHoc(now: Date) async {
-        await withdrawStaleAdHoc(now: now)
+    func updateAdHoc(now: Date) {
         guard settings.recordingPolicy != .manual else { return }
-        for signal in unattachedTargets(now: now, excludingOwned: true) {
+        for signal in unattachedTargets(now: now) {
             guard let group = signal.group else { continue }
             _ = openAdHocSession(target: group, now: now, raisePrompt: true)
-        }
-    }
-
-    /// Спрос снимается САМ, когда цель перестала быть актуальной, и сессия уходит в
-    /// `skipped`: спрашивать про созвон, который уже кончился, не о чем (§8.6, К61).
-    ///
-    /// РАСХОЖДЕНИЕ НАЗВАНО ЗДЕСЬ, А НЕ СПРЯТАНО: строки таблицы §7 у этого перехода нет.
-    /// Строка 9 даёт `awaitingSignal → skipped` по команде, по ответу `.skip`, по отмене
-    /// или удалению события и по `now ≥ graceEndsAt`; у ad-hoc-сессии события нет вовсе, и
-    /// ни одна клауза на неё не наступает. Исполнено обещание §8.6 дословно, потому что без
-    /// него К61 неисполним ничем, а сессия висела бы в `awaitingSignal` навсегда — ровно
-    /// тот третий исход, который §8.3 объявляет несуществующим. Строка — архитектору C-018.
-    private func withdrawStaleAdHoc(now: Date) async {
-        for identifier in store.keys.sorted(by: SessionMachineOrder.ascending) {
-            guard let session = store[identifier], session.origin == .adHoc else { continue }
-            guard !session.state.isTerminalSession else { continue }
-            guard session.state == .awaitingSignal else { continue }
-            guard let appKey = session.adHocAppKey else { continue }
-            guard actualSignal(appKey: appKey, now: now) == nil else { continue }
-            if let promptId = session.promptId { withdrawPrompt(promptId) }
-            try? await transition(identifier, to: .skipped, now: now)
         }
     }
 
@@ -216,7 +200,9 @@ extension SessionMachine {
     /// бы опубликовать `promptRaised`, которого К60 не допускает ни одного.
     ///
     /// `expiresAt == nil` значит «держится, пока держится причина», а не «держится вечно»:
-    /// снимает спрос `withdrawStaleAdHoc`, а не срок (К60, К61).
+    /// спрос снимается вместе с уходом сессии в `skipped` строкой 9 по четвёртой
+    /// бессроковой клаузе — «цель перестала быть актуальной» (§8.6; К60, К61), — а не
+    /// сроком, которого у него нет.
     private func openAdHocSession(target: ProcessGroup, now: Date, raisePrompt: Bool) -> UUID {
         let identifier = UUID()
         let prompt = SessionPrompt(
@@ -226,7 +212,7 @@ extension SessionMachine {
             raisedAt: now,
             expiresAt: nil
         )
-        let session = SessionMachineSession(
+        var session = SessionMachineSession(
             sessionId: identifier,
             origin: .adHoc,
             meetingId: nil,
@@ -239,13 +225,34 @@ extension SessionMachine {
             event: nil,
             promptId: raisePrompt ? prompt.promptId : nil,
             recordAnswered: false,
+            commandGaveTarget: false,
             adHocAppKey: target.appKey,
             lastTargetObservedAt: target.observedAt,
             powerToken: nil
         )
         store[identifier] = session
-        hub.publish(.session(snapshot(of: session)))
+        // ОЦЕНКА СЧИТАЕТСЯ СРАЗУ, А НЕ СЛЕДУЮЩИМ `tick`, И ЭТО ЧАСТЬ ОТВЕТА К26 (вид ii).
+        // Цель этой сессии назначена ЭТИМ ЖЕ ходом (§5.4, правило `1а`), и снимок, ушедший
+        // наружу с нулевой оценкой, был бы ложен на свой собственный момент: §6 считает её
+        // над сигналами, отнесёнными к сессии, а отнесённый у неё уже есть. Фаза 2 хода
+        // времени пересчитает её на следующем `tick` тем же правилом — двух ответов здесь
+        // нет, есть один и тот же, посчитанный вовремя.
+        if var opened = store[identifier] {
+            opened.estimate = SessionMachineRules.estimate(
+                over: relatedSignals(for: opened, now: now).map(\.signal)
+            )
+            store[identifier] = opened
+            session = opened
+        }
+        // СНИМОК ПУБЛИКУЕТ ТОЛЬКО СТРОКА 1в, И ЭТО ЧАСТЬ ОТВЕТА ОБОИХ ПУНКТОВ. К95 требует
+        // у строки 1в «снимков ровно один, и его `state` равен `awaitingSignal`»; К44
+        // требует у строки 16 «снимков ровно один, его `state` равен `recording`». Строка
+        // 16 заводит сессию СРАЗУ в `recording`, минуя `awaitingSignal`, — и снимок по ней
+        // публикует `transition`, один. Публикуя здесь безусловно, машина отдавала бы по
+        // команде ДВА снимка, первый из которых показывает состояние, которого у этой
+        // сессии не было ни одного хода.
         guard raisePrompt else { return identifier }
+        hub.publish(.session(snapshot(of: session)))
         raised[prompt.promptId] = (prompt: prompt, isWithdrawn: false)
         promptOrder.append(prompt.promptId)
         hub.publish(.promptRaised(prompt))
@@ -254,32 +261,77 @@ extension SessionMachine {
 
     /// `startRecording(meetingId: nil, now:)` — строка 16 по команде.
     ///
-    /// Живая ad-hoc-сессия, поднятая спросом §8.6, переиспользуется: второй сессии на ту же
-    /// цель заводить нечем и незачем. Её нет (политика `.manual` спроса не поднимает) —
-    /// сессия заводится этой же командой.
+    /// ПРИ ЛЮБОЙ ПОЛИТИКЕ, ВКЛЮЧАЯ `.auto` И `.ask`, И БЕЗ ЕДИНОГО СПРОСА. У строки 16
+    /// клаузы политики нет ни одной (§7, издание v7; §8.6, ветвь вторая): команда есть то
+    /// самое решение человека, ради которого спрос и существует. Строку 1в она при этом не
+    /// отменяет и с ней не спорит — разводит их МОМЕНТ ЧТЕНИЯ: 1в читается в `tick` и
+    /// только в нём, 16 — в момент вызова и только в него. Команда, поданная до первого
+    /// `tick` по этому сигналу, побеждает строку 1в, хотя та стоит в таблице раньше:
+    /// порядок таблицы решает внутри ОДНОГО момента чтения (К44, К95 вектор (б′), К45).
+    ///
+    /// ЖИВАЯ AD-HOC-СЕССИЯ ПЕРЕИСПОЛЬЗУЕТСЯ, И УХОДИТ ОНА СТРОКОЙ 8, А НЕ 16. Условие
+    /// заведения §8.6 при ней ложно — «живой ad-hoc-сессии с этим `appKey` нет» неверно, —
+    /// и §7 говорит исход дословно: «сессия уходит в `recording` строкой 8 — политика
+    /// отдаёт ей цель командой ровно так же, как ответом `.record`». Второй сессии не
+    /// заводится ни одной (К44, вектор (б); К96).
     func startAdHocRecording(now: Date) async throws -> UUID {
-        if let live = store.values.first(where: {
-            $0.origin == .adHoc && !$0.state.isTerminalSession && $0.state != .recording
-                && $0.state != .stopping && $0.target != nil
-        }), let group = live.target, let signal = actualSignal(appKey: group.appKey, now: now) {
+        if let live = reusableAdHocSession(), let group = live.target,
+           let signal = actualSignal(appKey: group.appKey, now: now) {
             if let occupant = sessionHolding(appKey: group.appKey, excluding: live.sessionId) {
                 throw SessionError.alreadyRecording(sessionId: occupant)
             }
             if let promptId = live.promptId { withdrawPrompt(promptId) }
+            // Строка 8: политика отдала цель командой, и переход идёт строкой таблицы.
             return try await enterRecording(
                 live.sessionId, target: group, observedAt: signal.observedAt, now: now
             )
         }
-        guard let signal = unattachedTargets(now: now, excludingOwned: false).first,
-              let group = signal.group else {
+
+        // §7.1 ЧИТАЕТСЯ ПРЕЖДЕ, ЧЕМ КОМАНДА ОТВЕТИТ «ЗАПИСЫВАТЬ НЕЧЕГО», И ПОРЯДОК ЗДЕСЬ
+        // НЕСУЩИЙ. Цель, занятая идущей записью, отнесена к её держателю — правилом `1а`,
+        // если держатель ad-hoc, правилами 2 и 3, если это сессия события в
+        // `{recording, stopping}`, — то есть входом §8.6 она не является ни в одном из двух
+        // случаев. Ответив на этом `nothingToRecord`, команда сказала бы человеку «созвона
+        // нет», когда созвон есть и пишется; §7.1 требует назвать ЗАНИМАЮЩУЮ сессию, и
+        // ровно это подаёт К48 веткой «ad-hoc».
+        let free = unattachedTargets(now: now)
+            .first { sessionHolding(appKey: $0.group?.appKey ?? "", excluding: nil) == nil }
+        guard let signal = free, let group = signal.group else {
+            // Обходом, а не `compactMap`: замыкание `lazy` — escaping, и обращение к
+            // `sessionHolding` требовало бы явного захвата актора.
+            for candidate in soundingSignals(now: now) {
+                let appKey = candidate.group?.appKey ?? ""
+                if let taken = sessionHolding(appKey: appKey, excluding: nil) {
+                    throw SessionError.alreadyRecording(sessionId: taken)
+                }
+            }
             throw SessionError.nothingToRecord
         }
-        if let occupant = sessionHolding(appKey: group.appKey, excluding: nil) {
-            throw SessionError.alreadyRecording(sessionId: occupant)
-        }
         let opened = openAdHocSession(target: group, now: now, raisePrompt: false)
-        return try await enterRecording(
-            opened, target: group, observedAt: signal.observedAt, now: now
-        )
+        do {
+            return try await enterRecording(
+                opened, target: group, observedAt: signal.observedAt, now: now
+            )
+        } catch {
+            // Строка 16 не сработала — значит и заведения не было. Сессия, заведённая этой
+            // строкой и не дошедшая до `recording`, была бы заведением ПОМИМО таблицы, а
+            // его запрещает инвариант 2; спроса при ней нет, и снять её нечем.
+            store[opened] = nil
+            throw error
+        }
+    }
+
+    /// Живая ad-hoc-сессия, которую команда уводит в запись строкой 8, либо `nil`.
+    ///
+    /// Состояния `recording` и `stopping` исключены намеренно: такая сессия уже пишет, и
+    /// `recordingId` у неё назначен и не меняется (инвариант 5). По возрастанию
+    /// `sessionId` — ответ не зависит от порядка обхода набора.
+    private func reusableAdHocSession() -> SessionMachineSession? {
+        store.values
+            .filter { $0.origin == .adHoc && !$0.state.isTerminalSession }
+            .filter { $0.state != .recording && $0.state != .stopping }
+            .filter { $0.target != nil }
+            .sorted { SessionMachineOrder.ascending($0.sessionId, $1.sessionId) }
+            .first
     }
 }
