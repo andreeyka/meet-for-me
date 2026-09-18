@@ -277,10 +277,14 @@ extension SessionMachine {
         let free = unattachedTargets(now: now)
             .first { sessionHolding(appKey: $0.group?.appKey ?? "", excluding: nil) == nil }
         guard let signal = free, let group = signal.group else {
-            let taken = soundingSignals(now: now).lazy
-                .compactMap { sessionHolding(appKey: $0.group?.appKey ?? "", excluding: nil) }
-                .first
-            if let taken { throw SessionError.alreadyRecording(sessionId: taken) }
+            // Обходом, а не `compactMap`: замыкание `lazy` — escaping, и обращение к
+            // `sessionHolding` требовало бы явного захвата актора.
+            for candidate in soundingSignals(now: now) {
+                let appKey = candidate.group?.appKey ?? ""
+                if let taken = sessionHolding(appKey: appKey, excluding: nil) {
+                    throw SessionError.alreadyRecording(sessionId: taken)
+                }
+            }
             throw SessionError.nothingToRecord
         }
         let opened = openAdHocSession(target: group, now: now, raisePrompt: false)
