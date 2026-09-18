@@ -94,8 +94,10 @@ final class SessionMachineAdHocRuleTests: XCTestCase {
         await stand.deliver(target(at: moment))
         await stand.machine.tick(now: moment)
 
-        XCTAssertTrue(await stand.machine.sessions().isEmpty, "сессии не заводится ни одной")
-        XCTAssertTrue(await stand.machine.prompts().isEmpty, "и спрос не поднимается ни один")
+        let probe1 = await stand.machine.sessions()
+        XCTAssertTrue(probe1.isEmpty, "сессии не заводится ни одной")
+        let probe2 = await stand.machine.prompts()
+        XCTAssertTrue(probe2.isEmpty, "и спрос не поднимается ни один")
         await stand.machine.stop()
     }
 
@@ -121,8 +123,9 @@ final class SessionMachineAdHocRuleTests: XCTestCase {
             XCTAssertEqual(live.state, .recording, "\(policy): сразу в `recording` строкой 16")
             XCTAssertEqual(live.recordingId, recordingId)
             XCTAssertEqual(live.origin, .adHoc)
+            let probe3 = await stand.machine.prompts()
             XCTAssertTrue(
-                await stand.machine.prompts().isEmpty,
+                probe3.isEmpty,
                 "\(policy): спроса не поднимается ни одного даже при `.auto` и `.ask`"
             )
             // РОВНО ОДИН элемент, а не «первые два»: их и опубликовано ровно столько.
@@ -152,7 +155,8 @@ final class SessionMachineAdHocRuleTests: XCTestCase {
         await stale.deliver(target(at: moment))
         let past = moment.addingTimeInterval(TimeInterval(weights.signalTtlSeconds) + 1)
         await stale.machine.tick(now: past)
-        XCTAssertTrue(await stale.machine.sessions().isEmpty, "сигнал не актуален — не заводится")
+        let probe4 = await stale.machine.sessions()
+        XCTAssertTrue(probe4.isEmpty, "сигнал не актуален — не заводится")
         await stale.machine.stop()
 
         let groupless = try bench(policy: .auto)
@@ -162,7 +166,8 @@ final class SessionMachineAdHocRuleTests: XCTestCase {
             group: nil, provider: "zoom", meetingId: nil, observedAt: moment
         ))
         await groupless.machine.tick(now: moment)
-        XCTAssertTrue(await groupless.machine.sessions().isEmpty, "`group == nil` — не заводится")
+        let probe5 = await groupless.machine.sessions()
+        XCTAssertTrue(probe5.isEmpty, "`group == nil` — не заводится")
         await groupless.machine.stop()
     }
 
@@ -189,7 +194,8 @@ final class SessionMachineAdHocRuleTests: XCTestCase {
 
         let sessions = await stand.machine.sessions()
         XCTAssertEqual(sessions.count, 1, "за прогон заведена РОВНО ОДНА ad-hoc-сессия")
-        XCTAssertEqual(await stand.machine.prompts().count, 1, "и ровно один спрос")
+        let probe6 = await stand.machine.prompts()
+        XCTAssertEqual(probe6.count, 1, "и ровно один спрос")
         let published = await collect(stream, count: 2)
         XCTAssertEqual(
             published.compactMap(\.raisedPrompt).count, 1, "событий `promptRaised` ровно одно"
@@ -226,7 +232,8 @@ final class SessionMachineAdHocRuleTests: XCTestCase {
         let promptId = try unwrap(await stand.machine.prompts().first?.promptId)
 
         try await stand.machine.answer(promptId: promptId, .skip, now: moment.addingTimeInterval(1))
-        XCTAssertTrue(await stand.machine.sessions().isEmpty, "оснастка: первая терминальна")
+        let probe7 = await stand.machine.sessions()
+        XCTAssertTrue(probe7.isEmpty, "оснастка: первая терминальна")
 
         await stand.deliver(target(at: moment.addingTimeInterval(2)))
         await stand.machine.tick(now: moment.addingTimeInterval(2))

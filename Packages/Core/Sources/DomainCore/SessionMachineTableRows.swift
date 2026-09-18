@@ -79,6 +79,29 @@ extension SessionMachineRules {
         /// актуальной» (§8.6). У сессии события всегда `false`: клауза адресована ad-hoc
         /// поимённо, а `graceEndsAt` у сессии без события нет — считать его не от чего.
         let adHocTargetLost: Bool
+
+        /// УМОЛЧАНИЕ У ЧЕТВЁРТОЙ КЛАУЗЫ — РЕШЕНИЕ, И ОНО НАЗВАНО. `false` значит «сессия
+        /// события», у которой этой клаузы нет ни на одном входе. Довод тот же, что у
+        /// `SessionSide`: вход, собранный векторами строк 2—10, ad-hoc не описывает, и
+        /// требовать от них четвёртой клаузы значит обязать их знать о пятом правиле §5.4,
+        /// к которому они не относятся. **Цена названа:** вход ad-hoc, собранный вручную и
+        /// забывший клаузу, строки 9 по ней не получит — потому фаза сроков и читает её
+        /// одним местом, `isAdHocTargetLost(_:now:)`.
+        init(
+            state: MeetingStatus,
+            deadlines: ScheduledArm?,
+            eventGone: Bool,
+            gate: RecordingGate,
+            silenceStopsAt: Date?,
+            adHocTargetLost: Bool = false
+        ) {
+            self.state = state
+            self.deadlines = deadlines
+            self.eventGone = eventGone
+            self.gate = gate
+            self.silenceStopsAt = silenceStopsAt
+            self.adHocTargetLost = adHocTargetLost
+        }
     }
 
     /// Строка, которой команда `startRecording(meetingId:)` уводит сессию события в

@@ -57,7 +57,8 @@ final class SessionMachineDisputeEndTests: XCTestCase {
         let stand = staged.stand
         await stand.machine.start(now: now)
         await stand.machine.tick(now: now)
-        XCTAssertEqual(await stand.machine.sessions().count, 2, "оснастка: обе сессии живы")
+        let probe1 = await stand.machine.sessions()
+        XCTAssertEqual(probe1.count, 2, "оснастка: обе сессии живы")
 
         await stand.deliver(SessionMachineFixtures.audioOutput(
             appKey: "us.zoom.xos", observedAt: now, provider: "zoom"
@@ -104,8 +105,9 @@ final class SessionMachineDisputeEndTests: XCTestCase {
         let after = now.addingTimeInterval(TimeInterval(weights.signalTtlSeconds) + 1)
         await stand.machine.tick(now: after)
 
+        let probe2 = await stand.machine.prompts()
         XCTAssertTrue(
-            await stand.machine.prompts().isEmpty,
+            probe2.isEmpty,
             "спрос снят МАШИНОЙ, а не ответом человека: `prompts()` его больше не отдаёт"
         )
         let seen = await collect(stream, count: 4)
@@ -130,7 +132,8 @@ final class SessionMachineDisputeEndTests: XCTestCase {
             appKey: "us.zoom.xos", observedAt: now, provider: "zoom"
         ))
         await stand.machine.tick(now: now)
-        XCTAssertEqual(await stand.machine.prompts().count, 1, "оснастка: спор поднят")
+        let probe3 = await stand.machine.prompts()
+        XCTAssertEqual(probe3.count, 1, "оснастка: спор поднят")
 
         // Одну сторону уводит в терминальное состояние команда человека.
         try await stand.machine.skip(meetingId: staged.first.id, now: now)
@@ -140,7 +143,8 @@ final class SessionMachineDisputeEndTests: XCTestCase {
         ))
         await stand.machine.tick(now: later)
 
-        XCTAssertTrue(await stand.machine.prompts().isEmpty, "спрос снят машиной")
+        let probe4 = await stand.machine.prompts()
+        XCTAssertTrue(probe4.isEmpty, "спрос снят машиной")
         let live = try unwrap(await stand.machine.sessions().first)
         XCTAssertEqual(live.meetingId, staged.second.id, "осталась ровно одна сторона")
         XCTAssertEqual(live.target?.appKey, "us.zoom.xos", "и цель стала ЕЁ звучащей целью")
@@ -167,7 +171,8 @@ final class SessionMachineDisputeEndTests: XCTestCase {
             appKey: "us.zoom.xos", observedAt: now, provider: "zoom"
         ))
         await stand.machine.tick(now: now)
-        XCTAssertEqual(await stand.machine.prompts().count, 1, "оснастка: спор поднят")
+        let probe5 = await stand.machine.prompts()
+        XCTAssertEqual(probe5.count, 1, "оснастка: спор поднят")
 
         // Окно ранней встречи — `armAt ≤ now ≤ graceEndsAt`, и В САМ `graceEndsAt` она ещё
         // В НЁМ: знак верхней границы нестрогий. Закрывается оно строго ПОСЛЕ, и берётся
@@ -179,7 +184,8 @@ final class SessionMachineDisputeEndTests: XCTestCase {
         ))
         await stand.machine.tick(now: closing)
 
-        XCTAssertTrue(await stand.machine.prompts().isEmpty, "спрос снят: сторона осталась одна")
+        let probe6 = await stand.machine.prompts()
+        XCTAssertTrue(probe6.isEmpty, "спрос снят: сторона осталась одна")
         let live = try unwrap(await stand.machine.sessions().first)
         XCTAssertEqual(live.meetingId, late.id, "осталась поздняя встреча")
         XCTAssertEqual(live.target?.appKey, "us.zoom.xos", "и цель досталась ей")
@@ -302,9 +308,8 @@ final class SessionMachineDisputeEndTests: XCTestCase {
             appKey: "us.zoom.xos", observedAt: before, provider: "zoom"
         ))
         _ = try await stand.machine.startRecording(meetingId: nil, now: before)
-        XCTAssertNotNil(
-            await stand.machine.sessions().first { $0.origin == .adHoc }, "оснастка: держатель пишет"
-        )
+        let holder = await stand.machine.sessions().first { $0.origin == .adHoc }
+        XCTAssertNotNil(holder, "оснастка: держатель пишет")
 
         // Держатель выходит из множества `{recording, stopping}` ДО `graceEndsAt`.
         await stand.deliver(CaptureEvent.failed(.systemUnavailable(message: "вектор")))
@@ -314,10 +319,8 @@ final class SessionMachineDisputeEndTests: XCTestCase {
         ))
         await stand.machine.tick(now: freeing)
 
-        XCTAssertNil(
-            await stand.machine.sessions().first { $0.origin == .adHoc },
-            "оснастка: держатель вышел из множества `{recording, stopping}`"
-        )
+        let freed = await stand.machine.sessions().first { $0.origin == .adHoc }
+        XCTAssertNil(freed, "оснастка: держатель вышел из множества `{recording, stopping}`")
         let ofMeeting = try unwrap(await stand.machine.sessions().first { $0.meetingId == event.id })
         XCTAssertEqual(ofMeeting.state, .recording, "цель освободилась — строка 8, а не строка 9")
         await stand.machine.stop()

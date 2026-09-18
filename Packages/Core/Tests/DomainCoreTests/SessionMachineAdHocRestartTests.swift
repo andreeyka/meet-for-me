@@ -55,8 +55,9 @@ final class SessionMachineAdHocRestartTests: XCTestCase {
             restarted.log.count(port: "RecordingRepository", method: "unfinalized()"), 1,
             "перечень А прочитан — и записи у этой сессии нет ни одной"
         )
+        let probe1 = await restarted.machine.sessions()
         XCTAssertTrue(
-            await restarted.machine.sessions().isEmpty,
+            probe1.isEmpty,
             "перечнями А и Б не восстановлено ничего: тождества в хранилище у неё нет"
         )
 
@@ -65,7 +66,8 @@ final class SessionMachineAdHocRestartTests: XCTestCase {
         let after = try unwrap(await restarted.machine.sessions().first)
         XCTAssertEqual(after.origin, .adHoc, "но заведена ЗАНОВО строкой 1в по живой цели")
         XCTAssertNotEqual(after.sessionId, before.sessionId, "`sessionId` НОВЫЙ; К7 не нарушен")
-        XCTAssertEqual(await restarted.machine.prompts().count, 1, "и спрос поднят заново")
+        let probe2 = await restarted.machine.prompts()
+        XCTAssertEqual(probe2.count, 1, "и спрос поднят заново")
         await restarted.machine.stop()
     }
 
@@ -81,8 +83,10 @@ final class SessionMachineAdHocRestartTests: XCTestCase {
         await stand.awaitDelivery(1)
         await stand.machine.tick(now: late)
 
-        XCTAssertTrue(await stand.machine.sessions().isEmpty, "сессии не заводится ни одной")
-        XCTAssertTrue(await stand.machine.prompts().isEmpty, "и спроса ни одного")
+        let probe3 = await stand.machine.sessions()
+        XCTAssertTrue(probe3.isEmpty, "сессии не заводится ни одной")
+        let probe4 = await stand.machine.prompts()
+        XCTAssertTrue(probe4.isEmpty, "и спроса ни одного")
         await stand.machine.stop()
     }
 

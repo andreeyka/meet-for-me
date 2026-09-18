@@ -197,8 +197,10 @@ final class SessionMachineRestoreTests: XCTestCase {
         await stand.machine.start(now: moment)
         await stand.machine.tick(now: moment)
 
-        XCTAssertTrue(await stand.machine.sessions().isEmpty, "сессии не заводится вовсе")
-        XCTAssertTrue(await stand.machine.prompts().isEmpty, "и спрос не поднимается")
+        let probe1 = await stand.machine.sessions()
+        XCTAssertTrue(probe1.isEmpty, "сессии не заводится вовсе")
+        let probe2 = await stand.machine.prompts()
+        XCTAssertTrue(probe2.isEmpty, "и спрос не поднимается")
         await stand.machine.stop()
     }
 
@@ -216,7 +218,8 @@ final class SessionMachineRestoreTests: XCTestCase {
 
         let live = try unwrap(await stand.machine.sessions().first)
         XCTAssertEqual(live.state, .processing, "судьбу определила запись (перечень А)")
-        XCTAssertTrue(await stand.machine.prompts().isEmpty, "спрос не поднимается")
+        let probe3 = await stand.machine.prompts()
+        XCTAssertTrue(probe3.isEmpty, "спрос не поднимается")
         await stand.machine.stop()
     }
 
@@ -246,8 +249,9 @@ final class SessionMachineRestoreTests: XCTestCase {
         await restarted.machine.start(now: inside)
         await restarted.machine.tick(now: inside)
 
+        let probe4 = await restarted.machine.sessions()
         XCTAssertTrue(
-            await restarted.machine.sessions().isEmpty,
+            probe4.isEmpty,
             "решение человека не отменяется сроком: правило одно на все запуски"
         )
         await restarted.machine.stop()
@@ -270,8 +274,9 @@ final class SessionMachineRestoreTests: XCTestCase {
             await stand.deliver(CalendarChange.upserted([moved]))
             await stand.machine.tick(now: moment.addingTimeInterval(180))
 
+            let probe5 = await stand.machine.sessions()
             XCTAssertTrue(
-                await stand.machine.sessions().isEmpty,
+                probe5.isEmpty,
                 "\(status): ни один из входов сессии не заводит"
             )
             await stand.machine.stop()
