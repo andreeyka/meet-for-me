@@ -150,7 +150,7 @@ extension SessionMachine {
     /// у `transcribe` — `nil`; `transcriptId` для `attribute` берётся ИЗ ХРАНИЛИЩА
     /// (заголовок транскрипта записи, C-010), а `meetingId` равен `meetingId` сессии и
     /// равен `nil` у ad-hoc (К63).
-    private func payload(
+    func payload(
         for type: JobType,
         recordingId: UUID,
         session identifier: UUID
@@ -195,7 +195,7 @@ extension SessionMachine {
     /// «обрабатывать только от сети» поднимает `requiresACPower` ПРИ ПОСТАНОВКЕ задачи, и
     /// это правило §4 C-013, а не решение этой машины; при `processOnACPowerOnly == false`
     /// подача равна ответу `standard` поле в поле.
-    private func submitChain(_ payload: JobPayload, for identifier: UUID, now: Date) async {
+    func submitChain(_ payload: JobPayload, for identifier: UUID, now: Date) async {
         var submission = JobSubmission.standard(payload, runAfter: now)
         if settings.processOnACPowerOnly, !submission.conditions.requiresACPower {
             submission = JobSubmission(

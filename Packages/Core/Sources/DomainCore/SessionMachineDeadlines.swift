@@ -37,7 +37,8 @@ extension SessionMachine {
                     deadlines: deadlines,
                     eventGone: isGone(session),
                     gate: gate(for: session),
-                    silenceStopsAt: silenceDeadline(of: session)
+                    silenceStopsAt: silenceDeadline(of: session),
+                    adHocTargetLost: isAdHocTargetLost(session, now: now)
                 )
                 guard let row = SessionMachineRules.deadlineRow(input, now: now) else {
                     // Строк, наступающих по сроку, не подошло ни одной: дальше в порядке
@@ -47,7 +48,7 @@ extension SessionMachine {
                     break
                 }
                 do {
-                    try await apply(row, to: session, now: now)
+                    try await applyDeadlineRow(row, to: session, now: now)
                 } catch {
                     // Исход не записан — значит перехода не было (инвариант 18). Срок
                     // наступит на следующем `tick`: терять решение молча дороже, чем ждать.
@@ -57,9 +58,14 @@ extension SessionMachine {
         }
     }
 
-    /// Строка, подошедшая по сроку, исполняется своим ходом: строки 6 и 8 зовут захват и
-    /// берут токен питания, строка 10 зовёт `stop()`, прочие — один переход.
-    private func apply(
+    /// Строка таблицы исполняется своим ходом: строки 6 и 8 зовут захват и берут токен
+    /// питания, строка 10 зовёт `stop()`, прочие — один переход.
+    ///
+    /// МЕСТО ОДНО НА ОБА МОМЕНТА ЧТЕНИЯ, И ЭТО РЕШЕНИЕ. Строки 6 и 8 читаются и фазой
+    /// сроков, и командой `startRecording(meetingId:)` в момент её вызова (§7, §8.2
+    /// издания v7) — то есть один и тот же переход наступает двумя поводами. Два места,
+    /// исполняющих одну строку, разошлись бы на первой же правке; здесь их одно.
+    func applyDeadlineRow(
         _ row: SessionMachineRules.DeadlineRow,
         to session: SessionMachineSession,
         now: Date
@@ -86,6 +92,15 @@ extension SessionMachine {
                 lastTargetObservedAt: $0, settings: settings, weights: weights
             )
         }
+    }
+
+    /// Четвёртая бессроковая клауза строки 9 (§8.6): цель ad-hoc-сессии перестала быть
+    /// актуальной. Читается по НАЗНАЧЕННОМУ при заведении `appKey`, а не по `target`:
+    /// `target` к этой минуте уже `nil`, и по нему причину не прочесть — тот же довод,
+    /// которым правило `1а` §5.4 стоит на назначенном `appKey` (К96, вектор (в)).
+    func isAdHocTargetLost(_ session: SessionMachineSession, now: Date) -> Bool {
+        guard session.origin == .adHoc, let appKey = session.adHocAppKey else { return false }
+        return actualSignal(appKey: appKey, now: now) == nil
     }
 
     func isGone(_ session: SessionMachineSession) -> Bool {
@@ -131,29 +146,34 @@ extension SessionMachine {
 
     // MARK: - §5.4: спор о звучащей цели
 
-    /// Цели, отнесённые сразу к двум и более живым сессиям: `appKey` → кандидаты по
-    /// возрастанию `sessionId`. Правило 2, отнёсшее цель ровно к одной сессии, спора не
-    /// даёт — счёт отнесённых его и различает.
+    /// Цели, отнесённые сразу к двум и более СТОРОНАМ спора: `appKey` → кандидаты по
+    /// возрастанию `sessionId`.
+    ///
+    /// ПРИЗНАК СПОРА ЕСТЬ ЧИСЛО СЕССИЙ, А НЕ НОМЕР ОТНЁСШЕГО ПРАВИЛА, И ЭТО ИЗДАНИЕ v7.
+    /// §5.4: «Сигнал, отнесённый сразу к нескольким сессиям — правилом 2 **либо** правилом
+    /// 3, безразлично каким, — есть спор». Прежняя редакция называла спором отнесение
+    /// правилом 3 и разрешала его тем, что «правило 2 отнесло цель ровно к одной сессии»,
+    /// — а правила 2 и 3 взаимно исключаются по `s.provider`, то есть названная ветвь
+    /// разрешения была мертва, и два пересекающихся созвона ОДНОГО провайдера, отнесённых
+    /// правилом 2 к обеим сессиям, под определение не попадали вовсе и человека не
+    /// спрашивали (К24, К25).
+    ///
+    /// СТОРОНОЙ СПОРА ОТНЕСЕНИЕ ПРАВИЛОМ `1а` НЕ ДЕЛАЕТ НИ ОДНОЙ СЕССИИ, и это вторая
+    /// половина того же §5.4: «Спор ad-hoc-сессии не касается». Счёт поэтому идёт по
+    /// `Relation.isDisputeParty`, а не по `relates`: ad-hoc-держатель цели, попавший в
+    /// число сторон, поднял бы спрос на созвон, который он же и пишет (К94).
     func contestedTargets(now: Date) -> [String: [UUID]] {
         let live = store.values.filter { !$0.state.isTerminalSession }
         var found: [String: [UUID]] = [:]
         for signal in signals.values {
             guard signal.kind == .clientAudioOutput, let appKey = signal.group?.appKey else { continue }
             guard SessionMachineRules.isActual(signal, now: now, weights: weights) else { continue }
-            let related = live.filter { session in
-                SessionMachineRules.relates(
-                    signal: signal,
-                    to: SessionMachineRules.SessionSide(
-                        meetingId: session.meetingId,
-                        state: session.state,
-                        provider: session.event?.conference?.provider,
-                        deadlines: session.event.map { SessionMachineRules.arm(for: $0, settings: settings) }
-                    ),
-                    now: now
-                )
+            let parties = live.filter { session in
+                SessionMachineRules.relation(signal: signal, to: side(of: session), now: now)?
+                    .isDisputeParty ?? false
             }
-            if related.count >= 2 {
-                found[appKey] = related.map(\.sessionId).sorted(by: SessionMachineOrder.ascending)
+            if parties.count >= 2 {
+                found[appKey] = parties.map(\.sessionId).sorted(by: SessionMachineOrder.ascending)
             }
         }
         return found

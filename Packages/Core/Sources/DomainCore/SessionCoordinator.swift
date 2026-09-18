@@ -170,7 +170,10 @@ public struct ScheduledArm: Codable, Equatable, Sendable {
 }
 
 public protocol Scheduler: Sendable {
-    /// Все встречи, у которых now ≤ graceEndsAt, по возрастанию armAt; при равенстве — по meetingId.
+    /// События, удовлетворяющие §9.1: isAllDay == false, isCancelled == false, now <= graceEndsAt
+    /// и хранимый MeetingStatus нетерминален. Клауза «у встречи нет живой сессии» здесь НЕ
+    /// применяется — встреча с живой сессией в плане стоит (§9.1, инвариант 17).
+    /// Порядок: по возрастанию armAt; при равенстве — по meetingId.
     func plan(now: Date) async throws -> [ScheduledArm]
     /// Ближайший момент, в который состояние машины обязано измениться; nil — сроков нет.
     func nextDeadline(now: Date) async throws -> Date?

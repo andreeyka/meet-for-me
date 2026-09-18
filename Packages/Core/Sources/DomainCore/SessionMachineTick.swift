@@ -33,11 +33,16 @@ extension SessionMachine {
                 arrivedCapture.append(event)
             case let .job(event):
                 arrivedJobs.append(event)
-            case .power:
-                // `willSleep` записи не останавливает и состояния не меняет (§9.3, К69);
-                // `didWake` зовёт `reschedule(now:)` — это `Scheduler`, часть C. Оба входа
-                // состояния не меняют и ошибки не дают (инвариант 2, тотальность).
-                continue
+            case let .power(event):
+                // `willSleep` записи не останавливает и состояния не меняет (§9.3, К69).
+                // `didWake` зовёт `reschedule(now:)` — и ЗДЕСЬ, а не своим ходом: §9.3
+                // называет за ним ещё и `tick(now:)`, а машина не имеет ни таймера, ни
+                // часов (К9) и разбудить себя не может ничем. Событие приходит в ящик,
+                // ближайший `tick` его применяет — этот самый, — и `reschedule` идёт
+                // первой фазой, прежде сроков. Сроки, пройденные во сне, исполняет тот же
+                // `tick` фазой 3, и это инвариант 14 дословно: второго механизма для сна
+                // не заводится ни одного (К68, К86 вид (ii)).
+                if case .didWake = event { await reschedule(now: now) }
             }
         }
         refreshSessionEvents()
@@ -77,12 +82,27 @@ extension SessionMachine {
     }
 
     /// Заведение по §9.1: одно условие, три состояния по `now` (строки 1, 1а, 1б).
-    func openSessions(now: Date) async -> [UUID] {
-        await readStorage(now: now)
+    ///
+    /// - Parameters:
+    ///   - readingStorage: читать ли хранилище прежде заведения. `false` зовёт
+    ///     восстановление §10: оно уже прочло встречи своим перечнем Б, и второе чтение
+    ///     легло бы в журнал вызовов лишней парой, которую К78 наблюдает порядком.
+    ///   - limitedTo: встречи, которым заведение разрешено; `nil` — всем известным.
+    ///     Ограничение несёт восстановление §10: перечень Б заводит по §9.1 ТОЛЬКО встречи
+    ///     в `scheduled`, `armed` и `awaitingSignal` — первой своей строкой, — а судьбу
+    ///     встреч в `recording`, `stopping` и `processing` решает перечень А, и второго
+    ///     заведения для них у §10 нет ни одного (К78, К79).
+    func openSessions(
+        now: Date,
+        readingStorage: Bool = true,
+        limitedTo: Set<UUID>? = nil
+    ) async -> [UUID] {
+        if readingStorage { await readStorage(now: now) }
 
         var opened: [UUID] = []
         for event in knownEvents.values.sorted(by: { SessionMachineOrder.ascending($0.id, $1.id) }) {
             guard !deletedEvents.contains(event.id) else { continue }
+            if let limitedTo, !limitedTo.contains(event.id) { continue }
             let hasLive = store.values.contains { $0.meetingId == event.id && !$0.state.isTerminalSession }
             guard SessionMachineRules.mayOpenSession(
                 event: event,
@@ -109,6 +129,7 @@ extension SessionMachine {
                 event: event,
                 promptId: nil,
                 recordAnswered: false,
+                commandGaveTarget: false,
                 adHocAppKey: nil,
                 lastTargetObservedAt: nil,
                 powerToken: nil
@@ -144,76 +165,82 @@ extension SessionMachine {
         for identifier in Array(store.keys) {
             guard var session = store[identifier], !session.state.isTerminalSession else { continue }
             let related = relatedSignals(for: session, now: now)
-            // Спор — не выбор (§5.4): цель, отнесённая к нескольким сессиям сразу, не
-            // является звучащей целью НИ ОДНОЙ из них, пока спрос не разрешён. Это и есть
-            // единственное чтение, при котором обе половины §5.4 истинны разом: «до ответа
-            // не записывает ни одна» и «нет ответа — каждая уходит в `skipped` по своему
-            // `graceEndsAt`» (строка 9 читает клаузу «звучащей цели нет»).
             let chosen = SessionMachineRules.soundingTargetSignal(
-                among: related.filter { !disputed.contains($0.group?.appKey ?? "") },
+                among: targetCandidates(among: related, disputed: disputed),
                 sessionProvider: session.event?.conference?.provider
             )
-            session.target = chosen?.group ?? adHocTarget(for: session, now: now)
+            session.target = chosen?.group
             if let observedAt = chosen?.observedAt {
                 session.lastTargetObservedAt = observedAt
-            } else if let appKey = session.target?.appKey,
-                      let signal = actualSignal(appKey: appKey, now: now) {
-                session.lastTargetObservedAt = signal.observedAt
             }
-            session.estimate = SessionMachineRules.estimate(over: related)
+            session.estimate = SessionMachineRules.estimate(over: related.map(\.signal))
             session.updatedAt = now
             store[identifier] = session
         }
     }
 
-    /// Цель ad-hoc-сессии до входа в запись.
+    /// Сигналы, из которых §5.3 выбирает звучащую цель: отнесённые к сессии, за вычетом
+    /// ОСПАРИВАЕМЫХ.
     ///
-    /// НАЗВАНО, А НЕ УМОЛЧАНО: правила §5.4 не относят к такой сессии ни одного сигнала —
-    /// правила 2 и 3 требуют либо окна события (`armAt ≤ now ≤ graceEndsAt`), которого у
-    /// ad-hoc нет, либо состояния из `{recording, stopping}`, в которое она ещё не вошла.
-    /// То есть §5.4 и §8.6 отвечают на разные вопросы, а не спорят: §5.4 распределяет
-    /// сигналы между сессиями СОБЫТИЙ, а ad-hoc есть вход для цели, которую он никому не
-    /// отдал (правило 4). Цель такой сессии поэтому держится её `appKey` и проверяется на
-    /// актуальность прямо — ровно то, что §8.6 называет причиной спроса.
-    private func adHocTarget(for session: SessionMachineSession, now: Date) -> ProcessGroup? {
-        guard session.origin == .adHoc, let appKey = session.adHocAppKey else { return nil }
-        return actualSignal(appKey: appKey, now: now)?.group
+    /// Спор — не выбор (§5.4): цель, отнесённая к нескольким сессиям сразу, не является
+    /// звучащей целью НИ ОДНОЙ из сторон, пока спрос не разрешён. Это и есть единственное
+    /// чтение, при котором обе половины §5.4 истинны разом: «до ответа не записывает ни
+    /// одна» и «нет ответа — каждая уходит в `skipped` по своему `graceEndsAt`» (строка 9
+    /// читает клаузу «звучащей цели нет»).
+    ///
+    /// ВЫЧЕТ ИДЁТ ПО ОТНЕСЕНИЮ, А НЕ ПО ОДНОМУ `appKey`, И ЭТО НЕСУЩЕЕ. Сторонами спора
+    /// §5.4 называет сессии, к которым сигнал отнесён правилом 2 либо правилом 3; сессия,
+    /// получившая его правилом `1а`, стороной не является, и спор её «не касается»
+    /// дословно. Реализация, снимающая спорный `appKey` у всех подряд, гасит цель
+    /// ad-hoc-сессии чужим спором — то есть уводит в `skipped` строкой 9 сессию, которая
+    /// пишет или вот-вот запишет (К94, клауза Входа «держателем выступает ad-hoc-сессия»).
+    private func targetCandidates(
+        among related: [RelatedSignal],
+        disputed: Set<String>
+    ) -> [MeetingSignal] {
+        related
+            .filter { item in
+                guard item.relation.isDisputeParty else { return true }
+                return !disputed.contains(item.signal.group?.appKey ?? "")
+            }
+            .map(\.signal)
     }
 
-    /// То, что правило §5.4 читает у сессии.
+    /// То, что правило §5.4 читает у сессии. Одно место на все три чтения — отнесение,
+    /// спор и заведение ad-hoc: три копии этой пятёрки разошлись бы на первой же правке.
     func side(of session: SessionMachineSession) -> SessionMachineRules.SessionSide {
         SessionMachineRules.SessionSide(
             meetingId: session.meetingId,
+            origin: session.origin,
             state: session.state,
             provider: session.event?.conference?.provider,
-            deadlines: session.event.map { SessionMachineRules.arm(for: $0, settings: settings) }
+            deadlines: session.event.map { SessionMachineRules.arm(for: $0, settings: settings) },
+            adHocAppKey: session.adHocAppKey
         )
+    }
+
+    /// Сигнал вместе с правилом §5.4, которым он отнесён к сессии.
+    struct RelatedSignal {
+        let signal: MeetingSignal
+        let relation: SessionMachineRules.Relation
     }
 
     /// Сигналы, отнесённые к сессии (§5.4) и актуальные (C-009 §1), вместе с её собственным
     /// календарным сигналом (§5.2). Календарный сигнал строится здесь и здесь же
     /// потребляется: в поток `signals()` он не уходит.
-    func relatedSignals(for session: SessionMachineSession, now: Date) -> [MeetingSignal] {
-        let deadlines = session.event.map { SessionMachineRules.arm(for: $0, settings: settings) }
+    func relatedSignals(for session: SessionMachineSession, now: Date) -> [RelatedSignal] {
+        let sessionSide = side(of: session)
         var related = signals.values
             .filter { SessionMachineRules.isActual($0, now: now, weights: weights) }
-            .filter {
-                SessionMachineRules.relates(
-                    signal: $0,
-                    to: SessionMachineRules.SessionSide(
-                        meetingId: session.meetingId,
-                        state: session.state,
-                        provider: session.event?.conference?.provider,
-                        deadlines: deadlines
-                    ),
-                    now: now
-                )
+            .compactMap { signal -> RelatedSignal? in
+                SessionMachineRules.relation(signal: signal, to: sessionSide, now: now)
+                    .map { RelatedSignal(signal: signal, relation: $0) }
             }
         if let event = session.event,
            let own = SessionMachineRules.calendarSignal(
                for: event, origin: session.origin, weights: weights, now: now
            ) {
-            related.append(own)
+            related.append(RelatedSignal(signal: own, relation: .rule1Calendar))
         }
         return related
     }
