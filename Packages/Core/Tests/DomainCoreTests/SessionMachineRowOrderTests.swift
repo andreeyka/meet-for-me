@@ -67,13 +67,23 @@ final class SessionMachineRowOrderTests: XCTestCase {
 
     // MARK: - К45 (vii): строки 5 и 6 — побеждает 5. ДОРОЖЕ ПРОЧИХ
 
-    /// `armed`, событие сдвинулось вперёд (`now < armAt` нового окна) и ОДНОВРЕМЕННО есть
-    /// свободная звучащая цель, отдаваемая политикой. Истинны строки 5 и 6; побеждает 5, и
-    /// сессия возвращается в `scheduled`, А НЕ НАЧИНАЕТ ПИСАТЬ.
+    /// `armed`, событие сдвинулось вперёд (`now < armAt` нового окна) при свободной
+    /// звучащей цели, отдаваемой политикой. Побеждает строка 5: сессия возвращается в
+    /// `scheduled`, А НЕ НАЧИНАЕТ ПИСАТЬ. Реализация, проверяющая цель прежде календаря,
+    /// начнёт писать встречу, которая уехала.
     ///
-    /// Реализация, проверяющая цель прежде календаря, начнёт писать встречу, которая
-    /// уехала: `CaptureRequest` уйдёт наружу, и запись пойдёт на созвон, которого в этом
-    /// окне уже нет.
+    /// НАЙДЕНО ПРОГОНОМ И НАЗВАНО ЗДЕСЬ, А НЕ СПРЯТАНО: НА ЦЕЛОЙ МАШИНЕ СТРОКИ 5 И 6
+    /// ИСТИННЫМИ РАЗОМ НЕ БЫВАЮТ. Звучащая цель сессии события есть сигнал, отнесённый к
+    /// ней правилом 2 либо 3 (§5.4), а оба требуют окна `armAt ≤ now ≤ graceEndsAt`;
+    /// строка 5 требует `now < armAt` НОВОГО окна. Едва событие уехало, окно уехало с ним —
+    /// и цель перестала быть целью этой сессии тем же ходом. **Пересечение поэтому
+    /// подаётся чистой функцией** (вектор ниже), где замок строк 6 и 8 есть НЕЗАВИСИМЫЙ
+    /// вход, — и это не обход, а единственная форма, в которой вход существует.
+    ///
+    /// **Цена названа и наблюдаема здесь же:** освободившийся сигнал не пропадает — он
+    /// перестаёт быть отнесённым к какой бы то ни было сессии, то есть становится входом
+    /// §8.6, и строка 1в заводит по нему ad-hoc-сессию. Потому вектор и выбирает сессию
+    /// ПО `meetingId`, а не первую попавшуюся: живых сессий здесь две.
     func test_k45_vii_row5BeatsRow6AndTheMovedMeetingIsNotRecorded() async throws {
         let stand = try bench()
         stand.allowCaptureStart()
@@ -86,8 +96,6 @@ final class SessionMachineRowOrderTests: XCTestCase {
         let armedProbe = await stand.machine.sessions()
         XCTAssertEqual(armedProbe.first?.state, .armed, "оснастка: взведена")
 
-        // Обе клаузы истинны разом: цель свободна и отдаётся политикой `.auto`, а событие
-        // уехало за `armAt` нового окна.
         await stand.deliver(SessionMachineFixtures.audioOutput(
             appKey: "us.zoom.xos", observedAt: now, provider: "zoom"
         ))
@@ -96,14 +104,15 @@ final class SessionMachineRowOrderTests: XCTestCase {
         )
         XCTAssertLessThan(
             now, SessionMachineRules.arm(for: moved, settings: settings).armAt,
-            "оснастка: `now < armAt` нового окна"
+            "оснастка: `now < armAt` нового окна — строка 5 истинна"
         )
         await stand.deliver(CalendarChange.upserted([moved]))
         await stand.machine.tick(now: now)
 
-        let live = try unwrap(await stand.machine.sessions().first)
-        XCTAssertEqual(live.state, .scheduled, "строка 5 победила строку 6")
-        XCTAssertNil(live.recordingId, "`recordingId` не назначен")
+        let ofMeeting = try unwrap(await stand.machine.sessions().first { $0.meetingId == event.id })
+        XCTAssertEqual(ofMeeting.state, .scheduled, "строка 5 победила: сессия вернулась в `scheduled`")
+        XCTAssertNil(ofMeeting.recordingId, "`recordingId` не назначен")
+        XCTAssertNil(ofMeeting.target, "и цели у неё больше нет: окно уехало вместе с событием")
         XCTAssertEqual(
             stand.log.count(port: "AudioCapturePort", method: "start(_:)"), 0,
             "`CaptureRequest` наружу не ушёл ни разу: встречу, которая уехала, машина не пишет"
