@@ -245,9 +245,18 @@ final class SessionMachineWakeAndBoundaryTests: XCTestCase {
             .filter { $0.name.contains("Scheduler") || $0.name.contains("Recovery") }
         XCTAssertEqual(sources.count, 2, "вектор непустоты: оба файла части C на месте")
         for source in sources {
+            // КОММЕНТАРИИ СНИМАЮТСЯ, И ЭТО ЧАСТЬ ОБЛАСТИ, А НЕ ПОСЛАБЛЕНИЕ: пункт запрещает
+            // машине ИМЕТЬ собственные часы, а не называть их по имени. Шапка
+            // `SessionMachineScheduler.swift` говорит «здесь нет ни одного `Date()`» — и
+            // сплошной прогон покраснел бы на этой самой фразе, то есть на утверждении,
+            // которое он проверяет. Тот же довод, каким путевой сделана область К27 и К54.
+            let code = source.text.components(separatedBy: "\n").filter { line in
+                let trimmed = line.trimmingCharacters(in: .whitespaces)
+                return !trimmed.hasPrefix("//")
+            }.joined(separator: "\n")
             for needle in forbidden {
                 XCTAssertFalse(
-                    source.text.contains(needle), "\(source.name): «\(needle)» не встречается"
+                    code.contains(needle), "\(source.name): «\(needle)» не встречается в коде"
                 )
             }
         }

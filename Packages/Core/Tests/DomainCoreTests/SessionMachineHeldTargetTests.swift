@@ -108,21 +108,33 @@ final class SessionMachineHeldTargetTests: XCTestCase {
         let holder = await stand.machine.sessions().first { $0.origin == .adHoc }
         XCTAssertNotNil(holder, "оснастка: держатель пишет")
 
-        // Держатель выходит из множества `{recording, stopping}` ДО `graceEndsAt`.
-        await stand.deliver(CaptureEvent.failed(.systemUnavailable(message: "вектор")))
+        // ДЕРЖАТЕЛЬ ВЫХОДИТ ИЗ МНОЖЕСТВА `{recording, stopping}` ДО `graceEndsAt` — И
+        // ВЫХОДИТ ОН СТРОКАМИ 10 И 12, А НЕ ОТКАЗОМ ЗАХВАТА. Довод не вкусовой: событие
+        // `CaptureEvent.failed` порту захвата принадлежит ЦЕЛИКОМ, а не сессии (порт один
+        // на приложение), и живёт оно до конца того же `tick` — то есть строка 11 увела бы
+        // в `failed` и сессию встречи, едва та войдёт в `recording` тем же ходом. Вход
+        // пункта — «цель освободилась», а не «захват отказал», и подаётся он остановкой.
+        let holderRecording = try unwrap(holder?.recordingId)
         let freeing = arm.startsAt.addingTimeInterval(30)
+        stand.capture.setStopManifest(RecordingManifestFixtures.unfinished)
+        try await stand.machine.stopRecording(recordingId: holderRecording, now: freeing)
+        await stand.deliver(CaptureEvent.stopped(
+            try SessionMachineFixtures.manifest(recordingId: holderRecording, meetingId: nil)
+        ))
         await stand.deliver(SessionMachineFixtures.audioOutput(
             appKey: "us.zoom.xos", observedAt: freeing, provider: "zoom"
         ))
         await stand.machine.tick(now: freeing)
 
-        let freed = await stand.machine.sessions().first { $0.origin == .adHoc }
-        XCTAssertNil(freed, "оснастка: держатель вышел из множества `{recording, stopping}`")
+        let freed = try unwrap(await stand.machine.sessions().first { $0.origin == .adHoc })
+        XCTAssertEqual(
+            freed.state, .processing,
+            "оснастка: держатель вышел из множества `{recording, stopping}` строкой 12"
+        )
 
-        // ВТОРОЙ `tick` ЗДЕСЬ НЕ ОСНАСТКА, А ОТВЕТ: занятость §7.1 читается фазой сроков, и
-        // в тот ход, когда держатель ещё держал цель, строка 8 была ложна по второй клаузе.
-        // Освободилась цель ходом позже — тем же ходом, каким держатель ушёл в `failed`, — и
-        // строка 8 срабатывает на БЛИЖАЙШЕМ `tick` после освобождения (инвариант 14).
+        // Цель свободна с этого хода, и строка 8 срабатывает на БЛИЖАЙШЕМ `tick` после
+        // освобождения (инвариант 14): в тот ход, когда держатель ещё держал цель, она
+        // была ложна второй клаузой §7.1.
         let after = freeing.addingTimeInterval(10)
         await stand.deliver(SessionMachineFixtures.audioOutput(
             appKey: "us.zoom.xos", observedAt: after, provider: "zoom"
