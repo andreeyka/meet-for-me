@@ -231,8 +231,15 @@ extension SessionMachine {
             powerToken: nil
         )
         store[identifier] = session
-        hub.publish(.session(snapshot(of: session)))
+        // СНИМОК ПУБЛИКУЕТ ТОЛЬКО СТРОКА 1в, И ЭТО ЧАСТЬ ОТВЕТА ОБОИХ ПУНКТОВ. К95 требует
+        // у строки 1в «снимков ровно один, и его `state` равен `awaitingSignal`»; К44
+        // требует у строки 16 «снимков ровно один, его `state` равен `recording`». Строка
+        // 16 заводит сессию СРАЗУ в `recording`, минуя `awaitingSignal`, — и снимок по ней
+        // публикует `transition`, один. Публикуя здесь безусловно, машина отдавала бы по
+        // команде ДВА снимка, первый из которых показывает состояние, которого у этой
+        // сессии не было ни одного хода.
         guard raisePrompt else { return identifier }
+        hub.publish(.session(snapshot(of: session)))
         raised[prompt.promptId] = (prompt: prompt, isWithdrawn: false)
         promptOrder.append(prompt.promptId)
         hub.publish(.promptRaised(prompt))
@@ -288,9 +295,17 @@ extension SessionMachine {
             throw SessionError.nothingToRecord
         }
         let opened = openAdHocSession(target: group, now: now, raisePrompt: false)
-        return try await enterRecording(
-            opened, target: group, observedAt: signal.observedAt, now: now
-        )
+        do {
+            return try await enterRecording(
+                opened, target: group, observedAt: signal.observedAt, now: now
+            )
+        } catch {
+            // Строка 16 не сработала — значит и заведения не было. Сессия, заведённая этой
+            // строкой и не дошедшая до `recording`, была бы заведением ПОМИМО таблицы, а
+            // его запрещает инвариант 2; спроса при ней нет, и снять её нечем.
+            store[opened] = nil
+            throw error
+        }
     }
 
     /// Живая ad-hoc-сессия, которую команда уводит в запись строкой 8, либо `nil`.

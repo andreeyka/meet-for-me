@@ -140,6 +140,10 @@ public actor SessionMachine: SessionCoordinator {
     var arrivedCapture: [CaptureEvent] = []
     var arrivedJobs: [JobEvent] = []
 
+    /// События питания, пришедшие к этому `tick`. Живут до фазы 1 и там же чистятся:
+    /// `didWake` зовёт `reschedule(now:)`, и зовёт его ход времени, а не команда (§9.3).
+    var arrivedPower: [PowerEvent] = []
+
     var subscriptions: [Task<Void, Never>] = []
     var isStarted = false
 

@@ -7,6 +7,14 @@
 //  механические: `--strict` линта считает файл длиннее четырёхсот строк нарушением, а тело
 //  типа длиннее двухсот — вторым; расширение в тело типа не входит.
 //
+//  КАЖДАЯ КОМАНДА НАЧИНАЕТСЯ С `absorbArrivals()`, И ЭТО НЕ ОСНАСТКА. Команда исполняется
+//  В МОМЕНТ ВЫЗОВА, а вход §2 приходит потоком и лежит в ящике до ближайшего `tick`:
+//  команда, не забравшая ящик, решает по миру, каким он был на прошлом ходу. Цена этого
+//  не бумажная — §8.6 ставит условие заведения на «такой сигнал ЕСТЬ», и `startRecording
+//  (meetingId: nil)`, поданная до первого `tick` по сигналу, ответила бы `nothingToRecord`
+//  на созвон, который в эту минуту звучит (К95, вектор (б′); К44). Состояния ни одной
+//  сессии `absorbArrivals()` при этом не меняет — разбор и граница в его шапке.
+//
 //  КОМАНДЫ ИСПОЛНЯЮТСЯ В МОМЕНТ ВЫЗОВА, А НЕ НА БЛИЖАЙШЕМ `tick`, и это единственное
 //  исключение из «вход, пришедший между двумя `tick`, до `tick` состояния не меняет»
 //  (§«Поведение»). Реализация, складывающая команды до следующего `tick`, зелена на всяком
@@ -42,6 +50,7 @@ extension SessionMachine {
     /// цель, занятая идущей записью другой сессии, не отдаётся и команде, и та бросает
     /// `alreadyRecording(sessionId:)` с идентификатором ЗАНИМАЮЩЕЙ сессии (К48).
     public func startRecording(meetingId: UUID?, now: Date) async throws -> UUID {
+        absorbArrivals()
         guard let meetingId else {
             return try await startAdHocRecording(now: now)
         }
@@ -104,6 +113,7 @@ extension SessionMachine {
     /// Переводит в `stopping` НЕМЕДЛЕННО, в момент вызова, а не на следующем `tick`, и
     /// останавливает запись, которую §8.4 останавливать не собирался (К58).
     public func stopRecording(recordingId: UUID, now: Date) async throws {
+        absorbArrivals()
         guard let session = store.values.first(where: { $0.recordingId == recordingId }) else {
             throw SessionError.noRecordingInProgress(recordingId: recordingId)
         }
@@ -130,6 +140,7 @@ extension SessionMachine {
     /// тотальность того же инварианта. Названо здесь, а не умолчано: остановку идущей записи
     /// человек просит командой `stopRecording`, и она у него есть.
     public func skip(meetingId: UUID, now: Date) async throws {
+        absorbArrivals()
         guard let session = latestSession(meeting: meetingId) else {
             throw SessionError.noSuchMeeting(meetingId: meetingId)
         }
@@ -147,6 +158,7 @@ extension SessionMachine {
     /// Ответ `.skip` уводит сессию в `skipped` (строки 4, 9). Ответ `.record` открывает
     /// политику `.ask`, а у ad-hoc-сессии — уводит её в `recording` строкой 16 (§8.6).
     public func answer(promptId: UUID, _ answer: SessionPromptAnswer, now: Date) async throws {
+        absorbArrivals()
         guard let stored = raised[promptId] else {
             throw SessionError.noSuchPrompt(promptId: promptId)
         }
