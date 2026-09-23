@@ -37,8 +37,11 @@ final class AggregateRuntime: @unchecked Sendable {
     private let onBuffer: @Sendable (HardwareBuffer) -> Void
     private let onEvent: @Sendable (HardwareEvent) -> Void
 
-    private init(tapObject: AudioObjectID?, onBuffer: @escaping @Sendable (HardwareBuffer) -> Void,
-                onEvent: @escaping @Sendable (HardwareEvent) -> Void) {
+    private init(
+        tapObject: AudioObjectID?,
+        onBuffer: @escaping @Sendable (HardwareBuffer) -> Void,
+        onEvent: @escaping @Sendable (HardwareEvent) -> Void
+    ) {
         self.tapObject = tapObject
         self.onBuffer = onBuffer
         self.onEvent = onEvent

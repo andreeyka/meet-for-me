@@ -99,9 +99,10 @@ final class PromptTimeoutTests: XCTestCase {
     func test_k18_permissionObservedOnGrantAndDenyOnlyForSystemAudio() async throws {
         let harness = Harness()
         let directory = try Harness.makeDirectory()
-        var events: [CaptureEvent] = []
-        let collector = Task {
-            for await event in harness.port.events() { events.append(event) }
+        let collector = Task { () -> [CaptureEvent] in
+            var collected: [CaptureEvent] = []
+            for await event in harness.port.events() { collected.append(event) }
+            return collected
         }
         try await Task.sleep(nanoseconds: 10_000_000)
 
@@ -109,6 +110,7 @@ final class PromptTimeoutTests: XCTestCase {
 
         try await Task.sleep(nanoseconds: 20_000_000)
         collector.cancel()
+        let events = await collector.value
 
         let observed = events.compactMap { event -> (PermissionKind, PermissionStatus)? in
             if case .permissionObserved(let kind, let status) = event { return (kind, status) }
@@ -124,9 +126,10 @@ final class PromptTimeoutTests: XCTestCase {
         let directory = try Harness.makeDirectory()
         let request = Harness.request(directory: directory, input: .none)
 
-        var events: [CaptureEvent] = []
-        let collector = Task {
-            for await event in harness.port.events() { events.append(event) }
+        let collector = Task { () -> [CaptureEvent] in
+            var collected: [CaptureEvent] = []
+            for await event in harness.port.events() { collected.append(event) }
+            return collected
         }
         try await Task.sleep(nanoseconds: 10_000_000)
 
@@ -140,6 +143,7 @@ final class PromptTimeoutTests: XCTestCase {
 
         try await Task.sleep(nanoseconds: 20_000_000)
         collector.cancel()
+        let events = await collector.value
         let observed = events.compactMap { event -> PermissionStatus? in
             if case .permissionObserved(.systemAudioRecording, let status) = event { return status }
             return nil
