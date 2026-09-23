@@ -36,9 +36,19 @@ import subprocess
 import sys
 
 # Инвариант 27 C-010 запрещает ровно эти два конструктора — цитата дословная.
+# Обе формы на каждый: `JSONDecoder()` в вызывающем коде компилируется в вызов
+# АЛЛОЦИРУЮЩЕГО инициализатора класса (`__allocating_init`), а не голого
+# `init` — назначенный инициализатор сам вызывается уже ВНУТРИ Foundation и
+# наружу неопределённым символом не выходит. Прогон 35934656184 нашёл ровно
+# `Foundation.JSONDecoder.__allocating_init()`, и подстрока `JSONDecoder.init`
+# в нём не встречается (между `.` и `init` стоит `__allocating_`) — первая
+# редакция эту форму пропускала молча. Голая `.init`-форма оставлена на
+# случай менее обычного пути вызова (например, через протокол-метатип).
 FORBIDDEN_CALLS = [
     "Foundation.JSONDecoder.init",
+    "Foundation.JSONDecoder.__allocating_init",
     "Foundation.JSONEncoder.init",
+    "Foundation.JSONEncoder.__allocating_init",
 ]
 
 
@@ -48,9 +58,17 @@ def find_object_files(build_dir, target):
     Раскладка — легаси-сборка SwiftPM: `<build_dir>/**/<Target>.build/**/*.o`.
     Если раскладка сменится версией тулчейна, шаг обязан упасть явным
     отказом (пустой список ниже), а не молча решить, что проверять нечего.
+
+    Дедуп по `realpath` — несущий, не украшение: `.build/debug` в SwiftPM
+    сам есть симлинк на `.build/<triple>/debug` (прогон 35934656184 нашёл
+    оба пути на один и тот же файл), и без дедупа отчёт вдвое завышал бы
+    число объектников и число символов, не меняя вердикт по существу.
     """
     pattern = os.path.join(build_dir, "**", "%s.build" % target, "**", "*.o")
-    return sorted(glob.glob(pattern, recursive=True))
+    seen_real = {}
+    for path in glob.glob(pattern, recursive=True):
+        seen_real.setdefault(os.path.realpath(path), path)
+    return sorted(seen_real.values())
 
 
 def undefined_symbol_names(object_files, run=subprocess.run):
@@ -147,8 +165,19 @@ def self_test():
     а не по мангленному — self-test проверяет это напрямую, без nm и без
     настоящего object-файла."""
     cases = [
+        # Форма __allocating_init — дословно то, что нашёл прогон 35934656184
+        # на настоящем `JSONDecoder()` в коде: designated `init` вызывается
+        # внутри Foundation и наружу неопределённым символом не выходит,
+        # видна только аллоцирующая обёртка. Первая редакция ловила только
+        # (никогда не встречающуюся у вызывающей стороны) голую форму ниже и
+        # эту, настоящую, пропускала молча — тот самый прогон это и поймал.
+        ("$s10Foundation11JSONDecoderC4initACycfC",
+         "Foundation.JSONDecoder.__allocating_init() -> Foundation.JSONDecoder", True),
+        ("$s10Foundation11JSONEncoderC4initACycfC",
+         "Foundation.JSONEncoder.__allocating_init() -> Foundation.JSONEncoder", True),
+        # Голая форма — оставлена в списке FORBIDDEN_CALLS на случай менее
+        # обычного пути вызова, но сама по себе ни разу не наблюдалась.
         ("$s10Foundation11JSONDecoderC4initACycfc", "Foundation.JSONDecoder.init() -> Foundation.JSONDecoder", True),
-        ("$s10Foundation11JSONEncoderC4initACycfc", "Foundation.JSONEncoder.init() -> Foundation.JSONEncoder", True),
         ("$s10Foundation3URLV4initSS-", "Foundation.URL.init(_:)", False),
         ("$s7Storage10DomainJSON6decode", "Storage.DomainJSON.decode(_:from:)", False),
     ]
