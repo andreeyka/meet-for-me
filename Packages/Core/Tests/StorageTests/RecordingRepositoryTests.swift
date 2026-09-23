@@ -116,6 +116,63 @@ final class RecordingRepositoryTests: StorageAsyncTestCase {
         try await repository.delete(recordingId: thirdId, deleteFiles: true)
     }
 
+    // MARK: - Инвариант 7 (C-010 v8): meeting_id пишется из манифеста только при вставке
+
+    /// IR-113 (МЕЕ-326), закрыт изданием C-010 v8: `save(_:)` пишет `meeting_id`
+    /// из `manifest.meetingId` только при вставке НОВОЙ строки; у уже
+    /// существующей строки колонку не трогает ни в какую сторону — ни до
+    /// каскада (другим значением того же поля), ни после него (значением из
+    /// манифеста, ссылающимся на уже удалённую встречу).
+    func testInv7v8_meetingIdWrittenOnlyOnInsertNotOnUpdateBeforeOrAfterCascade() async throws {
+        let temp = try StorageTestSupport.makeDatabase()
+        defer { StorageTestSupport.cleanup(temp) }
+        let layout = FileLayout(root: temp.directory)
+        let recordingRepository = temp.database.recordingRepository(fileLayout: layout)
+        let meetingRepository = temp.database.meetingRepository()
+
+        let meetingA = try TestFixtures.meetingEvent(externalId: "ext-inv7-a")
+        let meetingB = try TestFixtures.meetingEvent(externalId: "ext-inv7-b")
+        try await meetingRepository.save(MeetingRecord(event: meetingA, dedupKey: nil, status: .scheduled, sources: []))
+        try await meetingRepository.save(MeetingRecord(event: meetingB, dedupKey: nil, status: .scheduled, sources: []))
+
+        let recordingId = UUID()
+        let manifestA = try TestFixtures.recordingManifest(recordingId: recordingId, meetingId: meetingA.id)
+        try await recordingRepository.save(RecordingRecord(manifest: manifestA, status: .recording))
+
+        // До каскада: второй save с ДРУГИМ manifest.meetingId у уже существующей
+        // строки не меняет колонку.
+        let manifestB = try TestFixtures.recordingManifest(recordingId: recordingId, meetingId: meetingB.id)
+        try await recordingRepository.save(RecordingRecord(manifest: manifestB, status: .recording))
+        var columnValue = try Self.readMeetingIdColumn(recordingId: recordingId, database: temp.database)
+        XCTAssertEqual(columnValue, meetingA.id.uuidString, "save на существующей строке не меняет meeting_id")
+
+        // Каскад: удаление meetingA обнуляет колонку.
+        try await meetingRepository.delete(meetingIds: [meetingA.id])
+        columnValue = try Self.readMeetingIdColumn(recordingId: recordingId, database: temp.database)
+        XCTAssertNil(columnValue)
+
+        // После каскада: save с manifest.meetingId, ссылающимся на meetingB
+        // (существующую встречу), у уже существующей строки по-прежнему не
+        // трогает колонку — она остаётся NULL, а не становится meetingB.id.
+        try await recordingRepository.save(RecordingRecord(manifest: manifestB, status: .recording))
+        columnValue = try Self.readMeetingIdColumn(recordingId: recordingId, database: temp.database)
+        XCTAssertNil(columnValue, "save на осиротевшей строке не восстанавливает meeting_id")
+
+        // Манифест при этом хранит переданное значение — колонка и манифест
+        // осознанно расходятся (инвариант 7, вторая половина).
+        let stored = try await recordingRepository.recording(id: recordingId)
+        XCTAssertEqual(stored?.manifest.meetingId, meetingB.id)
+    }
+
+    private static func readMeetingIdColumn(recordingId: UUID, database: StorageDatabase) throws -> String? {
+        try database.rawRead { db in
+            let row = try Row.fetchOne(
+                db, sql: "SELECT meeting_id FROM recordings WHERE id = ?", arguments: [recordingId.uuidString]
+            )
+            return row?["meeting_id"]
+        }
+    }
+
     // MARK: - Снимок каталога побайтно
 
     private static func snapshot(of directory: URL) throws -> [String: Data] {

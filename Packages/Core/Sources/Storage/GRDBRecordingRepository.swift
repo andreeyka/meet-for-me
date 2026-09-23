@@ -1,6 +1,11 @@
-//  GRDBRecordingRepository — реализация `RecordingRepository`, C-010 (MEE-18) v7 §5.
+//  GRDBRecordingRepository — реализация `RecordingRepository`, C-010 (MEE-18) v8 §5.
 //
 //  Модуль: storage · Владелец: DEV-2 · Слой: хранилище
+//
+//  IR-113 (МЕЕ-326) закрыт изданием C-010 v8, инвариант 7: `save(_:)` пишет
+//  `recordings.meeting_id` из `manifest.meetingId` только при вставке НОВОЙ
+//  строки; у уже существующей строки колонку не трогает ни в какую сторону —
+//  `meeting_id` в `ON CONFLICT … DO UPDATE SET` ниже отсутствует нарочно.
 
 import Foundation
 import GRDB
@@ -18,19 +23,6 @@ final class GRDBRecordingRepository: RecordingRepository {
 
     // MARK: - Запись
 
-    // СТРОКА: IR-113 (МЕЕ-326) — контракт не говорит, пишет ли `save(_:)` колонку
-    // `recordings.meeting_id` из `manifest.meetingId` у УЖЕ существующей строки.
-    // Сегодня пишет: `ON CONFLICT(id) DO UPDATE SET meeting_id = excluded.meeting_id`
-    // ниже перезаписывает колонку манифестом при каждом сохранении, в том числе
-    // повторном. Вилка: (а) колонка на обновлении не трогается вовсе — правильно
-    // для осиротевшей каскадом записи (манифест хранит старый meetingId), но тогда
-    // `save` не может восстановить принадлежность записи новой встрече тем же
-    // методом; (б) колонка пишется из манифеста всегда, как сейчас, — простее,
-    // но `save` на осиротевшей записи со СТАРЫМ meetingId в манифесте попытается
-    // записать в `meeting_id` идентификатор уже удалённой встречи и получит
-    // `constraintViolation` от внешнего ключа (FK на `meetings(id)` с `ON DELETE
-    // SET NULL` не восстанавливает ссылку заново при повторной вставке чужого
-    // значения). За контракт не решаю — решает архитектор (IR-113).
     func save(_ record: RecordingRecord) async throws {
         let manifestText = try StorageJSON.encodeToText(record.manifest)
         let idText = record.manifest.recordingId.uuidString
@@ -44,7 +36,6 @@ final class GRDBRecordingRepository: RecordingRepository {
                          manifest_json, is_finalized, status, created_at, updated_at)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(id) DO UPDATE SET
-                        meeting_id = excluded.meeting_id,
                         directory_name = excluded.directory_name,
                         started_at = excluded.started_at,
                         ended_at = excluded.ended_at,
