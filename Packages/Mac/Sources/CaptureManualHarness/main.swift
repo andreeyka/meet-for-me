@@ -90,7 +90,7 @@ CaptureManualHarness — носитель М1/М2 и писатель К27(б) (
 
 let rawArguments = Array(CommandLine.arguments.dropFirst())
 guard let mode = rawArguments.first else { fail(usage) }
-let arguments = Arguments(Array(rawArguments.dropFirst()))
+private let arguments = Arguments(Array(rawArguments.dropFirst()))
 
 switch mode {
 case "start":
