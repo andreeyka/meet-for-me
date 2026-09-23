@@ -58,6 +58,7 @@ final class TranscriptRepositoryFileTests: StorageAsyncTestCase {
         let layout = FileLayout(root: temp.directory)
         let recordingRepository = temp.database.recordingRepository(fileLayout: layout)
         let transcripts = temp.database.transcriptRepository()
+        let persons = temp.database.personRepository()
 
         let recordingId = UUID()
         try await recordingRepository.save(RecordingRecord(
@@ -67,6 +68,7 @@ final class TranscriptRepositoryFileTests: StorageAsyncTestCase {
         let header = try await transcripts.save(
             try TestFixtures.transcript(recordingId: recordingId, segments: segments)
         )
+        let personId = try await persons.upsert(displayName: "K20 Person", emails: ["k20@example.com"])
 
         let directory = layout.recordingDirectory(recordingId.uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -77,7 +79,7 @@ final class TranscriptRepositoryFileTests: StorageAsyncTestCase {
         let rows = try await transcripts.segments(transcriptId: header.id)
         try await transcripts.updateAttribution([
             SegmentAttributionUpdate(
-                segmentId: rows[0].id, personId: UUID(), speakerConfidence: 0.9, attributionSource: .voiceProfile
+                segmentId: rows[0].id, personId: personId, speakerConfidence: 0.9, attributionSource: .voiceProfile
             )
         ])
         try await transcripts.updateSegmentText(segmentId: rows[1].id, text: "edited", isUserEdited: true)
@@ -98,6 +100,7 @@ final class TranscriptRepositoryFileTests: StorageAsyncTestCase {
         let layout = FileLayout(root: temp.directory)
         let recordingRepository = temp.database.recordingRepository(fileLayout: layout)
         let transcripts = temp.database.transcriptRepository()
+        let persons = temp.database.personRepository()
 
         let recordingId = UUID()
         try await recordingRepository.save(RecordingRecord(
@@ -108,12 +111,13 @@ final class TranscriptRepositoryFileTests: StorageAsyncTestCase {
             try TestFixtures.transcript(recordingId: recordingId, segments: segments)
         )
         let rows = try await transcripts.segments(transcriptId: header.id)
+        let personId = try await persons.upsert(displayName: "K22 Person", emails: ["k22@example.com"])
 
         try await transcripts.updateSegmentText(segmentId: rows[1].id, text: "user text", isUserEdited: true)
 
         let updates = rows.map {
             SegmentAttributionUpdate(
-                segmentId: $0.id, personId: UUID(), speakerConfidence: 0.5, attributionSource: .oneOnOne
+                segmentId: $0.id, personId: personId, speakerConfidence: 0.5, attributionSource: .oneOnOne
             )
         }
         try await transcripts.updateAttribution(updates)

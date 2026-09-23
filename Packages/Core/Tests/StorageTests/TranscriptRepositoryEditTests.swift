@@ -64,6 +64,10 @@ final class TranscriptRepositoryEditTests: StorageAsyncTestCase {
     /// `speaker_confidence` вне `0...1` — не часть домена `Transcript.Segment` (поле
     /// атрибуции), поэтому проверяется отдельно в `segments(transcriptId:)`, а не
     /// через `transcript(id:)`.
+    ///
+    /// Как и К14(ii) (см. `testK14ii_readingBrokenRowGivesDataCorrupted`): собственный
+    /// `CHECK` схемы v7/v8 на `speaker_confidence` делает обычный `UPDATE` с плохим
+    /// значением недостижимым — тот же `PRAGMA ignore_check_constraints` в обход.
     func testK14_speakerConfidenceOutOfRangeGivesDataCorruptedOnSegments() async throws {
         let temp = try StorageTestSupport.makeDatabase()
         defer { StorageTestSupport.cleanup(temp) }
@@ -81,10 +85,12 @@ final class TranscriptRepositoryEditTests: StorageAsyncTestCase {
             )
         )
         try temp.database.rawWrite { db in
+            try db.execute(sql: "PRAGMA ignore_check_constraints = ON")
             try db.execute(
                 sql: "UPDATE segments SET speaker_confidence = 5.0 WHERE transcript_id = ?",
                 arguments: [header.id.uuidString]
             )
+            try db.execute(sql: "PRAGMA ignore_check_constraints = OFF")
         }
 
         do {

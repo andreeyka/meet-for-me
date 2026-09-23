@@ -59,14 +59,14 @@ final class TranscriptRepositoryTests: StorageAsyncTestCase {
 
         // 3—4: updateSegmentText на первом сегменте каждого транскрипта.
         let a1Rows = try await transcripts.segments(transcriptId: a1.id)
-        try await update(a1Rows[0].id, "a1 alpha updated"); try await check()
+        try await update(a1Rows[0].id, "a1 renamed"); try await check()
         let oldHits = try await transcripts.search(query: "alpha", limit: 20, offset: 0)
         XCTAssertFalse(oldHits.contains { $0.segmentId == a1Rows[0].id }, "прежний текст не находится")
-        let newHits = try await transcripts.search(query: "updated", limit: 20, offset: 0)
+        let newHits = try await transcripts.search(query: "renamed", limit: 20, offset: 0)
         XCTAssertTrue(newHits.contains { $0.segmentId == a1Rows[0].id }, "новый текст находится")
 
         let b1Rows = try await transcripts.segments(transcriptId: b1.id)
-        try await update(b1Rows[0].id, "b1 alpha updated"); try await check()
+        try await update(b1Rows[0].id, "b1 renamed"); try await check()
 
         // 5—6: второй транскрипт на A, обновление в нём.
         let a2 = try await Self.saveThreeSegments(recordingA, "a2", transcripts); try await check()
