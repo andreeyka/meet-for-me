@@ -18,6 +18,19 @@ final class GRDBRecordingRepository: RecordingRepository {
 
     // MARK: - Запись
 
+    // СТРОКА: IR-113 (МЕЕ-326) — контракт не говорит, пишет ли `save(_:)` колонку
+    // `recordings.meeting_id` из `manifest.meetingId` у УЖЕ существующей строки.
+    // Сегодня пишет: `ON CONFLICT(id) DO UPDATE SET meeting_id = excluded.meeting_id`
+    // ниже перезаписывает колонку манифестом при каждом сохранении, в том числе
+    // повторном. Вилка: (а) колонка на обновлении не трогается вовсе — правильно
+    // для осиротевшей каскадом записи (манифест хранит старый meetingId), но тогда
+    // `save` не может восстановить принадлежность записи новой встрече тем же
+    // методом; (б) колонка пишется из манифеста всегда, как сейчас, — простее,
+    // но `save` на осиротевшей записи со СТАРЫМ meetingId в манифесте попытается
+    // записать в `meeting_id` идентификатор уже удалённой встречи и получит
+    // `constraintViolation` от внешнего ключа (FK на `meetings(id)` с `ON DELETE
+    // SET NULL` не восстанавливает ссылку заново при повторной вставке чужого
+    // значения). За контракт не решаю — решает архитектор (IR-113).
     func save(_ record: RecordingRecord) async throws {
         let manifestText = try StorageJSON.encodeToText(record.manifest)
         let idText = record.manifest.recordingId.uuidString
