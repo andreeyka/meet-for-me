@@ -25,13 +25,26 @@ let package = Package(
         .library(name: "ModelManager", targets: ["ModelManager"]),
         .library(name: "Attribution", targets: ["Attribution"]),
     ],
+    dependencies: [
+        // Storage §4/C-010: DatabaseMigrator — механизм миграций схемы SQLite.
+        // Версия закреплена точно (exact), а не диапазоном: последнее издание
+        // линии v6, ещё на swift-tools-version 5.7 — совместимо с тулчейном
+        // 5.10 в работе Core (Linux); линия v7 требует Swift 6.1+ (MEE-321).
+        .package(url: "https://github.com/groue/GRDB.swift", exact: "6.29.3"),
+    ],
     targets: [
         // домен: DTO, порты, машина состояний, Scheduler, JobQueue — только Foundation
         .target(name: "DomainCore", resources: [.copy("signal-weights.json")]),
         // фейки портов домена: живут отдельно, чтобы не тянуть системные фреймворки
         .target(name: "DomainTestKit", dependencies: ["DomainCore"]),
 
-        .target(name: "Storage", dependencies: ["DomainCore"]),
+        .target(
+            name: "Storage",
+            dependencies: [
+                "DomainCore",
+                .product(name: "GRDB", package: "GRDB.swift"),
+            ]
+        ),
         .target(name: "CalendarHub", dependencies: ["DomainCore"]),
         .target(name: "EngineKit", dependencies: ["DomainCore"]),
         .target(name: "GigaAM", dependencies: ["EngineKit"]),
@@ -46,7 +59,14 @@ let package = Package(
             dependencies: ["DomainCore", "DomainTestKit"],
             resources: [.copy("Fixtures")]
         ),
-        .testTarget(name: "StorageTests", dependencies: ["Storage", "DomainTestKit"]),
+        .testTarget(
+            name: "StorageTests",
+            dependencies: [
+                "Storage",
+                "DomainTestKit",
+                .product(name: "GRDB", package: "GRDB.swift"),
+            ]
+        ),
         .testTarget(name: "CalendarHubTests", dependencies: ["CalendarHub", "DomainTestKit"]),
         .testTarget(name: "EngineKitTests", dependencies: ["EngineKit", "DomainTestKit"]),
         .testTarget(name: "GigaAMTests", dependencies: ["GigaAM", "DomainTestKit"]),
