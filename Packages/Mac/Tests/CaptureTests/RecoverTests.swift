@@ -10,7 +10,9 @@ final class RecoverTests: CaptureAsyncTestCase {
 
     /// Каталог с оборванным манифестом: трек написан напрямую через `TrackFile` (та же точка
     /// входа, что и харнесс-писатель К27б), файл не финализирован — как после `SIGKILL`.
-    private func makeTruncatedRecording(frames: Int, sampleRate: Int = 48_000) throws -> (directory: URL, recordingId: UUID) {
+    private func makeTruncatedRecording(
+        frames: Int, sampleRate: Int = 48_000
+    ) throws -> (directory: URL, recordingId: UUID) {
         let directory = try Harness.makeDirectory()
         let recordingId = UUID()
         let format = TrackFormat(sampleRate: sampleRate, channelCount: 1)
