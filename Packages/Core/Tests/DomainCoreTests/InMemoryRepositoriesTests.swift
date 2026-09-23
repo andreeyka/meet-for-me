@@ -19,6 +19,13 @@ import DomainCore
 import DomainTestKit
 
 final class InMemoryRepositoriesTests: XCTestCase {
+}
+
+// Тело разбито на несколько `extension` не по смыслу, а по объёму: `type_body_length`
+// SwiftLint (--strict, работа «Core + Mac») считает тело класса и тело каждого
+// `extension` порознь, и одним телом весь файл превышал порог 250 строк (274 строки,
+// прогон CI). Три блока ниже — те же три раздела, что были в одном теле класса.
+extension InMemoryRepositoriesTests {
 
     // MARK: - Встречи: инвариант 6 (уникальность dedup_key) и инвариант 20 (что бросает)
 
@@ -122,6 +129,9 @@ final class InMemoryRepositoriesTests: XCTestCase {
         let restored = try await repositories.meetings.meeting(id: event.id)
         XCTAssertEqual(restored?.event.id, event.id, "отказ снимается")
     }
+}
+
+extension InMemoryRepositoriesTests {
 
     // MARK: - Записи: инвариант 13, предикат `unfinalized()`, каскад инварианта 8
 
@@ -306,6 +316,9 @@ final class InMemoryRepositoriesTests: XCTestCase {
         let adHoc = try await repositories.recordings.adHoc()
         XCTAssertTrue(adHoc.isEmpty, "встреча жива — привязка держится, запись не ad-hoc")
     }
+}
+
+extension InMemoryRepositoriesTests {
 
     // MARK: - Контейнер: один журнал на три порта
 
