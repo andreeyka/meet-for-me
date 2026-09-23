@@ -50,7 +50,7 @@ final class GRDBRecordingRepository: RecordingRepository {
                         record.manifest.isFinalized ? 1 : 0,
                         record.status.rawValue,
                         now,
-                        now,
+                        now
                     ]
                 )
             }

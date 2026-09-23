@@ -28,7 +28,7 @@ enum StorageMigrations {
     static let tableNames = [
         "persons", "person_emails", "person_name_forms", "meetings", "meeting_sources",
         "attendees", "recordings", "transcripts", "segments", "speaker_profiles",
-        "jobs", "connectors", "meeting_outputs", "app_settings",
+        "jobs", "connectors", "meeting_outputs", "app_settings"
     ]
 
     static let virtualTableNames = ["segments_fts"]
@@ -37,7 +37,7 @@ enum StorageMigrations {
         "idx_persons_me", "idx_person_emails_person", "idx_person_name_forms_form",
         "idx_meetings_dedup", "idx_meetings_start", "idx_meeting_sources_meeting",
         "idx_recordings_meeting", "idx_transcripts_recording", "idx_segments_transcript",
-        "idx_segments_person", "idx_jobs_claim", "idx_jobs_dedup", "idx_meeting_outputs_meeting",
+        "idx_segments_person", "idx_jobs_claim", "idx_jobs_dedup", "idx_meeting_outputs_meeting"
     ]
 
     static let triggerNames = ["segments_fts_ai", "segments_fts_ad", "segments_fts_au"]

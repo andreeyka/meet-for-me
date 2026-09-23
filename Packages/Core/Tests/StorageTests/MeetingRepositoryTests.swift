@@ -17,13 +17,11 @@ final class MeetingRepositoryTests: StorageAsyncTestCase {
         // (i) одинаковый непустой dedup_key — вторая встреча не создаётся.
         let sharedKey = DedupKey.icalUid("uid-shared", startEpochSeconds: 100)
         let firstEvent = try TestFixtures.meetingEvent(externalId: "ext-1")
-        try await repository.save(MeetingRecord(event: firstEvent, dedupKey: sharedKey, status: .scheduled, sources: []))
+        try await Self.save(firstEvent, dedupKey: sharedKey, repository: repository)
 
         let secondEvent = try TestFixtures.meetingEvent(externalId: "ext-2")
         await XCTAssertThrowsErrorAsync(
-            try await repository.save(
-                MeetingRecord(event: secondEvent, dedupKey: sharedKey, status: .scheduled, sources: [])
-            )
+            try await Self.save(secondEvent, dedupKey: sharedKey, repository: repository)
         )
         let secondRead = try await repository.meeting(id: secondEvent.id)
         XCTAssertNil(secondRead, "вторая встреча не создана")
@@ -31,8 +29,8 @@ final class MeetingRepositoryTests: StorageAsyncTestCase {
         // (ii) dedup_key == NULL у обеих — уникальности не требует, обе существуют.
         let thirdEvent = try TestFixtures.meetingEvent(externalId: "ext-3")
         let fourthEvent = try TestFixtures.meetingEvent(externalId: "ext-4")
-        try await repository.save(MeetingRecord(event: thirdEvent, dedupKey: nil, status: .scheduled, sources: []))
-        try await repository.save(MeetingRecord(event: fourthEvent, dedupKey: nil, status: .scheduled, sources: []))
+        try await Self.save(thirdEvent, dedupKey: nil, repository: repository)
+        try await Self.save(fourthEvent, dedupKey: nil, repository: repository)
         let thirdRead = try await repository.meeting(id: thirdEvent.id)
         let fourthRead = try await repository.meeting(id: fourthEvent.id)
         XCTAssertNotNil(thirdRead)
@@ -41,9 +39,15 @@ final class MeetingRepositoryTests: StorageAsyncTestCase {
         // (iii) ключ, уже занятый удалённой встречей, — создаётся.
         try await repository.delete(meetingIds: [firstEvent.id])
         let fifthEvent = try TestFixtures.meetingEvent(externalId: "ext-5")
-        try await repository.save(MeetingRecord(event: fifthEvent, dedupKey: sharedKey, status: .scheduled, sources: []))
+        try await Self.save(fifthEvent, dedupKey: sharedKey, repository: repository)
         let fifthRead = try await repository.meeting(id: fifthEvent.id)
         XCTAssertNotNil(fifthRead)
+    }
+
+    private static func save(
+        _ event: MeetingEvent, dedupKey: DedupKey?, repository: MeetingRepository
+    ) async throws {
+        try await repository.save(MeetingRecord(event: event, dedupKey: dedupKey, status: .scheduled, sources: []))
     }
 
     // MARK: - К11
@@ -55,27 +59,49 @@ final class MeetingRepositoryTests: StorageAsyncTestCase {
         let meetingRepository = temp.database.meetingRepository()
         let recordingRepository = temp.database.recordingRepository(fileLayout: layout)
 
-        let attendeeOne = try MeetingEvent.Attendee(
-            person: try MeetingEvent.Person(name: "Alice", email: "alice@example.com"),
-            responseStatus: .accepted, isOptional: false
+        let event = try await Self.seedMeetingWithChildren(
+            meetingRepository: meetingRepository, database: temp.database
         )
-        let attendeeTwo = try MeetingEvent.Attendee(
-            person: try MeetingEvent.Person(name: "Bob", email: "bob@example.com"),
-            responseStatus: .tentative, isOptional: true
+        let recordingId = try await Self.seedRecording(
+            meetingId: event.id, layout: layout, repository: recordingRepository
         )
-        let event = try TestFixtures.meetingEvent(externalId: "ext-k11", attendees: [attendeeOne, attendeeTwo])
+
+        try await meetingRepository.delete(meetingIds: [event.id])
+
+        try await Self.assertChildrenCascaded(meetingId: event.id, database: temp.database)
+        try await Self.assertRecordingSurvivedWithNilMeetingId(
+            recordingId: recordingId, originalMeetingId: event.id, layout: layout,
+            database: temp.database, repository: recordingRepository
+        )
+    }
+
+    /// Встреча с двумя источниками, двумя участниками и двумя `meeting_outputs`
+    /// (вставлены мимо репозитория — своего порта у этой части ещё нет).
+    private static func seedMeetingWithChildren(
+        meetingRepository: MeetingRepository, database: StorageDatabase
+    ) async throws -> MeetingEvent {
+        let attendees = try [
+            MeetingEvent.Attendee(
+                person: try MeetingEvent.Person(name: "Alice", email: "alice@example.com"),
+                responseStatus: .accepted, isOptional: false
+            ),
+            MeetingEvent.Attendee(
+                person: try MeetingEvent.Person(name: "Bob", email: "bob@example.com"),
+                responseStatus: .tentative, isOptional: true
+            )
+        ]
+        let event = try TestFixtures.meetingEvent(externalId: "ext-k11", attendees: attendees)
         let sources = [
             MeetingSource(sourceConnectorId: "eventkit", externalId: "ext-k11", icalUid: "ical-1",
                           lastModified: TestFixtures.epoch),
             MeetingSource(sourceConnectorId: "stdio", externalId: "ext-k11-b", icalUid: nil,
-                          lastModified: TestFixtures.epoch),
+                          lastModified: TestFixtures.epoch)
         ]
         try await meetingRepository.save(
             MeetingRecord(event: event, dedupKey: nil, status: .scheduled, sources: sources)
         )
-
-        try temp.database.rawWrite { db in
-            for suffix in ["a", "b"] {
+        try database.rawWrite { db in
+            for _ in 0..<2 {
                 try db.execute(
                     sql: """
                     INSERT INTO meeting_outputs
@@ -85,37 +111,45 @@ final class MeetingRepositoryTests: StorageAsyncTestCase {
                     """,
                     arguments: [UUID().uuidString, event.id.uuidString]
                 )
-                _ = suffix
             }
         }
+        return event
+    }
 
+    private static func seedRecording(
+        meetingId: UUID, layout: FileLayout, repository: RecordingRepository
+    ) async throws -> UUID {
         let recordingId = UUID()
         let directory = layout.recordingDirectory(recordingId.uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         try Data("audio".utf8).write(to: directory.appendingPathComponent("manifest.json"))
-        let manifest = try TestFixtures.recordingManifest(recordingId: recordingId, meetingId: event.id)
-        try await recordingRepository.save(RecordingRecord(manifest: manifest, status: .recording))
+        let manifest = try TestFixtures.recordingManifest(recordingId: recordingId, meetingId: meetingId)
+        try await repository.save(RecordingRecord(manifest: manifest, status: .recording))
+        return recordingId
+    }
 
-        try await meetingRepository.delete(meetingIds: [event.id])
-
-        let counts = try temp.database.rawRead { db -> (Int, Int, Int) in
-            let sourcesCount = try Int.fetchOne(
-                db, sql: "SELECT COUNT(*) FROM meeting_sources WHERE meeting_id = ?", arguments: [event.id.uuidString]
-            ) ?? -1
-            let attendeesCount = try Int.fetchOne(
-                db, sql: "SELECT COUNT(*) FROM attendees WHERE meeting_id = ?", arguments: [event.id.uuidString]
-            ) ?? -1
-            let outputsCount = try Int.fetchOne(
-                db, sql: "SELECT COUNT(*) FROM meeting_outputs WHERE meeting_id = ?", arguments: [event.id.uuidString]
-            ) ?? -1
-            return (sourcesCount, attendeesCount, outputsCount)
+    private static func assertChildrenCascaded(meetingId: UUID, database: StorageDatabase) throws {
+        let idText = meetingId.uuidString
+        let sourcesCount = try database.rawRead { db in
+            try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM meeting_sources WHERE meeting_id = ?", arguments: [idText])
         }
-        XCTAssertEqual(counts.0, 0, "meeting_sources каскадом удалены")
-        XCTAssertEqual(counts.1, 0, "attendees каскадом удалены")
-        XCTAssertEqual(counts.2, 0, "meeting_outputs каскадом удалены")
+        let attendeesCount = try database.rawRead { db in
+            try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM attendees WHERE meeting_id = ?", arguments: [idText])
+        }
+        let outputsCount = try database.rawRead { db in
+            try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM meeting_outputs WHERE meeting_id = ?", arguments: [idText])
+        }
+        XCTAssertEqual(sourcesCount, 0, "meeting_sources каскадом удалены")
+        XCTAssertEqual(attendeesCount, 0, "attendees каскадом удалены")
+        XCTAssertEqual(outputsCount, 0, "meeting_outputs каскадом удалены")
+    }
 
+    private static func assertRecordingSurvivedWithNilMeetingId(
+        recordingId: UUID, originalMeetingId: UUID, layout: FileLayout,
+        database: StorageDatabase, repository: RecordingRepository
+    ) async throws {
         // Строка recordings осталась, meeting_id стал NULL — наблюдение через Ш7 (не через manifest).
-        let recordingMeetingId: String? = try temp.database.rawRead { db in
+        let recordingMeetingId: String? = try database.rawRead { db in
             let row = try Row.fetchOne(
                 db, sql: "SELECT meeting_id FROM recordings WHERE id = ?", arguments: [recordingId.uuidString]
             )
@@ -124,11 +158,12 @@ final class MeetingRepositoryTests: StorageAsyncTestCase {
         XCTAssertNil(recordingMeetingId)
 
         // Манифест (K87) не трогается каскадом — прежний meetingId виден через порт.
-        let recordingRecord = try await recordingRepository.recording(id: recordingId)
-        XCTAssertEqual(recordingRecord?.manifest.meetingId, event.id)
+        let recordingRecord = try await repository.recording(id: recordingId)
+        XCTAssertEqual(recordingRecord?.manifest.meetingId, originalMeetingId)
 
         // Каталог записи и файлы в нём целы.
-        XCTAssertTrue(FileManager.default.fileExists(atPath: directory.appendingPathComponent("manifest.json").path))
+        let manifestPath = layout.manifestURL(recordingId.uuidString).path
+        XCTAssertTrue(FileManager.default.fileExists(atPath: manifestPath))
     }
 }
 

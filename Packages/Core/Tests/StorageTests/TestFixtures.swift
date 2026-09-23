@@ -25,7 +25,7 @@ enum TestFixtures {
                     channel: .mic, fileName: "audio-mic.caf",
                     sampleRate: 16_000, channelCount: 1,
                     format: isFinalized ? "aac-m4a" : "pcm-caf"
-                ),
+                )
             ],
             markers: [],
             capturedProcesses: [],
