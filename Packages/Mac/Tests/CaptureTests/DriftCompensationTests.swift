@@ -37,4 +37,31 @@ final class DriftCompensationTests: CaptureAsyncTestCase {
         XCTAssertTrue(harness.gateway.aggregateBuildArgs.allSatisfy(\.driftCompensation),
                       "компенсация дрейфа — true на каждом вызове buildAggregate без исключений")
     }
+
+    /// Возврат MEE-317 (третий круг): «между сеансами» — второй `start()` после `stop()`
+    /// первого, не только повторные пересборки внутри одного сеанса.
+    func test_k06_driftCompensationTrueAcrossTwoConsecutiveSessions() async throws {
+        let harness = Harness()
+
+        let firstDirectory = try Harness.makeDirectory()
+        try await harness.start(directory: firstDirectory)
+        _ = try await harness.port.stop()
+
+        let secondDirectory = try Harness.makeDirectory()
+        try await harness.start(directory: secondDirectory)
+        _ = try await harness.port.stop()
+
+        XCTAssertEqual(harness.gateway.aggregateBuildCount, 2, "по одной сборке на сеанс")
+        XCTAssertTrue(harness.gateway.aggregateBuildArgs.allSatisfy(\.driftCompensation),
+                      "компенсация дрейфа — true и во втором сеансе, не только в первом")
+    }
+
+    /// Возврат MEE-317 (третий круг): значение для НЕ опорного tap — чистая функция
+    /// (`AggregateRuntime.nonReferenceDriftCompensationValue`), не требующая живого HAL.
+    /// `buildComposition` целиком не тестируема в CI без TCC и настоящего tap-объекта — эта
+    /// часть её решения тестируема, и здесь проверена напрямую.
+    func test_k06_nonReferenceDriftCompensationValueMatchesFlag() {
+        XCTAssertEqual(AggregateRuntime.nonReferenceDriftCompensationValue(true), 1)
+        XCTAssertEqual(AggregateRuntime.nonReferenceDriftCompensationValue(false), 0)
+    }
 }

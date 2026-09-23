@@ -3,9 +3,21 @@
 //  Модуль: capture · Владелец: DEV-1 · Слой: адаптер системного API
 //
 //  Раскладка буферов IO — по спайку: сперва входные потоки саб-устройств по порядку списка
-//  (микрофон, если есть), затем taps. Компенсация дрейфа включена на каждом саб-устройстве и
-//  тапе, кроме первого — первый служит опорными часами (инвариант 6: включена ВСЕГДА, кроме
-//  единственного опорного элемента, без которого дрейфу не от чего считаться).
+//  (микрофон, если есть), затем taps.
+//
+// СТРОКА: IR-114 (MEE-332), возврат MEE-317 (третий круг) — самокоррекция. Инвариант 6,
+//  C-004 v5, дословно: «включается при каждой сборке aggregate device, и выключить её нечем».
+//  Прежняя запись здесь («включена ВСЕГДА, кроме единственного опорного элемента») приписывала
+//  контракту оговорку про опорный элемент, которой в тексте нет, — придуманная цитата. Ниже
+//  (`buildComposition`) опорный элемент (микрофон, либо выход по умолчанию без микрофона)
+//  держит `kAudioSubDeviceDriftCompensationKey: 0` БЕЗУСЛОВНО, независимо от `driftCompensation`.
+//  Вилка, вынесенная архитектору (IR-114), не решена мной:
+//  (а) это не нарушение инварианта 6 — компенсация опорного элемента относительно самого себя
+//      физического смысла не имеет (обычная практика Core Audio для master clock), и «выключить
+//      нечем» относится к элементам, для которых дрейф вообще определён;
+//  (б) инвариант 6 в буквальном тексте не делает для опорного элемента исключения вовсе, и
+//      текущая реализация ему не соответствует — нужна другая раскладка aggregate или правка
+//      контракта.
 //
 //  Слушатель формата стоит на МИКРОФОНЕ, не на aggregate (инвариант 5, дословно измерено
 //  спайком: «на самом aggregate слушатель конфигурации потоков не сработал ни разу»).
@@ -76,20 +88,17 @@ final class AggregateRuntime: @unchecked Sendable {
         try startIO()
     }
 
-    /// Состав саб-устройств и tap-ов: микрофон (или, без него, выход по умолчанию — только ради
-    /// часов, см. шапку файла) плюс единственный tap этого сеанса.
-    ///
-    /// `driftCompensation` доходит до HAL-словаря буквально (`kAudioSubTapDriftCompensationKey`) —
-    /// возврат MEE-317 (второй круг): аргумент раньше не участвовал в сборке вовсе.
-    ///
-    /// СТРОКА: опорный элемент (микрофон, либо выход по умолчанию без микрофона) держит
-    /// `kAudioSubDeviceDriftCompensationKey: 0` БЕЗУСЛОВНО, независимо от `driftCompensation`, —
-    /// это не решение за контракт, а его же инвариант 6 буквально («включена ВСЕГДА, кроме
-    /// единственного опорного элемента, без которого дрейфу не от чего считаться»): компенсация
-    /// опорного элемента относительно самого себя лишена смысла (обычная практика Core Audio для
-    /// master clock), а не отдельный выключатель поверх аргумента порта. Развилка контракту не
-    /// задана явно (§«Поведение» не оговаривает опорный элемент отдельно от «остальных»), но
-    /// вывод из формулировки самого инварианта 6 — однозначный, а не мой произвольный выбор.
+    // Состав саб-устройств и tap-ов: микрофон (или, без него, выход по умолчанию — только ради
+    // часов, см. шапку файла) плюс единственный tap этого сеанса.
+    //
+    // `driftCompensation` доходит до HAL-словаря буквально (`kAudioSubTapDriftCompensationKey`) —
+    // возврат MEE-317 (второй круг): аргумент раньше не участвовал в сборке вовсе.
+    //
+    // СТРОКА: IR-114 (MEE-332) — см. шапку файла. Опорный элемент ниже держит
+    // `kAudioSubDeviceDriftCompensationKey: 0` безусловно, независимо от `driftCompensation`;
+    // значение для НЕ опорного tap вынесено в `nonReferenceDriftCompensationValue` — чистая
+    // функция, тестируемая без живого HAL (сама сборка словаря зависит от `HALObject.devices()`
+    // и настоящего tap-объекта, недостижимых в CI без TCC).
     private func buildComposition(microphoneUID: String?, driftCompensation: Bool) -> Composition {
         var result = Composition()
         if let micUID = microphoneUID, let micDevice = HALObject.devices().first(where: {
@@ -104,11 +113,18 @@ final class AggregateRuntime: @unchecked Sendable {
         }
         if let tapObject, let uid = HALTap.uid(of: tapObject) {
             let tapIsReference = result.mainUID == nil
-            let compensationValue = tapIsReference ? 0 : (driftCompensation ? 1 : 0)
+            let compensationValue = tapIsReference ? 0 : Self.nonReferenceDriftCompensationValue(driftCompensation)
             result.tapList.append([kAudioSubTapUIDKey: uid, kAudioSubTapDriftCompensationKey: compensationValue])
             if tapIsReference { result.mainUID = uid }
         }
         return result
+    }
+
+    /// Значение `kAudioSubTapDriftCompensationKey` для НЕ опорного tap — чистая функция без
+    /// живого HAL, тестируемая напрямую (возврат MEE-317, третий круг: `buildComposition` целиком
+    /// не тестируема в CI без TCC и настоящего tap-объекта, эта часть её решения — тестируема).
+    static func nonReferenceDriftCompensationValue(_ driftCompensation: Bool) -> Int {
+        driftCompensation ? 1 : 0
     }
 
     private func createAggregateDevice(_ composition: Composition) throws -> AudioObjectID {
