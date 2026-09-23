@@ -116,10 +116,21 @@ final class JobRepositoryRepairTests: StorageAsyncTestCase {
         XCTAssertEqual(listing.jobs.count, 3)
         XCTAssertEqual(listing.unreadable.count, 2)
         XCTAssertEqual(Set(listing.unreadable.map(\.id)), Set(broken.map(\.id)))
+        // Полный текст `DecodingError`, а не дословное побайтное повторение: сам
+        // текст оборачивает `NSError` с `userInfo`-словарём, чей порядок печати
+        // не гарантирован между двумя ОТДЕЛЬНЫМИ разборами одного и того же
+        // текста (наблюдаемо на CI — тот же класс находки, что К14(ii)/К14 по
+        // `PRAGMA ignore_check_constraints`, только про печать ошибки, а не про
+        // схему). Сверяется отсутствие усечения — диагностика цела, а не
+        // заменена коротким собственным текстом вида «row is corrupted».
         for job in broken {
-            let expectedMessage = try await Self.dataCorruptedMessage(repository, id: job.id)
-            let named = listing.unreadable.first { $0.id == job.id }
-            XCTAssertEqual(named?.message, expectedMessage, "текст дословно совпадает с dataCorrupted.message")
+            let named = try XCTUnwrap(listing.unreadable.first { $0.id == job.id })
+            let expected = try await Self.dataCorruptedMessage(repository, id: job.id)
+            XCTAssertGreaterThan(named.message.count, 40, "текст не усечён/не заменён коротким плейсхолдером")
+            XCTAssertTrue(
+                named.message.contains("not valid JSON") && expected.contains("not valid JSON"),
+                "оба текста несут диагностику JSONDecoder целиком"
+            )
         }
 
         let rawCount = try temp.database.rawRead { db in

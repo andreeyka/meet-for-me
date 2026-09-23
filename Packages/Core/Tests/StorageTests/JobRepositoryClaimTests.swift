@@ -85,16 +85,24 @@ final class JobRepositoryClaimTests: StorageAsyncTestCase {
 
     // MARK: - К38 (excluding не влияет ни на что, кроме исключения)
 
+    /// Каждый прогон строит свой собственный корпус со свежими `id` — сравнивать
+    /// пришлось бы `id` через разные базы, что всегда не совпадёт. Вместо этого
+    /// сверяется структурная примета победителя (`priority == 10`, единственный
+    /// такой в корпусе) и смещение лизинга от `now`, а не сырой `id`/`leaseExpiresAt`.
     func testK38_excludingWithUnrelatedIdsChangesNothing() async throws {
-        let (firstPick, firstLease) = try await Self.claimFromFreshCorpus(excluding: [])
-        let (secondPick, secondLease) = try await Self.claimFromFreshCorpus(
-            excluding: [UUID(), UUID()]
-        )
-        XCTAssertEqual(firstPick, secondPick)
-        XCTAssertEqual(firstLease, secondLease)
+        let first = try await Self.claimFromFreshCorpus(excluding: [])
+        let second = try await Self.claimFromFreshCorpus(excluding: [UUID(), UUID()])
+        XCTAssertEqual(first?.priority, 10, "выбран один и тот же кандидат по priority")
+        XCTAssertEqual(second?.priority, 10)
+        XCTAssertEqual(first?.leaseOffset, second?.leaseOffset, "lease_expires_at выставлен одинаково")
     }
 
-    private static func claimFromFreshCorpus(excluding: Set<UUID>) async throws -> (String, Date?) {
+    private struct ClaimOutcome {
+        let priority: Int
+        let leaseOffset: TimeInterval?
+    }
+
+    private static func claimFromFreshCorpus(excluding: Set<UUID>) async throws -> ClaimOutcome? {
         let temp = try StorageTestSupport.makeDatabase()
         defer { StorageTestSupport.cleanup(temp) }
         let jobs = temp.database.jobRepository()
@@ -110,7 +118,9 @@ final class JobRepositoryClaimTests: StorageAsyncTestCase {
         let picked = try await jobs.claimNext(
             types: [.transcode], excluding: excluding, now: TestFixtures.epoch, leaseSeconds: 60
         )
-        return (picked?.id.uuidString ?? "nil", picked?.leaseExpiresAt)
+        guard let picked else { return nil }
+        let offset = picked.leaseExpiresAt.map { $0.timeIntervalSince(TestFixtures.epoch) }
+        return ClaimOutcome(priority: picked.priority, leaseOffset: offset)
     }
 
     // MARK: - К39 (порядок выбора — четыре ключа)
