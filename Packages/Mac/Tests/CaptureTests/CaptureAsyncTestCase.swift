@@ -9,5 +9,8 @@
 import XCTest
 
 class CaptureAsyncTestCase: XCTestCase {
-    override var executionTimeAllowance: TimeInterval { 10 }
+    override func invokeTest() {
+        executionTimeAllowance = 10
+        super.invokeTest()
+    }
 }
