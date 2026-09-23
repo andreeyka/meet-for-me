@@ -1,0 +1,42 @@
+//  К25 — живучесть events(): один подписчик переживает несколько сеансов подряд без
+//  переподписки, поток не закрывается на `stopped`. План MEE-315.
+//
+//  Вторая половина критерия (levels не чаще 10 Гц) в этой части не закрыта: порт сегодня не
+//  публикует `.levels` вовсе — находка, названа в отчёте, а не решена молча (индикатор для
+//  интерфейса вне зоны трёх частей этой задачи, ни один критерий MEE-310 кроме этой половины
+//  К25 его не требует).
+
+import DomainCore
+import Foundation
+import XCTest
+@testable import Capture
+
+final class EventsLivenessTests: CaptureAsyncTestCase {
+
+    func test_k25_oneSubscriberSeesEventsFromTwoConsecutiveSessionsWithoutResubscribing() async throws {
+        let harness = Harness()
+        let firstDirectory = try Harness.makeDirectory()
+        let secondDirectory = try Harness.makeDirectory()
+
+        let collector = Task { () -> [CaptureEvent] in
+            var collected: [CaptureEvent] = []
+            for await event in harness.port.events() {
+                collected.append(event)
+                if collected.count >= 4 { break } // started, stopped × 2 сеанса
+            }
+            return collected
+        }
+        try await Task.sleep(nanoseconds: 10_000_000)
+
+        try await harness.start(directory: firstDirectory)
+        _ = try await harness.port.stop()
+        try await harness.start(directory: secondDirectory)
+        _ = try await harness.port.stop()
+
+        let events = await collector.value
+        let startedCount = events.filter { if case .started = $0 { return true }; return false }.count
+        let stoppedCount = events.filter { if case .stopped = $0 { return true }; return false }.count
+        XCTAssertEqual(startedCount, 2, "оба сеанса дошли до одного и того же подписчика")
+        XCTAssertEqual(stoppedCount, 2, "поток не закрылся на первом stopped")
+    }
+}

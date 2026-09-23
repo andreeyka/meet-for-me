@@ -49,10 +49,15 @@ final class FakeHardwareGateway: HardwareGateway, @unchecked Sendable {
 
     // MARK: - Управление правом
 
+    /// Хэндл последнего `resolveTap(with: .created(_:))` — тестам, которым нужно продолжить
+    /// разговор со швом про КОНКРЕТНЫЙ tap сеанса (К12: `capturedProcesses(_:)` по его токену).
+    private(set) var lastCreatedTap: TapHandle?
+
     func resolveTap(with result: TapAttempt) {
         lock.lock()
         let pending = tapContinuations
         tapContinuations = []
+        if case .created(let handle) = result { lastCreatedTap = handle }
         lock.unlock()
         for continuation in pending { continuation.resume(returning: result) }
     }
