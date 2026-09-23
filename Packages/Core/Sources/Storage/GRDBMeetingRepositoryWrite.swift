@@ -7,6 +7,18 @@ import Foundation
 import GRDB
 import DomainCore
 
+/// Поля одной строки `meetings` для `upsertMeetingRow`/`meetingUpsertArguments` —
+/// собраны в тип, а не переданы по одному, чтобы не упереться в
+/// `function_parameter_count` (лимит 5).
+private struct MeetingRowInput {
+    let idText: String
+    let event: MeetingEvent
+    let status: MeetingStatus
+    let dedupText: String?
+    let organizerId: UUID?
+    let now: Int64
+}
+
 extension GRDBMeetingRepository {
 
     func save(_ record: MeetingRecord) async throws {
@@ -21,10 +33,11 @@ extension GRDBMeetingRepository {
                 let organizerId = try event.organizer.map {
                     try Self.resolveOrCreatePersonId($0, db: db, now: now)
                 }
-                try Self.upsertMeetingRow(
+                let input = MeetingRowInput(
                     idText: idText, event: event, status: record.status,
-                    dedupText: dedupText, organizerId: organizerId, now: now, db: db
+                    dedupText: dedupText, organizerId: organizerId, now: now
                 )
+                try Self.upsertMeetingRow(input, db: db)
                 try Self.replaceMeetingSources(idText: idText, sources: sources, db: db)
                 try Self.replaceAttendees(idText: idText, attendees: event.attendees, now: now, db: db)
             }
@@ -79,12 +92,10 @@ extension GRDBMeetingRepository {
             updated_at = excluded.updated_at
         """
 
-    private static func meetingUpsertArguments(
-        idText: String, event: MeetingEvent, status: MeetingStatus,
-        dedupText: String?, organizerId: UUID?, now: Int64
-    ) -> StatementArguments {
-        [
-            idText,
+    private static func meetingUpsertArguments(_ input: MeetingRowInput) -> StatementArguments {
+        let event = input.event
+        return [
+            input.idText,
             event.title,
             EpochTime.seconds(event.start),
             EpochTime.seconds(event.end),
@@ -95,28 +106,19 @@ extension GRDBMeetingRepository {
             event.conference?.joinUrl.absoluteString,
             event.conference?.meetingId,
             event.conference?.passcode,
-            organizerId?.uuidString,
+            input.organizerId?.uuidString,
             event.location,
             event.bodyText,
-            dedupText,
-            status.rawValue,
+            input.dedupText,
+            input.status.rawValue,
             EpochTime.seconds(event.lastModified),
-            now,
-            now
+            input.now,
+            input.now
         ]
     }
 
-    private static func upsertMeetingRow(
-        idText: String, event: MeetingEvent, status: MeetingStatus,
-        dedupText: String?, organizerId: UUID?, now: Int64, db: Database
-    ) throws {
-        try db.execute(
-            sql: meetingUpsertSQL,
-            arguments: meetingUpsertArguments(
-                idText: idText, event: event, status: status,
-                dedupText: dedupText, organizerId: organizerId, now: now
-            )
-        )
+    private static func upsertMeetingRow(_ input: MeetingRowInput, db: Database) throws {
+        try db.execute(sql: meetingUpsertSQL, arguments: meetingUpsertArguments(input))
     }
 
     private static func replaceMeetingSources(idText: String, sources: [MeetingSource], db: Database) throws {

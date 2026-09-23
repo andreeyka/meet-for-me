@@ -57,9 +57,14 @@ final class SchemaMigrationTests: StorageAsyncTestCase {
         defer { StorageTestSupport.cleanup(temp) }
 
         try temp.database.rawRead { db in
-            // Четырнадцать таблиц.
+            // Четырнадцать таблиц. Фильтр снимает то, что контракт не называет
+            // своими таблицами и не обязан: служебную `grdb_migrations`
+            // (таблица механизма миграций GRDB, не DDL §3) и теневые таблицы
+            // FTS5 (`segments_fts`, `segments_fts_config/data/docsize/idx`) —
+            // сама виртуальная таблица и её обслуживающие таблицы `content=`
+            // сверяются отдельно, ниже, а не в списке четырнадцати.
             let tableNames = try String.fetchAll(
-                db, sql: "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
+                db, sql: "SELECT name FROM sqlite_master WHERE type = 'table' AND \(Self.ownTablesFilterSQL)"
             ).sorted()
             XCTAssertEqual(tableNames, Self.expectedTables.sorted())
 
@@ -70,7 +75,7 @@ final class SchemaMigrationTests: StorageAsyncTestCase {
             XCTAssertNotNil(virtualTableSQL)
             XCTAssertTrue(virtualTableSQL?.contains("fts5") == true)
 
-            // Тринадцать индексов, из них три UNIQUE и два из трёх частичные (WHERE).
+            // Тринадцать индексов, из них три UNIQUE.
             let indexRows = try Row.fetchAll(
                 db, sql: "SELECT name, sql FROM sqlite_master WHERE type = 'index' AND name NOT LIKE 'sqlite_%'"
             )
@@ -78,8 +83,17 @@ final class SchemaMigrationTests: StorageAsyncTestCase {
             XCTAssertEqual(indexNames, Set(Self.expectedIndexes))
             let uniqueIndexes = indexRows.filter { ($0["sql"] as String? ?? "").contains("UNIQUE") }
             XCTAssertEqual(Set(uniqueIndexes.map { $0["name"] as String }), Set(Self.expectedUniqueIndexes))
+            // РАСХОЖДЕНИЕ С МЕЕ-189 (называю, не правлю — не моя зона, перечень
+            // ведёт аналитик): К3 говорит «из них три — UNIQUE, и два из трёх
+            // частичные». Прогон по своей же DDL (переписанной с контракта
+            // дословно) даёт: частичны ВСЕ три — `idx_persons_me` (`WHERE
+            // is_me = 1`), `idx_meetings_dedup` и `idx_jobs_dedup` (оба
+            // `WHERE dedup_key IS NOT NULL…`) несут `WHERE` в своём DDL §3
+            // одинаково. Ни в самом §3, ни в разделе «Ломающие изменения»
+            // числа «два» нет — это счёт из текста критерия К3 (МЕЕ-189),
+            // разошедшийся с DDL, которое он же и описывает.
             let partialUnique = uniqueIndexes.filter { ($0["sql"] as String? ?? "").contains("WHERE") }
-            XCTAssertEqual(partialUnique.count, 2)
+            XCTAssertEqual(partialUnique.count, 3)
 
             // Три триггера FTS.
             let triggerNames = Set(try String.fetchAll(
@@ -105,7 +119,7 @@ final class SchemaMigrationTests: StorageAsyncTestCase {
 
             // Все четырнадцать CHECK DDL — по числу вхождений `CHECK` в текстах создания таблиц.
             let createTableSQL = try String.fetchAll(
-                db, sql: "SELECT sql FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
+                db, sql: "SELECT sql FROM sqlite_master WHERE type = 'table' AND \(Self.ownTablesFilterSQL)"
             ).joined()
             let checkCount = createTableSQL.components(separatedBy: "CHECK").count - 1
             XCTAssertEqual(checkCount, 14)
@@ -170,7 +184,7 @@ final class SchemaMigrationTests: StorageAsyncTestCase {
         // чтение `sqlite_master` не увидело бы ни одной из четырнадцати таблиц.
         let tableCount = try temp.database.rawRead { db in
             try Int.fetchOne(
-                db, sql: "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
+                db, sql: "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND \(Self.ownTablesFilterSQL)"
             ) ?? 0
         }
         XCTAssertEqual(tableCount, Self.expectedTables.count)

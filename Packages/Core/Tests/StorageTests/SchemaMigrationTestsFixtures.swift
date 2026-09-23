@@ -27,6 +27,16 @@ extension SchemaMigrationTests {
         "jobs", "connectors", "meeting_outputs", "app_settings"
     ]
 
+    /// Фрагмент `WHERE` для `sqlite_master`: снимает то, что не входит в
+    /// четырнадцать таблиц DDL §3, но реально существует в файле —
+    /// `grdb_migrations` (таблица механизма миграций GRDB) и теневые таблицы
+    /// FTS5, которые SQLite заводит сам для `segments_fts` (сама виртуальная
+    /// таблица и её тени `_config`/`_data`/`_docsize`/`_idx` — все с одним
+    /// префиксом имени, ловятся одним `LIKE`).
+    static let ownTablesFilterSQL = """
+        name NOT LIKE 'sqlite_%' AND name NOT LIKE 'segments_fts%' AND name <> 'grdb_migrations'
+        """
+
     static let expectedIndexes = [
         "idx_persons_me", "idx_person_emails_person", "idx_person_name_forms_form",
         "idx_meetings_dedup", "idx_meetings_start", "idx_meeting_sources_meeting",
