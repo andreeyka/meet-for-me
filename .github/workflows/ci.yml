@@ -301,11 +301,20 @@ jobs:
               # Фильтр — по каталогу таргета в Packages/$pkg/Sources/, а не по
               # имени зависимости: универсален для любой будущей внешней
               # зависимости, не только GRDB.
+              # Прогон run 35911292250 нашёл ошибку первой версии фильтра: он
+              # проверял каталог ТЕКУЩЕГО пакета (`Packages/$pkg/Sources`), а
+              # `Packages/Mac` зависит от `DomainCore` и `EngineKit`, которые
+              # физически лежат в `Packages/Core/Sources` — фильтр вычёркивал
+              # их из разбора работы `· Packages/Mac`, и это рикошетом дало 17
+              # новых нарушений: таргеты Mac (Detector, Permissions…), законно
+              # ссылающиеся на публичные типы DomainCore, лишились его из
+              # own_modules. Проверка теперь — по обоим каталогам исходников
+              # репозитория, а не по каталогу текущего пакета.
               for f in "$graph_dir"/*.symbols.json; do
                 [ -e "$f" ] || continue
                 owner="$(basename "$f" .symbols.json)"
                 owner="${owner%%@*}"
-                if [ ! -d "Packages/$pkg/Sources/$owner" ]; then
+                if [ ! -d "Packages/Core/Sources/$owner" ] && [ ! -d "Packages/Mac/Sources/$owner" ]; then
                   echo "исключён из разбора (не таргет репозитория): $owner"
                   rm -f "$f"
                 fi
