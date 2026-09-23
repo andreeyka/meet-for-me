@@ -6,6 +6,13 @@ import XCTest
 
 final class TemporaryHangProbeMEE329: XCTestCase {
     func testHangsForeverOnPurpose() async throws {
-        try await Task.sleep(nanoseconds: .max)
+        // `Task.sleep(nanoseconds: .max)` не годится: первый прогон (run
+        // 35928253699) прошёл этим же файлом за 0.0 с — по всей видимости,
+        // переполнение при вычислении дедлайна из UInt64.max. Цикл с
+        // маленьким сном на каждом шаге такого переполнения не даёт и
+        // виснет буквально, а не по недосмотру арифметики.
+        while true {
+            try await Task.sleep(nanoseconds: 1_000_000_000)
+        }
     }
 }
