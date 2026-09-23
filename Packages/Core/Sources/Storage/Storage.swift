@@ -7,15 +7,3 @@
 //  только через interface-request (П2, П6). Границы и запреты — docs/module-map.md.
 //
 //  Каркас: кода нет намеренно. Первый код появляется вместе с задачей из Linear.
-
-// ВРЕМЕННО — только для проверки MEE-191 на отдельной ветке. Не должно
-// попасть в main: снимается сразу после подтверждения красного прогона.
-import Foundation
-
-public func mee191VerifyAllowedList() -> OpaquePointer {
-    fatalError("MEE-191: OpaquePointer не входит в разрешённый список инварианта 19 C-010")
-}
-
-public func mee191VerifyUndefinedSymbols() {
-    _ = JSONDecoder()
-}
