@@ -9,6 +9,7 @@
 //  * `Harness` — порт на подставленном мире, plus вспомогательные конструкторы `CaptureRequest`.
 
 import DomainCore
+import DomainTestKit
 import Foundation
 import XCTest
 @testable import Capture
@@ -143,6 +144,11 @@ final class ManualDeadline: PromptDeadline, @unchecked Sendable {
     private var expired = false
     private var continuations: [CheckedContinuation<Void, Never>] = []
 
+    /// Аргументы всех вызовов `wait(seconds:)` по порядку — К15/К16 возврата части 1: реализация
+    /// с ошибочным пределом (не 45 с) без записи аргумента прошла бы тесты неотличимо.
+    private var recordedWaits: [Int] = []
+    var waitedSeconds: [Int] { lock.lock(); defer { lock.unlock() }; return recordedWaits }
+
     /// Заставляет текущий и все следующие вызовы `wait` вернуться немедленно — виртуальное
     /// время шва, план MEE-315: критерий К15/К16 не ждёт настоящие 45 секунд.
     func expireNow() {
@@ -156,6 +162,7 @@ final class ManualDeadline: PromptDeadline, @unchecked Sendable {
 
     func wait(seconds: Int) async {
         lock.lock()
+        recordedWaits.append(seconds)
         if expired { lock.unlock(); return }
         lock.unlock()
         await withCheckedContinuation { continuation in
@@ -199,50 +206,16 @@ final class ManualPollDriver: CapturePollDriver, @unchecked Sendable {
     }
 }
 
-// MARK: - Фейковый PowerPort (общий DomainTestKit фейк модулю недоступен: capture его не тянет)
-
-/// Тонкий локальный фейк `PowerPort` — `DomainTestKit.FakePowerPort` живёт в `Packages/Core` и
-/// тянет за собой `DomainCore` как продукт зависимостей теста, а не только протокол; здесь
-/// нужен только сам протокол, и заводить лишнюю зависимость ради него — цена дороже пользы.
-final class StubPowerPort: PowerPort, @unchecked Sendable {
-    private let lock = NSLock()
-    private(set) var beginCount = 0
-    private(set) var endedTokens = 0
-
-    func snapshot() async -> PowerSnapshot {
-        PowerSnapshot(source: .ac, batteryFraction: nil, isLowPowerModeEnabled: false,
-                     thermalPressure: .nominal, checkedAt: Date())
-    }
-
-    func events() -> AsyncStream<PowerEvent> { AsyncStream { _ in } }
-
-    func beginActivity(reason: PowerActivityReason, label: String) async -> PowerActivityToken {
-        lock.lock(); beginCount += 1; lock.unlock()
-        return StubToken(reason: reason, label: label) { [weak self] in
-            self?.lock.lock(); self?.endedTokens += 1; self?.lock.unlock()
-        }
-    }
-
-    var liveTokenCount: Int { lock.lock(); defer { lock.unlock() }; return beginCount - endedTokens }
-
-    private final class StubToken: PowerActivityToken, @unchecked Sendable {
-        let reason: PowerActivityReason
-        let label: String
-        private let onEnd: () -> Void
-        init(reason: PowerActivityReason, label: String, onEnd: @escaping () -> Void) {
-            self.reason = reason; self.label = label; self.onEnd = onEnd
-        }
-        func end() { onEnd() }
-    }
-}
-
 // MARK: - Харнесс
 
 struct Harness {
     let gateway = FakeHardwareGateway()
     let deadline = ManualDeadline()
     let poll = ManualPollDriver()
-    let power = StubPowerPort()
+    let power = FakePowerPort(snapshot: PowerSnapshot(
+        source: .ac, batteryFraction: nil, isLowPowerModeEnabled: false,
+        thermalPressure: .nominal, checkedAt: Date()
+    ))
     let port: AudioCaptureImpl
 
     init() {

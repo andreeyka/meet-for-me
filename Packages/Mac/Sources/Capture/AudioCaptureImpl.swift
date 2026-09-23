@@ -36,6 +36,11 @@ public final class AudioCaptureImpl: AudioCapturePort, @unchecked Sendable {
     let lock = NSLock()
     var phase: CapturePhase = .idle
     var pollHandle: CapturePollDriverHandle?
+    /// Подписка на `power.events()` — заведена один раз на всю жизнь порта (`installPowerEventsIfNeeded`),
+    /// не на сеанс: `AudioCaptureImpl` переживает несколько сеансов подряд (инвариант 23), и
+    /// пересоздавать её незачем — обработчик сам бьёт по текущей фазе на каждое событие.
+    var powerEventsTask: Task<Void, Never>?
+    var powerEventsInstalled = false
 
     let eventsLock = NSLock()
     var eventContinuations: [UUID: AsyncStream<CaptureEvent>.Continuation] = [:]
@@ -51,6 +56,11 @@ public final class AudioCaptureImpl: AudioCapturePort, @unchecked Sendable {
     /// Продовый инициализатор: единственное место, где швы связаны с настоящей системой.
     /// `power` реализацией не владеет (карта модулей: `capture` потребляет `PowerPort`,
     /// реализует его модуль `permissions`) — composition root `App/` передаёт готовый порт.
+    ///
+    // СТРОКА: `PowerPort` — тип публичной сигнатуры этого инициализатора, а composition root
+    // в `App/` не может собрать `AudioCaptureImpl` без него. Разрешённый список инварианта 25
+    // выведен только из раздела «Определение» (подписи самого `AudioCapturePort`) — `PowerPort`
+    // среди тридцати четырёх позиций нет. Заведён IR-112 (MEE-325); решение — за контрактом.
     public convenience init(power: PowerPort) {
         self.init(power: power, gateway: CoreAudioGateway(), deadline: SystemPromptDeadline(),
                   pollDriver: SystemPollDriver())

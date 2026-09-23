@@ -24,6 +24,13 @@ final class ModuleTextTests: XCTestCase {
 
     // MARK: - К19. Порт не знает о PermissionsPort (инвариант 17)
 
+    // СТРОКА: план MEE-315 называет для К19 способ В (символьный граф), сделано способом Г
+    // (греп). `.github/scripts/symbol-graph-surface.py` (владелец — CI, вне зоны этой задачи)
+    // разбирает только ПУБЛИЧНУЮ поверхность таргета против инварианта 25-подобных списков —
+    // инвариант 17 запрещает ссылку на `PermissionsPort` НА ЛЮБОМ пути, не только в публичной
+    // сигнатуре, и этот барьер её не ловит. Свой инструмент способа В означал бы отдельный вызов
+    // `swift symbolgraph-extract` и разбор JSON изнутри теста — вне зоны трёх директорий задачи
+    // и цены одного критерия. Решение о способе В отдельным инструментом — за РП/QA.
     func test_k19_portDoesNotKnowPermissionsPort() throws {
         let files = try sources()
         for needle in ["PermissionsPort", "PermissionRequestOutcome", "import Permissions"] {

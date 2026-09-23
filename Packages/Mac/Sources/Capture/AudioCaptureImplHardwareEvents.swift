@@ -21,12 +21,36 @@ extension AudioCaptureImpl {
             beginRebuild(session, reason: .sourceGone, newMicrophone: nil, atHostTime: atHostTime)
         case .aggregateDied(let atHostTime):
             beginRebuild(session, reason: .sourceGone, newMicrophone: nil, atHostTime: atHostTime)
-        case .willSleep(let atHostTime):
-            handleSleep(session, atHostTime: atHostTime)
-        case .didWake(let atHostTime):
-            handleWake(session, atHostTime: atHostTime)
         case .processesChanged(let processes, let atHostTime):
             recordProcesses(session, processes: processes, atHostTime: atHostTime)
+        }
+    }
+
+    /// §«Сон»: источник — `.willSleep`/`.didWake` C-008 (`PowerPort.events()`), не шов
+    /// оборудования — контракт называет его дословно. Заведена один раз на жизнь порта (см.
+    /// комментарий у `powerEventsTask`), а не на сеанс: `Task.cancel()` не гарантированно
+    /// прерывает подвисший `for await` на `AsyncStream`, и пересоздание подписки на каждый
+    /// `start()` рисковало бы копить повисшие задачи, державшие `self` сильной ссылкой.
+    /// Событие, пришедшее без идущего сеанса, просто отбрасывается проверкой фазы.
+    private func installPowerEventsIfNeeded() {
+        lock.lock()
+        let alreadyInstalled = powerEventsInstalled
+        powerEventsInstalled = true
+        lock.unlock()
+        guard !alreadyInstalled else { return }
+        powerEventsTask = Task { [weak self] in
+            guard let self else { return }
+            for await event in self.power.events() {
+                guard case .running(let session) = self.currentSessionPhase() else { continue }
+                switch event {
+                case .willSleep:
+                    self.handleSleep(session, atHostTime: self.currentHostTime(session))
+                case .didWake:
+                    await self.handleWake(session, atHostTime: self.currentHostTime(session))
+                default:
+                    break
+                }
+            }
         }
     }
 
@@ -38,11 +62,15 @@ extension AudioCaptureImpl {
         beginRebuild(session, reason: .sleep, newMicrophone: nil, atHostTime: atHostTime)
     }
 
-    private func handleWake(_ session: CaptureSessionState, atHostTime: UInt64) {
+    /// «После `.didWake` порт берёт новый токен удержания и продолжает» — дословно контракт:
+    /// удержание, взятое до сна, само становится недействительным вместе с сном системы.
+    private func handleWake(_ session: CaptureSessionState, atHostTime: UInt64) async {
         let atMs = session.referenceTrack?.positionMs ?? 0
         if let marker = try? RecordingManifest.Marker(kind: .wake, atMs: atMs, detail: nil) {
             session.markers.append(marker)
         }
+        session.powerToken?.end()
+        session.powerToken = await power.beginActivity(reason: .recording, label: "capture")
         writeManifest(session, endedAt: nil, isFinalized: false)
     }
 

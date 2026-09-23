@@ -36,18 +36,18 @@ import Foundation
 
 /// Опаковый идентификатор открытого tap. Не несёт значений HAL — только корреляцию между
 /// вызовами шва; конкретный `AudioObjectID` живёт только внутри `CoreAudioGateway`.
-public struct TapHandle: Sendable, Equatable {
+struct TapHandle: Sendable, Equatable {
     let token: UUID
-    public init(token: UUID = UUID()) { self.token = token }
+    init(token: UUID = UUID()) { self.token = token }
 }
 
 /// Опаковый идентификатор открытого микрофонного входа.
-public struct MicrophoneHandle: Sendable, Equatable {
+struct MicrophoneHandle: Sendable, Equatable {
     let token: UUID
     let uid: String?
     let name: String?
     let channelCount: Int
-    public init(token: UUID = UUID(), uid: String?, name: String?, channelCount: Int) {
+    init(token: UUID = UUID(), uid: String?, name: String?, channelCount: Int) {
         self.token = token
         self.uid = uid
         self.name = name
@@ -111,8 +111,9 @@ enum HardwareEvent: Sendable {
     case tapInvalidated(atHostTime: UInt64)
     case aggregateDied(atHostTime: UInt64)
     case processesChanged([CaptureProcessDescriptor], atHostTime: UInt64)
-    case willSleep(atHostTime: UInt64)
-    case didWake(atHostTime: UInt64)
+    // Сон/пробуждение НЕ здесь: контракт называет источником `.willSleep`/`.didWake` (C-008) —
+    // `PowerPort.events()`, а не шов оборудования. `AudioCaptureImpl` подписан на них напрямую
+    // (`subscribeToPowerEvents`), минуя `HardwareGateway` целиком.
 }
 
 /// Подписка на события шва; отменяется явно, как и `PowerPort`/`ProcessMonitorPort` этого проекта.

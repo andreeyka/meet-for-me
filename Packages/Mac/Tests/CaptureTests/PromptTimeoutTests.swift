@@ -28,6 +28,10 @@ final class PromptTimeoutTests: CaptureAsyncTestCase {
             XCTAssertEqual(waited, AudioCaptureLimits.systemAudioPromptWaitSeconds)
         }
         XCTAssertEqual(try filesIn(directory), [], "файлов не создано")
+        // Реализация с ошибочным пределом (например, 1 с вместо 45) отличалась бы только тут —
+        // `waited` выше несёт КОНСТАНТУ, названную самой реализацией, а не измеренное число.
+        XCTAssertEqual(harness.deadline.waitedSeconds, [AudioCaptureLimits.systemAudioPromptWaitSeconds],
+                       "предел системного промпта передан шву дословно — 45 с, один вызов")
     }
 
     // MARK: - К16. Микрофонный промпт: таймаут
@@ -48,6 +52,38 @@ final class PromptTimeoutTests: CaptureAsyncTestCase {
             XCTAssertEqual(waited, AudioCaptureLimits.microphonePromptWaitSeconds)
         }
         XCTAssertEqual(try filesIn(directory), [], "файлов не создано")
+        XCTAssertEqual(harness.deadline.waitedSeconds, [AudioCaptureLimits.microphonePromptWaitSeconds],
+                       "предел микрофонного промпта передан шву дословно — 45 с, один вызов")
+    }
+
+    /// Независимость двух пределов: у обоих одно и то же ЧИСЛО (45 с — оба константы контракта),
+    /// поэтому независимость проверяется не значением, а тем, что это ДВА раздельных вызова
+    /// `wait(seconds:)` — по одному на свою гонку, а не общий предел на двоих. Право системного
+    /// звука отвечает значением сразу; гонка микрофона стартует своим чередом уже после и несёт
+    /// свой отдельный вызов предела — оба видны в записанном порядке.
+    func test_k15_k16_bothLimitsAreIndependentCalls() async throws {
+        let harness = Harness()
+        let directory = try Harness.makeDirectory()
+        let request = Harness.request(directory: directory, group: .init(appKey: "us.zoom.xos", pids: [1],
+                                                                          observedAt: Date()), input: .systemDefault)
+
+        async let started = harness.port.start(request)
+        try await Task.sleep(nanoseconds: 20_000_000)
+        let tap = TapHandle()
+        harness.gateway.resolveTap(with: .created(tap))
+        try await Task.sleep(nanoseconds: 20_000_000)
+        harness.deadline.expireNow()
+
+        do {
+            _ = try await started
+            XCTFail("ожидался microphonePromptTimedOut")
+        } catch CaptureError.microphonePromptTimedOut {}
+
+        XCTAssertEqual(
+            harness.deadline.waitedSeconds,
+            [AudioCaptureLimits.systemAudioPromptWaitSeconds, AudioCaptureLimits.microphonePromptWaitSeconds],
+            "два раздельных вызова предела, не один общий: право и микрофон гонятся порознь"
+        )
     }
 
     // MARK: - К17. Позднее срабатывание после таймаута
@@ -155,6 +191,43 @@ final class PromptTimeoutTests: CaptureAsyncTestCase {
             return nil
         }
         XCTAssertEqual(observed, [.denied])
+    }
+
+    /// К18 возврата части 1: из микрофонных исходов был проверен только успех — оба отказных
+    /// исхода имеют собственный код ошибки (инвариант 16: у микрофона `note` не через
+    /// `permissionObserved`, статус читается публично) и обязаны быть проверены тем же путём.
+    func test_k18_microphoneDeniedThrowsMicrophoneDenied() async throws {
+        let harness = Harness()
+        let directory = try Harness.makeDirectory()
+        let request = Harness.request(directory: directory, group: nil, input: .systemDefault)
+
+        async let started = harness.port.start(request)
+        try await Task.sleep(nanoseconds: 20_000_000)
+        harness.gateway.resolveMicrophone(with: .permissionDenied)
+
+        do {
+            _ = try await started
+            XCTFail("ожидался microphoneDenied")
+        } catch CaptureError.microphoneDenied {}
+        XCTAssertEqual(try filesIn(directory), [], "файлов не создано")
+    }
+
+    func test_k18_microphonePromptTimeoutThrowsMicrophonePromptTimedOut() async throws {
+        let harness = Harness()
+        let directory = try Harness.makeDirectory()
+        let request = Harness.request(directory: directory, group: nil, input: .systemDefault)
+
+        async let started = harness.port.start(request)
+        try await Task.sleep(nanoseconds: 20_000_000)
+        harness.deadline.expireNow()
+
+        do {
+            _ = try await started
+            XCTFail("ожидался microphonePromptTimedOut")
+        } catch CaptureError.microphonePromptTimedOut(let waited) {
+            XCTAssertEqual(waited, AudioCaptureLimits.microphonePromptWaitSeconds)
+        }
+        XCTAssertEqual(try filesIn(directory), [], "файлов не создано")
     }
 
     private func filesIn(_ directory: URL) throws -> [String] {

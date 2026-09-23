@@ -130,7 +130,7 @@ extension AudioCaptureImpl {
         }
     }
 
-    private func currentHostTime(_ session: CaptureSessionState) -> UInt64 {
+    func currentHostTime(_ session: CaptureSessionState) -> UInt64 {
         session.hostOrigin + UInt64(session.referenceTrack?.positionMs ?? 0)
     }
 }

@@ -11,7 +11,6 @@
 //  контракт запрещает первое (инвариант 8), два прочих были диагностикой спайка, не поведением
 //  порта.
 
-import AppKit
 import AudioToolbox
 import AVFoundation
 import CoreAudio
@@ -24,7 +23,6 @@ final class CoreAudioGateway: HardwareGateway, @unchecked Sendable {
     private var openTaps: [UUID: AudioObjectID] = [:]
     private var eventHandlers: [UUID: @Sendable (HardwareEvent) -> Void] = [:]
     private var aggregates: [UUID: AggregateRuntime] = [:]
-    private var sleepObserversInstalled = false
 
     func requestSystemAudioTap(for group: ProcessGroup?) async -> TapAttempt {
         guard let group else { return .permissionDenied }
@@ -112,33 +110,7 @@ final class CoreAudioGateway: HardwareGateway, @unchecked Sendable {
         lock.lock()
         eventHandlers[id] = handler
         lock.unlock()
-        installSleepObserversIfNeeded()
         return Subscription(id: id, owner: self)
-    }
-
-    /// Сон/пробуждение — `NSWorkspace`, единственный способ узнать о них на пользовательском
-    /// процессе (спайк MEE-8: `willSleepNotification`/`didWakeNotification`). Один раз на жизнь
-    /// шлюза: подписка не привязана к конкретному сеансу (инвариант 23, шов переживает сеансы).
-    private func installSleepObserversIfNeeded() {
-        lock.lock()
-        let alreadyInstalled = sleepObserversInstalled
-        sleepObserversInstalled = true
-        lock.unlock()
-        guard !alreadyInstalled else { return }
-        let center = NSWorkspace.shared.notificationCenter
-        center.addObserver(forName: NSWorkspace.willSleepNotification, object: nil, queue: nil) { [weak self] _ in
-            self?.broadcast(.willSleep(atHostTime: CoreAudioGateway.nowMs()))
-        }
-        center.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: nil) { [weak self] _ in
-            self?.broadcast(.didWake(atHostTime: CoreAudioGateway.nowMs()))
-        }
-    }
-
-    private static func nowMs() -> UInt64 {
-        var info = mach_timebase_info()
-        mach_timebase_info(&info)
-        guard info.denom != 0 else { return mach_absolute_time() }
-        return mach_absolute_time() * UInt64(info.numer) / UInt64(info.denom) / 1_000_000
     }
 
     fileprivate func broadcast(_ event: HardwareEvent) {

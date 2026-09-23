@@ -74,14 +74,19 @@ extension AudioCaptureImpl {
         }
     }
 
-    /// §«Право на системный звук», п. 3: ответ, пришедший после предела, всё равно дожидается —
-    /// и если tap всё-таки создался, он уничтожается (сеанса, которому он принадлежал бы, уже нет).
+    /// §«Право на системный звук», п. 3: ответ, пришедший после предела, всё равно дожидается.
+    /// Когда он придёт — исход публикуется `permissionObserved` (ровно тот же путь, что и у
+    /// ответа, успевшего в предел), а если tap всё-таки создался, он уничтожается: сеанса, которому
+    /// он принадлежал бы, уже нет. `.systemUnavailable` не несёт исхода права — событие не про него.
     func handleLateTap(_ pending: Task<TapAttempt, Never>) {
-        Task { [gateway] in
+        Task { [weak self, gateway] in
             switch await pending.value {
             case .created(let handle):
+                self?.emit(.permissionObserved(kind: .systemAudioRecording, status: .granted))
                 gateway.releaseTap(handle)
-            case .permissionDenied, .systemUnavailable:
+            case .permissionDenied:
+                self?.emit(.permissionObserved(kind: .systemAudioRecording, status: .denied))
+            case .systemUnavailable:
                 break
             }
         }
@@ -110,10 +115,14 @@ extension AudioCaptureImpl {
         session.tap = tap
         session.microphone = microphone
         session.captureGroupKey = request.group?.appKey
+        // Инвариант 21: токен берётся ДО сборки aggregate, а не после — отказ сборки тоже отказ
+        // "после того, как токен мог быть взят", и обязан его снять (К23).
+        session.powerToken = await power.beginActivity(reason: .recording, label: "capture")
         do {
             try attachMicrophoneSpan(microphone, to: session)
             try attachAggregate(tap: tap, microphone: microphone, to: session)
         } catch {
+            session.powerToken?.end()
             rollback(openedFiles, in: request.directory)
             throw error
         }
@@ -121,10 +130,10 @@ extension AudioCaptureImpl {
         session.subscription = gateway.subscribeEvents { [weak self] event in
             self?.handleHardwareEvent(event)
         }
+        installPowerEventsIfNeeded()
         if let tap {
             for process in gateway.capturedProcesses(tap) { session.recordCapturedProcess(process) }
         }
-        session.powerToken = await power.beginActivity(reason: .recording, label: "capture")
 
         do {
             let started = CaptureStarted(
