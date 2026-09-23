@@ -110,6 +110,13 @@ def run(args):
         "## Таблица неопределённых символов: %s (инвариант 27 C-010)\n" % args.target
     )
     print("Объектных файлов: **%d**. Неопределённых символов: **%d**.\n" % (len(objects), len(raw)))
+    print("<details><summary>Object-файлы и символы поимённо</summary>\n")
+    for path in objects:
+        print("* `%s`" % path)
+    print("")
+    for mangled in sorted(pretty_by_mangled):
+        print("* `%s`" % pretty_by_mangled[mangled])
+    print("\n</details>\n")
 
     if violations:
         for mangled, pretty in violations:
