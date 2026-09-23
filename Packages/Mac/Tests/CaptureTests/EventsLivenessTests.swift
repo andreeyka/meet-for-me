@@ -18,11 +18,19 @@ final class EventsLivenessTests: CaptureAsyncTestCase {
         let firstDirectory = try Harness.makeDirectory()
         let secondDirectory = try Harness.makeDirectory()
 
+        // Считаем только started/stopped: успешный старт публикует ещё и permissionObserved
+        // (право системного звука) — если считать вперемешку, «первые 4 события» не обязательно
+        // окажутся двумя парами started/stopped.
         let collector = Task { () -> [CaptureEvent] in
             var collected: [CaptureEvent] = []
+            var startedStoppedCount = 0
             for await event in harness.port.events() {
                 collected.append(event)
-                if collected.count >= 4 { break } // started, stopped × 2 сеанса
+                switch event {
+                case .started, .stopped: startedStoppedCount += 1
+                default: break
+                }
+                if startedStoppedCount >= 4 { break } // started, stopped × 2 сеанса
             }
             return collected
         }

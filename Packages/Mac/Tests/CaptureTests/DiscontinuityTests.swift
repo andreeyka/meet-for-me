@@ -59,10 +59,13 @@ final class DiscontinuityTests: CaptureAsyncTestCase {
 
     /// Инвариант 11, способ Б — обзор кода: `.unknown` не производится реализацией ни разу
     /// (значение только для чтения чужого файла, C-001 §0.3), `.truncated` — только в `recover`.
+    /// Точный паттерн `reason: .truncated` — та же осторожность, что и у проверки `.unknown` ниже:
+    /// голая подстрока `.truncated` ловит и `AudioCaptureLimits.truncatedTailBudgetMs` (не то же
+    /// имя), и сравнение `reason != .truncated` в `ScaleError.swift` (не конструирование).
     func test_k11_unknownNeverConstructedTruncatedOnlyInRecovery() throws {
         let sources = try CaptureSources.sources()
         for file in sources where file.name != "CaptureRecovery.swift" {
-            XCTAssertFalse(file.text.contains(".truncated"), "\(file.name): .truncated вне recover")
+            XCTAssertFalse(file.text.contains("reason: .truncated"), "\(file.name): .truncated вне recover")
         }
         for file in sources {
             XCTAssertFalse(file.text.contains("reason: .unknown"), "\(file.name): .unknown сконструирован")

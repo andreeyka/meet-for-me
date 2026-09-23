@@ -37,6 +37,8 @@ final class ScaleErrorTests: XCTestCase {
 
     func test_k10_truncatedIsAlwaysZero() {
         XCTAssertEqual(ScaleError.compute(reason: .truncated, fileMinusHostMs: nil), 0)
-        XCTAssertEqual(ScaleError.compute(reason: .truncated, fileMinusHostMs: 999), 999)
+        // «Ноль безусловно, измерение сюда не подставляется... даже если вызывающая сторона его
+        // всё же передаст» (контракт, дословно) — 999 здесь обязано остаться отброшенным.
+        XCTAssertEqual(ScaleError.compute(reason: .truncated, fileMinusHostMs: 999), 0)
     }
 }

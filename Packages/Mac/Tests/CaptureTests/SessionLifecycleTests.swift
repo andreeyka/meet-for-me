@@ -76,13 +76,15 @@ final class SessionLifecycleTests: CaptureAsyncTestCase {
 extension Harness {
     @discardableResult
     func start(
-        directory: URL, group: ProcessGroup? = nil, input: InputSelection = .systemDefault
+        directory: URL,
+        group: ProcessGroup? = ProcessGroup(appKey: "bundle:us.zoom.xos", pids: [111], observedAt: Date()),
+        input: InputSelection = .systemDefault
     ) async throws -> CaptureStarted {
-        let request = Harness.request(
-            directory: directory,
-            group: group ?? ProcessGroup(appKey: "bundle:us.zoom.xos", pids: [111], observedAt: Date()),
-            input: input
-        )
+        // `group` — явный `nil` здесь означает именно «без группы», а не «не задано»: значение по
+        // умолчанию само несёт запасную группу (найденный дефект — `?? ProcessGroup(...)` в теле
+        // раньше подменял ЯВНЫЙ nil звонящего той же запасной группой, и К13/К14 не могли
+        // проверить путь без группы вообще, пока не подменялись молча).
+        let request = Harness.request(directory: directory, group: group, input: input)
         async let started = port.start(request)
         try await Task.sleep(nanoseconds: 20_000_000)
         if request.group != nil {

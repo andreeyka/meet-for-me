@@ -16,8 +16,15 @@ final class CompositionTests: CaptureAsyncTestCase {
         try await harness.start(directory: directory)
 
         for index in 0..<5 {
+            let hostTime = UInt64(1_000 + index * 100)
             harness.gateway.emit(.microphoneFormatChanged(channelCount: index.isMultiple(of: 2) ? 1 : 3,
-                                                           atHostTime: UInt64(1_000 + index * 100)))
+                                                           atHostTime: hostTime))
+            try await Task.sleep(nanoseconds: 5_000_000)
+            // Пересборка остаётся «в процессе» (pendingRebuild), пока не пришёл первый буфер новой
+            // сборки — resolveRebuild зовётся из handleBuffer. Без этого следующий emit молча
+            // отбрасывается guard'ом beginRebuild (pendingRebuild == nil), и рebuild не считается.
+            harness.gateway.feed(.samples(.mic, frameCount: 480,
+                                          channelCount: index.isMultiple(of: 2) ? 1 : 3, hostTime: hostTime + 10))
             try await Task.sleep(nanoseconds: 5_000_000)
         }
 
@@ -71,7 +78,8 @@ final class CompositionTests: CaptureAsyncTestCase {
 
         let events = await collector.value
         XCTAssertTrue(events.contains { if case .inputFormatChanged = $0 { return true }; return false })
-        guard case .discontinuity(let discontinuity)? = events.last(where: { if case .discontinuity = $0 { return true }; return false })
+        let lastDiscontinuity = events.last { if case .discontinuity = $0 { return true }; return false }
+        guard case .discontinuity(let discontinuity)? = lastDiscontinuity
         else { return XCTFail("ожидался discontinuity") }
         XCTAssertEqual(discontinuity.reason, .rebuild)
 
