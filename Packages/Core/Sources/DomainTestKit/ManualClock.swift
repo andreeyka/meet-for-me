@@ -15,6 +15,15 @@
 //  аргументов, — разница в семантике незаметна на месте вызова и заметна только здесь,
 //  в контракте. Ссылка на метод (`clock.now`) сама по себе значение типа
 //  `@Sendable () -> Date`, которое и требует контракт.
+//
+//  `advance(by:)` ПИШЕТ `Double`, А НЕ `TimeInterval` — ТОТ ЖЕ СЛУЧАЙ, ЧТО У
+//  `JobOutcome.retry(after:)` (`JobQueue.swift`): тип один и тот же (`TimeInterval` —
+//  `typealias` к `Double`), а написание разное умышленно. На macOS `TimeInterval` в
+//  публичной подписи приходит псевдонимом C/ObjC (`CFTimeInterval`) и красит барьер
+//  разбора символьного графа таргета `DomainTestKit` (`<C/ObjC>` не входит в разрешённый
+//  список ни одного контракта) — прогон CI, работа «Core + Mac (macos-14)», шаг
+//  «Символьный граф», находка «`DomainTestKit`: `<C/ObjC>` — `TimeInterval`». Ответ не
+//  меняется ни на одном входе.
 
 import Foundation
 
@@ -41,8 +50,9 @@ public final class ManualClock: @unchecked Sendable {
         locked { current }
     }
 
-    /// Сдвинуть часы вперёд (отрицательное значение — назад) на заданный интервал.
-    public func advance(by seconds: TimeInterval) {
+    /// Сдвинуть часы вперёд (отрицательное значение — назад) на заданный интервал, в
+    /// секундах. Тип — `Double`, не `TimeInterval` (шапка файла).
+    public func advance(by seconds: Double) {
         locked { current = current.addingTimeInterval(seconds) }
     }
 

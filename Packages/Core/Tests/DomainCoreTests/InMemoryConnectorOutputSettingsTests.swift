@@ -12,12 +12,12 @@ import XCTest
 import DomainCore
 import DomainTestKit
 
-final class InMemoryConnectorSettingsRepositoriesTests: XCTestCase {
+final class InMemoryConnectorOutputSettingsTests: XCTestCase {
 }
 
 // MARK: - ConnectorRepository: инвариант 20 (К47, К48)
 
-extension InMemoryConnectorSettingsRepositoriesTests {
+extension InMemoryConnectorOutputSettingsTests {
 
     func test_mee320_connectorRepository_setCursorAndSetSyncOutcomeThrowNotFound() async throws {
         let repositories = InMemoryRepositories()
@@ -90,7 +90,7 @@ extension InMemoryConnectorSettingsRepositoriesTests {
 
 // MARK: - MeetingOutputRepository: инвариант 20 (К47, К48)
 
-extension InMemoryConnectorSettingsRepositoriesTests {
+extension InMemoryConnectorOutputSettingsTests {
 
     func test_mee320_meetingOutputRepository_markUserEditedThrowsNotFoundReadsReturnEmpty() async throws {
         let repositories = InMemoryRepositories()
@@ -157,7 +157,7 @@ extension InMemoryConnectorSettingsRepositoriesTests {
 
 // MARK: - SettingsRepository: инвариант 20 (К47, К48)
 
-extension InMemoryConnectorSettingsRepositoriesTests {
+extension InMemoryConnectorOutputSettingsTests {
 
     /// Инвариант 20: `notFound` этот порт не бросает ни одним методом — `value(forKey:)`
     /// на отсутствующем ключе отдаёт `nil`.
