@@ -1,5 +1,7 @@
-//  MEE-289: полнота и порядок объявлений девяти протоколов против разделов
-//  «Определение» их контрактов-владельцев, и имена полей `AppSettings` против §2.1 C-016.
+//  MEE-289 (девять протоколов) + MEE-319 (ещё семь: пять портов C-010 §5,
+//  `JobRepository` и `ModelCatalogPort` C-013): полнота и порядок объявлений против
+//  разделов «Определение» их контрактов-владельцев, и имена полей `AppSettings` против
+//  §2.1 C-016.
 //
 //  ПОЧЕМУ ЭТИ ПРОВЕРКИ, А НЕ ДРУГИЕ. Предмет MEE-289 — объявления, поведения в нём нет
 //  ни строки, и тестов на поведение постановка запрещает прямо. Что остаётся проверяемым,
@@ -71,6 +73,7 @@ final class PortDeclarationTests: XCTestCase {
         "func recording(id: UUID) async throws -> RecordingRecord?",
         "func recordings(meetingId: UUID) async throws -> [RecordingRecord]",
         "func unfinalized() async throws -> [RecordingRecord]",
+        "func adHoc() async throws -> [RecordingRecord]",
         "func delete(recordingId: UUID, deleteFiles: Bool) async throws"
     ]
 
@@ -83,6 +86,46 @@ final class PortDeclarationTests: XCTestCase {
         "func updateAttribution(_ updates: [SegmentAttributionUpdate]) async throws",
         "func updateSegmentText(segmentId: Int64, text: String, isUserEdited: Bool) async throws",
         "func search(query: String, limit: Int, offset: Int) async throws -> [SearchHit]"
+    ]
+
+    /// C-010 (MEE-18) v7, «Определение» §5 — дописаны MEE-319.
+    static let personRepository = [
+        "func upsert(displayName: String, emails: [String]) async throws -> UUID",
+        "func person(id: UUID) async throws -> PersonRecord?",
+        "func person(email: String) async throws -> PersonRecord?",
+        "func persons(ids: [UUID]) async throws -> [PersonRecord]",
+        "func rename(personId: UUID, displayName: String) async throws",
+        "func setMe(personId: UUID) async throws",
+        "func me() async throws -> PersonRecord?",
+        "func addNameForms(_ forms: [NameForm]) async throws",
+        "func nameForms(personIds: [UUID]) async throws -> [NameForm]"
+    ]
+
+    static let speakerProfileRepository = [
+        "func profile(personId: UUID, modelVersion: String) async throws -> SpeakerProfile?",
+        "func profiles(personIds: [UUID], modelVersion: String) async throws -> [SpeakerProfile]",
+        "func upsert(_ profile: SpeakerProfile) async throws",
+        "func delete(personId: UUID) async throws",
+        "func deleteAll(modelVersion: String) async throws"
+    ]
+
+    static let connectorRepository = [
+        "func all() async throws -> [ConnectorRecord]",
+        "func upsert(_ record: ConnectorRecord) async throws",
+        "func setCursor(_ cursor: String?, connectorId: String) async throws",
+        "func setSyncOutcome(at: Date, error: String?, connectorId: String) async throws",
+        "func delete(connectorId: String) async throws"
+    ]
+
+    static let meetingOutputRepository = [
+        "func outputs(meetingId: UUID) async throws -> [MeetingOutput]",
+        "func save(_ output: MeetingOutput) async throws",
+        "func markUserEdited(outputId: UUID, contentMarkdown: String) async throws"
+    ]
+
+    static let settingsRepository = [
+        "func value(forKey key: String) async throws -> Data?",
+        "func setValue(_ value: Data?, forKey key: String) async throws"
     ]
 
     /// C-013 (MEE-21), «Определение» §2.
@@ -100,6 +143,25 @@ final class PortDeclarationTests: XCTestCase {
         "func start() async",
         "func stop() async",
         "func events() -> AsyncStream<JobEvent>"
+    ]
+
+    /// C-013 (MEE-21) v6, «Определение» §3 — дописан MEE-319.
+    static let jobRepository = [
+        "func insert(_ job: Job) async throws",
+        "func update(_ job: Job) async throws",
+        "func job(id: UUID) async throws -> Job?",
+        "func jobs(status: JobStatus) async throws -> JobListing",
+        "func activeJob(dedupKey: String) async throws -> Job?",
+        "func claimNext(types: [JobType], excluding: Set<UUID>, now: Date, leaseSeconds: Int) async throws -> Job?",
+        "func reclaimExpiredLeases(now: Date) async throws -> [Job]",
+        "func failUnreadable(jobId: UUID, message: String, now: Date) async throws -> JobType?"
+    ]
+
+    /// C-013 (MEE-21) §1.1 — дописан MEE-319. Единственный метод, что C-013 даёт
+    /// дословно; развилка по остальному объёму порта — комментарий над объявлением
+    /// в `JobQueue.swift` (`// СТРОКА:`).
+    static let modelCatalogPort = [
+        "func missingModels(profileId: String) async throws -> [String]"
     ]
 
     /// C-018 (MEE-276), «Определение» §3.1.
@@ -140,10 +202,25 @@ final class PortDeclarationTests: XCTestCase {
         PortContract(name: "AudioCapturePort", file: "AudioCapturePort.swift", expected: audioCapturePort),
         PortContract(name: "CalendarPort", file: "CalendarPort.swift", expected: calendarPort),
         PortContract(name: "MeetingRepository", file: "Repositories.swift", expected: meetingRepository),
+        PortContract(name: "PersonRepository", file: "RepositoriesExtended.swift", expected: personRepository),
         PortContract(name: "RecordingRepository", file: "Repositories.swift", expected: recordingRepository),
         PortContract(name: "TranscriptRepository", file: "Repositories.swift", expected: transcriptRepository),
+        PortContract(
+            name: "SpeakerProfileRepository", file: "RepositoriesExtended.swift", expected: speakerProfileRepository
+        ),
+        PortContract(
+            name: "ConnectorRepository", file: "RepositoriesExtended.swift", expected: connectorRepository
+        ),
+        PortContract(
+            name: "MeetingOutputRepository", file: "RepositoriesExtended.swift", expected: meetingOutputRepository
+        ),
+        PortContract(
+            name: "SettingsRepository", file: "RepositoriesExtended.swift", expected: settingsRepository
+        ),
         PortContract(name: "JobHandler", file: "JobQueue.swift", expected: jobHandler),
         PortContract(name: "JobQueue", file: "JobQueue.swift", expected: jobQueue),
+        PortContract(name: "JobRepository", file: "JobQueue.swift", expected: jobRepository),
+        PortContract(name: "ModelCatalogPort", file: "JobQueue.swift", expected: modelCatalogPort),
         PortContract(name: "SessionCoordinator", file: "SessionCoordinator.swift", expected: sessionCoordinator),
         PortContract(name: "Scheduler", file: "SessionCoordinator.swift", expected: scheduler)
     ]

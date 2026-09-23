@@ -17,13 +17,16 @@
 //    * инварианты 4, 5 (`persons`, `person_emails`), 10—13 — НЕ ДЕРЖАТСЯ ЗДЕСЬ ВОВСЕ: их
 //      субъекты — строки таблиц, портов которых в дереве нет (`PersonRepository` и
 //      остальные четыре §5 не объявлены, MEE-289);
-//    * инвариант 7 (каскад удаления встречи) — ДЕРЖИТСЯ НАПОЛОВИНУ, и вторая половина
-//      названа: `meeting_sources` и `attendees` живут внутри `MeetingRecord` и уходят
-//      вместе с ним, а «`recordings.meeting_id` становится `NULL`» НЕ ИСПОЛНЯЕТСЯ.
-//      Довод прямой: `meetingId` записи лежит внутри `RecordingManifest` (C-002), тип
-//      неизменяем, и обнулить поле можно только СОБРАВ НОВЫЙ МАНИФЕСТ — то есть придумав
-//      доменное значение, которого тест не задавал. Фейк, придумывающий значения, дороже
-//      названной дыры. Строка — владельцу C-010, отчёт MEE-290.
+//    * инвариант 7 (каскад удаления встречи) — С MEE-319 ДЕРЖИТСЯ ЦЕЛИКОМ, по новому
+//      устройству C-010 v7: `meeting_sources` и `attendees` живут внутри `MeetingRecord`
+//      и уходят вместе с ним; «`recordings.meeting_id` становится `NULL`» держит привязка
+//      «запись → встреча» — отдельная от `RecordingManifest.meetingId`, которую заводит
+//      и снимает `InMemoryRecordingRepository` (её шапка), а не манифест. Довод, почему
+//      это отдельная привязка, а не поле манифеста: манифест (C-002) неизменяем, и
+//      обнулить поле в нём можно только СОБРАВ НОВЫЙ МАНИФЕСТ — то есть придумав доменное
+//      значение, которого тест не задавал; контракт C-010 v7 инвариант 7 прямо разводит
+//      колонку (обнуляется) и `manifest.meetingId` (не обнуляется, устаревает) как два
+//      разных факта — прежняя дыра была отсутствием этой привязки, а не ошибкой довода.
 //
 //  ФЕЙК НЕ ЭТАЛОН ПОВЕДЕНИЯ ПОРТА: держимые инварианты здесь суть УСТРОЙСТВО фейка, а не
 //  их проверка. Проверяются они тестами `storage`.
@@ -57,6 +60,11 @@ public final class InMemoryMeetingRepository: MeetingRepository, @unchecked Send
     private var failures: [MeetingRepositoryMethod: (id: String?, error: StorageError)] = [:]
     private var hangingMethods: Set<MeetingRepositoryMethod> = []
     private var hangSeconds: Double = 3600
+
+    /// Каскад инварианта 7 (C-010 v7): `delete(meetingIds:)` обнуляет здесь привязку
+    /// «запись → встреча» у записей. Ставится контейнером `InMemoryRepositories`; у
+    /// одиночного репозитория каскаду уходить некуда, и его нет.
+    private weak var recordings: InMemoryRecordingRepository?
 
     public init(log: PortCallLog = PortCallLog()) {
         self.log = log
@@ -113,6 +121,11 @@ public final class InMemoryMeetingRepository: MeetingRepository, @unchecked Send
     /// Всё, что лежит в хранилище, в порядке первого появления.
     public var storedRecords: [MeetingRecord] {
         locked { order.compactMap { records[$0] } }
+    }
+
+    /// Подключить каскад инварианта 7. Зовёт контейнер `InMemoryRepositories`.
+    public func attachCascade(recordings: InMemoryRecordingRepository) {
+        self.recordings = recordings
     }
 
     // MARK: - Оснастка
@@ -228,5 +241,8 @@ public final class InMemoryMeetingRepository: MeetingRepository, @unchecked Send
             }
             order.removeAll { !records.keys.contains($0) }
         }
+        // Инвариант 7: колонка `recordings.meeting_id` обнуляется каскадом;
+        // `manifest.meetingId` не трогается и может остаться устаревшим (§6 C-010 v7).
+        recordings?.detachFromDeletedMeetings(Set(meetingIds))
     }
 }

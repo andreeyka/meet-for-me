@@ -1,27 +1,31 @@
-//  Порты репозиториев и их типы — контракт C-010 (MEE-18), «Определение», §5
+//  Порты репозиториев MeetingRepository/RecordingRepository/TranscriptRepository и их
+//  типы — контракт C-010 (MEE-18) v7, «Определение», §5 (часть).
 //
 //  Модуль: domain-core · Владелец: DEV-2 · Слой: домен
 //
-//  Только объявления (MEE-289, прецедент формы — MEE-86). Реализацию портов пишет
-//  модуль `storage` (Packages/Core/Sources/Storage/); фейков репозиториев в дереве нет —
-//  они предмет MEE-290.
+//  Только объявления (MEE-289, прецедент формы — MEE-86; продолжение — MEE-319).
+//  Реализацию портов пишет модуль `storage` (Packages/Core/Sources/Storage/); фейк
+//  восьми репозиториев неполон — см. шапку `InMemoryRepositories.swift`.
 //
-//  ОБЛАСТЬ ЭТОГО ФАЙЛА — ТРИ ПОРТА ИЗ ВОСЬМИ, И ЭТО РЕШЕНИЕ, А НЕ НЕДОСМОТР.
-//  §5 контракта объявляет восемь портов; §6 плана MEE-288 назвал предметом три —
-//  `MeetingRepository`, `RecordingRepository`, `TranscriptRepository`. Здесь объявлены
-//  эти три и ровно те типы, без которых их подписи не компилируются. Пять остальных
-//  портов (`PersonRepository`, `SpeakerProfileRepository`, `ConnectorRepository`,
-//  `MeetingOutputRepository`, `SettingsRepository`), их типы (`PersonRecord`, `NameForm`,
-//  `SpeakerProfile`, `ConnectorRecord`, `MeetingOutput`) и `FileLayout` из §1 не объявлены:
-//  ни один пункт плана MEE-288 на них не стоит, и их состав — предмет своей задачи.
-//  Перечислены они в отчёте MEE-289, а не оставлены молчанием.
+//  ЭТОТ ФАЙЛ ДЕРЖИТ ТРИ ПОРТА ИЗ ВОСЬМИ — те, что объявил MEE-289 (тогдашний план
+//  MEE-288 §6 называл предметом только их), — и ровно те типы, без которых их подписи
+//  не компилируются. Пять остальных портов §5, их типы и `FileLayout` §1 объявлены
+//  MEE-319 РЯДОМ, в `RepositoriesExtended.swift`: второй файл заведён этой же задачей,
+//  а не решением о делении контракта на части — причина в его собственной шапке
+//  (файл вырос за порог `file_length` SwiftLint при одном файле на весь §5).
+//
+//  `RecordingRepository.adHoc()` (C-010 v7, §5, инвариант 29) добавлен MEE-319: метод
+//  отдаёт записи без привязки к встрече по колонке, независимо от `manifest.meetingId`
+//  и от `status` (инвариант 7). Фейк, который иначе не соберётся без этого метода, —
+//  предмет `InMemoryRecordingRepository.swift`.
 //
 //  `StorageError` объявлен, хотя `async throws` в Swift тип ошибки не называет и
 //  компиляции он не требует: на нём стоят инварианты 20 и 21 контракта, и фейкам MEE-290
 //  бросать нечем без него.
 //
-//  Порядок типов и порядок полей внутри типа — дословно по §5 контракта
-//  (порядок значим: правило обхода C-001 §0.2 п. 9).
+//  Порядок типов и порядок полей внутри типа — дословно по §5 контракта в границах
+//  ТОГО, ЧТО ЛЕЖИТ В ЭТОМ ФАЙЛЕ (порядок значим: правило обхода C-001 §0.2 п. 9).
+//  Полный порядок §5 целиком, через оба файла, называет шапка `RepositoriesExtended.swift`.
 
 import Foundation
 
@@ -213,6 +217,7 @@ public protocol RecordingRepository: Sendable {
     func recording(id: UUID) async throws -> RecordingRecord?
     func recordings(meetingId: UUID) async throws -> [RecordingRecord]
     func unfinalized() async throws -> [RecordingRecord]
+    func adHoc() async throws -> [RecordingRecord]
     func delete(recordingId: UUID, deleteFiles: Bool) async throws
 }
 
