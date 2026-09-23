@@ -148,7 +148,10 @@ Foundation, `storage` — Foundation + GRDB, `engine-xpc`/`gigaam` — код и
 ### МОДУЛЬ: capture
 - Слой: адаптер системного API
 - Процесс: App
-- Каталоги: `Packages/Mac/Sources/Capture/`, `Packages/Mac/Tests/CaptureTests/`
+- Каталоги: `Packages/Mac/Sources/Capture/`, `Packages/Mac/Sources/CaptureManualHarness/`, `Packages/Mac/Tests/CaptureTests/`
+  — `CaptureManualHarness` — исполняемый таргет, тестовое средство модуля (носитель ручных М1/М2 и писатель
+  К27(б) плана MEE-315); в продукт не входит. Объявлен в этом же пакете, а не отдельным, потому что доступ
+  `package` не пересекает границу SPM-пакета (решение РП, MEE-316)
 - Владелец: DEV-1
 - Реализует контракты: `AudioCapturePort` (process tap + микрофон в aggregate device, чанкованный CAF, `RecordingManifest` на выходе)
 - Потребляет контракты: `PowerPort`, DTO домена
