@@ -1,4 +1,4 @@
-//  Capture — реализация `AudioCapturePort` (C-004 v4, MEE-77) по перечню MEE-310 и плану
+//  Capture — реализация `AudioCapturePort` (C-004 v5, MEE-77) по перечню MEE-310 и плану
 //  MEE-315. Задача — MEE-317.
 //
 //  Модуль: capture · Владелец: DEV-1 · Слой: адаптер системного API

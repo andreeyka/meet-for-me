@@ -1,5 +1,5 @@
 //  AudioCaptureImpl — единственный публичный тип модуля `capture`, реализация `AudioCapturePort`
-//  (C-004 v4, MEE-77) по перечню критериев MEE-310 и плану MEE-315.
+//  (C-004 v5, MEE-77) по перечню критериев MEE-310 и плану MEE-315.
 //
 //  Модуль: capture · Владелец: DEV-1 · Слой: адаптер системного API
 //
@@ -56,11 +56,7 @@ public final class AudioCaptureImpl: AudioCapturePort, @unchecked Sendable {
     /// Продовый инициализатор: единственное место, где швы связаны с настоящей системой.
     /// `power` реализацией не владеет (карта модулей: `capture` потребляет `PowerPort`,
     /// реализует его модуль `permissions`) — composition root `App/` передаёт готовый порт.
-    ///
-    /// СТРОКА: `PowerPort` — тип публичной сигнатуры этого инициализатора, а composition root
-    /// в `App/` не может собрать `AudioCaptureImpl` без него. Разрешённый список инварианта 25
-    /// выведен только из раздела «Определение» (подписи самого `AudioCapturePort`) — `PowerPort`
-    /// среди тридцати четырёх позиций нет. Заведён IR-112 (MEE-325); решение — за контрактом.
+    /// `PowerPort` в списке инварианта 25 — C-004 v5 (IR-112, MEE-325, закрыт).
     public convenience init(power: PowerPort) {
         self.init(power: power, gateway: CoreAudioGateway(), deadline: SystemPromptDeadline(),
                   pollDriver: SystemPollDriver())
