@@ -131,16 +131,22 @@ extension AudioCaptureImpl {
             self?.handleHardwareEvent(event)
         }
         installPowerEventsIfNeeded()
-        if let tap {
-            for process in gateway.capturedProcesses(tap) { session.recordCapturedProcess(process) }
-        }
 
         do {
             let started = CaptureStarted(
                 recordingId: session.recordingId, startedAt: session.startedAt,
                 tracks: try session.manifestTracks(), captureGroupKey: session.captureGroupKey
             )
-            writeManifest(session, endedAt: nil, isFinalized: false)
+            // Инвариант 12(а): `capturedProcessesChanged` публикуется «при старте сеанса» —
+            // дословно контракт, — не только по опросу/событию шва. Идёт после `manifestTracks()`
+            // выше (та же самая проверка на пустой состав файлов должна пройти первой), но до
+            // возврата `start()`, чтобы первый снимок состава был доступен вызывающей стороне
+            // тем же путём (`RecordingManifest`), что и последующие.
+            if let tap {
+                recordProcesses(session, processes: gateway.capturedProcesses(tap), atHostTime: session.hostOrigin)
+            } else {
+                writeManifest(session, endedAt: nil, isFinalized: false)
+            }
             return (session, started)
         } catch {
             session.powerToken?.end()
@@ -191,7 +197,9 @@ extension AudioCaptureImpl {
         tap: TapHandle?, microphone: MicrophoneHandle?, to session: CaptureSessionState
     ) throws {
         do {
-            session.aggregate = try gateway.buildAggregate(tap: tap, microphone: microphone) { [weak self] buffer in
+            session.aggregate = try gateway.buildAggregate(
+                tap: tap, microphone: microphone, driftCompensation: true
+            ) { [weak self] buffer in
                 self?.handleBuffer(buffer)
             }
         } catch {

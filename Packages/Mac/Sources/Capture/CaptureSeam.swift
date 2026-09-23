@@ -100,6 +100,9 @@ struct CaptureProcessDescriptor: Sendable, Equatable {
     let pid: Int32
     let bundleId: String?
     let executableName: String?
+    /// C-009 §4.1, шаг 1: `responsibleBundleId ?? bundleId` — appKey процесса. `nil` по
+    /// умолчанию (не каждый источник его знает); шаг 1 сворачивает к `bundleId`, если так.
+    let responsibleBundleId: String? = nil
 }
 
 /// События, наблюдаемые между собранным aggregate device и реализацией. `atHostTime` — момент
@@ -142,9 +145,17 @@ protocol HardwareGateway: Sendable {
     /// Второй и последующие вызовы с теми же `tap`/`microphone` — пересборка: они обязаны
     /// переиспользовать переданные хэндлы, а не создавать новые (инварианты 4—6 проверяет тест
     /// счётом вызовов `requestSystemAudioTap` и `buildAggregate` порознь).
+    ///
+    /// `driftCompensation` — аргумент, а не решение самого шва: порт называет им своё требование
+    /// «компенсация дрейфа включена всегда» (инвариант 6, дословно у `CoreAudioGateway`) на
+    /// каждом вызове, а фейк теста ведёт журнал этого аргумента отдельно от прочих (К6, план
+    /// MEE-315). Какой конкретно саб-элемент aggregate внутри реализации остаётся опорными
+    /// часами без собственной компенсации — деталь `AggregateRuntime`, этот аргумент её не несёт
+    /// и не заменяет.
     func buildAggregate(
         tap: TapHandle?,
         microphone: MicrophoneHandle?,
+        driftCompensation: Bool,
         onBuffer: @escaping @Sendable (HardwareBuffer) -> Void
     ) throws -> AggregateHandle
 

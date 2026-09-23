@@ -138,8 +138,11 @@ enum HALTap {
         return description.processes.compactMap { object in
             guard let pid = HALObject.pid(of: object) else { return nil }
             let bundleId = HALObject.string(object, kAudioProcessPropertyBundleID)
-            return CaptureProcessDescriptor(pid: pid, bundleId: (bundleId?.isEmpty ?? true) ? nil : bundleId,
-                                           executableName: HALObject.executableName(pid: pid))
+            return CaptureProcessDescriptor(
+                pid: pid, bundleId: (bundleId?.isEmpty ?? true) ? nil : bundleId,
+                executableName: HALObject.executableName(pid: pid),
+                responsibleBundleId: ResponsibleProcess.bundleId(ofPid: pid)
+            )
         }
     }
 
@@ -153,6 +156,38 @@ enum HALTap {
         let bytes = [24, 16, 8, 0].map { UInt8((value >> UInt32($0)) & 0xFF) }
         let code = bytes.allSatisfy { (32..<127).contains($0) } ? (String(bytes: bytes, encoding: .ascii) ?? "") : ""
         return "OSStatus \(status)" + (code.isEmpty ? "" : " (\(code))")
+    }
+}
+
+/// C-009 §4.1, шаг 1 (`responsibleBundleId`) и §«Опора на приватный API…»: ответственный процесс
+/// разрешается приватным символом `responsibility_get_pid_responsible_for_pid` через `dlsym` —
+/// тот же приём и то же обоснование, что у `Detector.ProcessIdentity`; продублирован здесь, а не
+/// переиспользован оттуда, потому что `Capture` не вправе зависеть от `Detector` (граница модуля,
+/// `Package.swift` вне зоны этой задачи). Деградация та же: символ может не разрешиться на будущей
+/// macOS — тогда `bundleId(ofPid:)` возвращает `nil` и шаг 1 сворачивается к обычному `bundleId`.
+enum ResponsibleProcess {
+    private typealias ResponsibleFunction = @convention(c) (pid_t) -> pid_t
+
+    private static let responsibleFunction: ResponsibleFunction? = {
+        guard let symbol = dlsym(UnsafeMutableRawPointer(bitPattern: -2),
+                                 "responsibility_get_pid_responsible_for_pid") else { return nil }
+        return unsafeBitCast(symbol, to: ResponsibleFunction.self)
+    }()
+
+    static func responsiblePid(ofPid pid: Int32) -> Int32? {
+        guard let function = responsibleFunction else { return nil }
+        let responsible = function(pid)
+        return responsible > 0 ? responsible : nil
+    }
+
+    /// Bundle id ответственного процесса через HAL (`kAudioProcessPropertyBundleID`), а не через
+    /// `NSRunningApplication` — тот же источник, что уже читает `describedProcesses` для самого
+    /// процесса, так что оба значения сравнимы (один и тот же HAL-объект тем же способом).
+    static func bundleId(ofPid pid: Int32) -> String? {
+        guard let responsiblePid = responsiblePid(ofPid: pid), responsiblePid != pid,
+              let object = HALObject.processObject(pid: responsiblePid) else { return nil }
+        let bundleId = HALObject.string(object, kAudioProcessPropertyBundleID)
+        return (bundleId?.isEmpty ?? true) ? nil : bundleId
     }
 }
 

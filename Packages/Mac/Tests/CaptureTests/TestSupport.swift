@@ -24,7 +24,11 @@ final class FakeHardwareGateway: HardwareGateway, @unchecked Sendable {
 
     private(set) var tapRequestArgs: [ProcessGroup?] = []
     private(set) var micRequestArgs: [InputSelection] = []
-    private(set) var aggregateBuildArgs: [(tap: TapHandle?, microphone: MicrophoneHandle?)] = []
+    /// К6: `driftCompensation` — журнал этого аргумента по каждому вызову отдельно от прочих
+    /// (план MEE-315), чтобы тест мог утверждать «`true` в каждом из N вызовов», не только факт
+    /// самого вызова.
+    private(set) var aggregateBuildArgs:
+        [(tap: TapHandle?, microphone: MicrophoneHandle?, driftCompensation: Bool)] = []
     private(set) var releasedTaps: [TapHandle] = []
     private(set) var releasedMicrophones: [MicrophoneHandle] = []
     private(set) var teardownCount = 0
@@ -80,10 +84,11 @@ final class FakeHardwareGateway: HardwareGateway, @unchecked Sendable {
     // MARK: - Aggregate
 
     func buildAggregate(
-        tap: TapHandle?, microphone: MicrophoneHandle?, onBuffer: @escaping @Sendable (HardwareBuffer) -> Void
+        tap: TapHandle?, microphone: MicrophoneHandle?, driftCompensation: Bool,
+        onBuffer: @escaping @Sendable (HardwareBuffer) -> Void
     ) throws -> AggregateHandle {
         lock.lock()
-        aggregateBuildArgs.append((tap, microphone))
+        aggregateBuildArgs.append((tap, microphone, driftCompensation))
         let error = aggregateBuildError
         lock.unlock()
         if let error { throw error }

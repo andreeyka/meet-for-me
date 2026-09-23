@@ -37,9 +37,13 @@ extension AudioCaptureImpl {
         }
         do {
             session.aggregate = try gateway.buildAggregate(
-                tap: session.tap, microphone: session.microphone
+                tap: session.tap, microphone: session.microphone, driftCompensation: true
             ) { [weak self] buffer in
                 self?.handleBuffer(buffer)
+            }
+            // Инвариант 12(б): «при каждой пересборке aggregate device» — дословно контракт.
+            if let tap = session.tap {
+                recordProcesses(session, processes: gateway.capturedProcesses(tap), atHostTime: atHostTime)
             }
         } catch {
             // Пересобрать не удалось сразу — попытка не повторяется автоматически в PR1;
@@ -64,10 +68,15 @@ extension AudioCaptureImpl {
             atMs: pending.atMs, gapMs: gapMs, scaleErrorMs: scaleErrorMs, reason: pending.reason
         ) else { return }
         session.discontinuities.append(discontinuity)
-        let detail = "aggregate rebuilt (\(pending.reason.rawValue))"
-        guard let marker = try? RecordingManifest.Marker(kind: .discontinuity, atMs: pending.atMs, detail: detail)
-        else { return }
-        session.markers.append(marker)
+        // `.sleep`: маркер `.discontinuity` уже добавлен немедленно в `handleSleep` (§«Сон») —
+        // не дублируем; запись `Discontinuity` выше по-прежнему делается здесь, раньше её
+        // посчитать не из чего (нужен `firstBufferHostTime`, известный только после пробуждения).
+        if pending.reason != .sleep {
+            let detail = "aggregate rebuilt (\(pending.reason.rawValue))"
+            guard let marker = try? RecordingManifest.Marker(kind: .discontinuity, atMs: pending.atMs, detail: detail)
+            else { return }
+            session.markers.append(marker)
+        }
         if session.currentMicrophoneUID != pending.oldMicrophoneUID {
             recordDeviceChange(session, atMs: pending.atMs, from: pending.oldMicrophoneUID)
         }

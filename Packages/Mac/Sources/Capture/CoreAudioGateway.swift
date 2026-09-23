@@ -71,8 +71,13 @@ final class CoreAudioGateway: HardwareGateway, @unchecked Sendable {
     }
 
     func buildAggregate(
-        tap: TapHandle?, microphone: MicrophoneHandle?, onBuffer: @escaping @Sendable (HardwareBuffer) -> Void
+        tap: TapHandle?, microphone: MicrophoneHandle?, driftCompensation: Bool,
+        onBuffer: @escaping @Sendable (HardwareBuffer) -> Void
     ) throws -> AggregateHandle {
+        // `driftCompensation` порт всегда шлёт `true` (инвариант 6) — сама реализация решает,
+        // какой элемент aggregate опорный и потому без компенсации, безусловно и без участия
+        // этого аргумента (см. шапку файла и `AggregateRuntime.buildComposition`). Параметр
+        // существует ради наблюдаемости швом теста (К6), не ради управления реализацией.
         var tapObject: AudioObjectID?
         if let tap {
             lock.lock()

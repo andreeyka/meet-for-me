@@ -35,6 +35,11 @@ final class CaptureSessionState {
     var isPaused = false
     var pauseStartedAtMs: Int?
     var lastProcessPollHostTime: UInt64 = 0
+    /// Инвариант 23 (`.levels`): последнее значение на канал и момент последней публикации —
+    /// троттлинг ≤10 Гц считается по `hostTime` данных, не по счётчику буферов.
+    var lastMicLevel: Float?
+    var lastSystemLevel: Float?
+    var lastLevelsEmitHostTime: UInt64 = 0
     var currentMicrophoneUID: String?
     var currentMicrophoneName: String?
     var currentMicrophoneChannelCount: Int?

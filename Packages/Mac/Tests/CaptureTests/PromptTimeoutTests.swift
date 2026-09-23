@@ -135,9 +135,10 @@ final class PromptTimeoutTests: CaptureAsyncTestCase {
     func test_k18_permissionObservedOnGrantAndDenyOnlyForSystemAudio() async throws {
         let harness = Harness()
         let directory = try Harness.makeDirectory()
-        // Успешный старт публикует ровно два события по порядку — permissionObserved(.granted),
-        // затем started(_): цикл берёт их счётом и завершается сам, не полагаясь на отмену
-        // задачи поверх AsyncStream (риск незавершённого потока — шов теста, не порт).
+        // Успешный старт публикует `permissionObserved(.granted)` первым событием (возврат
+        // MEE-317: после него, ДО `started(_)`, теперь идёт ещё и `capturedProcessesChanged` —
+        // инвариант 12(а)); цикл берёт первые два счётом и завершается сам, не полагаясь на
+        // отмену задачи поверх AsyncStream (риск незавершённого потока — шов теста, не порт).
         let collector = Task { () -> [CaptureEvent] in
             var collected: [CaptureEvent] = []
             for await event in harness.port.events() {

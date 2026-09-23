@@ -24,6 +24,27 @@ extension AudioCaptureImpl {
                                            from: buffer.channelCount, to: track.channelCount)
         try? track.append(adapted)
         maybeFlush(session, track: track, hostTime: buffer.hostTime)
+        updateLevels(session, slot: buffer.slot, samples: buffer.samples, hostTime: buffer.hostTime)
+    }
+
+    /// Инвариант 23: `.levels`, частота ≤10 Гц (питает C-016 — индикатор уровня, не измерение).
+    /// Троттлинг — по `hostTime` буфера, тем же приёмом, что `maybeFlush` (инвариант 26): по
+    /// монотонным часам данных, а не по часам вызова.
+    private func updateLevels(
+        _ session: CaptureSessionState, slot: HardwareBuffer.Slot, samples: [Float], hostTime: UInt64
+    ) {
+        let level = AudioLevel.value(fromSamples: samples)
+        switch slot {
+        case .mic: session.lastMicLevel = level
+        case .system: session.lastSystemLevel = level
+        }
+        let last = session.lastLevelsEmitHostTime
+        guard last == 0 || hostTime &- last >= UInt64(AudioLevel.minimumIntervalMs) else { return }
+        session.lastLevelsEmitHostTime = hostTime
+        emit(.levels(.init(
+            mic: session.micTrack != nil ? session.lastMicLevel : nil,
+            system: session.systemTrack != nil ? session.lastSystemLevel : nil
+        )))
     }
 
     private func currentPhase() -> CapturePhase {
@@ -39,6 +60,23 @@ extension AudioCaptureImpl {
         let last = track.lastFlushAt
         guard last == 0 || hostTime &- last >= UInt64(AudioCaptureLimits.truncatedTailBudgetMs) else { return }
         track.flush(atHostTime: hostTime)
+    }
+}
+
+/// Значение `.levels` — инвариант 23: `max(0, min(1, (dBFS+60)/60))` от среднеквадратичной
+/// амплитуды буфера. Эвристика для индикатора (C-016), не измерение громкости — контракт не
+/// называет ни окно усреднения, ни взвешивание, поэтому берётся буфер целиком, тем же приёмом,
+/// что и остальные адаптеры этого модуля (без скользящего окна, без дополнительного состояния).
+enum AudioLevel {
+    static let minimumIntervalMs = 100   // ≤10 Гц
+
+    static func value(fromSamples samples: [Float]) -> Float {
+        guard !samples.isEmpty else { return 0 }
+        let sumSquares = samples.reduce(Float(0)) { $0 + $1 * $1 }
+        let rms = (sumSquares / Float(samples.count)).squareRoot()
+        guard rms > 0 else { return 0 }
+        let dBFS = 20 * log10(rms)
+        return max(0, min(1, (dBFS + 60) / 60))
     }
 }
 

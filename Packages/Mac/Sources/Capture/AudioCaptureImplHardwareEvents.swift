@@ -59,6 +59,19 @@ extension AudioCaptureImpl {
         if let marker = try? RecordingManifest.Marker(kind: .sleep, atMs: atMs, detail: nil) {
             session.markers.append(marker)
         }
+        // §«Сон»: контракт требует ОБА маркера сразу — `.sleep` и `.discontinuity` — и немедленный
+        // сброс буферов на диск, а не отложенные до первого буфера после пробуждения: система
+        // может проспать сколь угодно долго, а до пробуждения на диске обязан остаться след
+        // случившегося разрыва, а не тишина без объяснения. Точную запись `Discontinuity` (с
+        // посчитанным `gapMs`) по-прежнему делает `resolveRebuild` при пробуждении — раньше её
+        // посчитать не из чего (см. там же — маркер для `reason == .sleep` не дублируется).
+        if let marker = try? RecordingManifest.Marker(kind: .discontinuity, atMs: atMs, detail: "sleep") {
+            session.markers.append(marker)
+        }
+        for track in [session.micTrack, session.systemTrack].compactMap({ $0 }) {
+            track.flush(atHostTime: atHostTime)
+        }
+        writeManifest(session, endedAt: nil, isFinalized: false)
         beginRebuild(session, reason: .sleep, newMicrophone: nil, atHostTime: atHostTime)
     }
 
@@ -75,14 +88,24 @@ extension AudioCaptureImpl {
     }
 
     /// Инварианты 12—14: состав захвата — объединение снимков за всю запись, не последний снимок.
-    private func recordProcesses(
+    /// `containsUnrequested` сравнивает по правилу C-009 §4.1: шаг 1 — appKey процесса,
+    /// `responsibleBundleId ?? bundleId` (родитель отвечает за помощника с другим bundle id, тот
+    /// же приём, что в `Detector`), шаг 2 — `bundleKeyMatches` (домен, не своё сравнение строк).
+    func recordProcesses(
         _ session: CaptureSessionState, processes: [CaptureProcessDescriptor], atHostTime: UInt64
     ) {
         for process in processes { session.recordCapturedProcess(process) }
         let requestedAppKey = session.request.group?.appKey
         let resolvedBundleIds = processes.compactMap(\.bundleId)
-        let containsUnrequested = requestedAppKey != nil
-            && processes.contains { $0.bundleId != requestedAppKey && $0.bundleId != nil }
+        let containsUnrequested: Bool
+        if let requestedAppKey {
+            containsUnrequested = processes.contains { process in
+                let appKey = process.responsibleBundleId ?? process.bundleId
+                return appKey != nil && !bundleKeyMatches(appKey: appKey, entry: requestedAppKey)
+            }
+        } else {
+            containsUnrequested = false
+        }
         let atMs = session.referenceTrack?.positionMs ?? 0
         let manifestProcesses = processes.compactMap {
             try? RecordingManifest.CapturedProcess(pid: $0.pid, bundleId: $0.bundleId,
