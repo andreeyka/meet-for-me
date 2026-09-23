@@ -1,0 +1,14 @@
+{
+  "_source": "Объединение (правило композиции, «модуль, реализующий вместе с портами этого контракта и другие, проверяется объединением разрешённых списков их контрактов»): C-005 v4 инв. 9 (23 поз., https://linear.app/easypto/issue/MEE-9) + C-006 v7 инв. 21 (34 поз., https://linear.app/easypto/issue/MEE-10), объединено переписью MEE-191 — 21 позиция C-006 не входила в список C-005, итого 44",
+  "_count": 44,
+  "types": [
+    "CalendarSourceId", "CalendarInfo", "CalendarSyncTrigger", "CalendarError", "CalendarSyncResult",
+    "CalendarChange", "CalendarPort", "DedupKey", "MeetingEvent",
+    "MeetingEventPayload", "PluginInfo", "ConnectorCapabilities", "ConnectorCapabilities.Auth",
+    "ConnectorHealth", "ConnectorHealth.Status", "AuthChallenge", "ConnectorCalendar", "ChangeBatch",
+    "ConnectorError", "HostNotificationKind", "LogLevel", "ConnectorHostServices", "CalendarConnector",
+    "MeetingEvent.Person", "MeetingEvent.Attendee", "MeetingEvent.Conference", "DomainValidatable",
+    "Array", "AsyncStream", "Bool", "Codable", "Data", "Date", "Duration", "Equatable", "Error",
+    "Hashable", "Int", "Optional", "Sendable", "String", "URL", "UUID", "Void"
+  ]
+}

@@ -1,0 +1,12 @@
+{
+  "_source": "C-015 v4, инварианты 19 и 20, https://linear.app/easypto/issue/MEE-23 (перепроверено переписью MEE-191)",
+  "_count": 29,
+  "types": [
+    "AttributionSource", "AttributionInput", "SpeakerAssignment", "SpeakerAssignment.Candidate",
+    "TextCorrection", "SpeakerProfileUpdate", "AttributionResult", "AttributionThresholds",
+    "AttributionError", "AttributionPort", "Transcript", "PersonRecord", "NameForm", "SpeakerProfile",
+    "SegmentAttributionUpdate",
+    "Array", "CaseIterable", "Codable", "Double", "Equatable", "Error", "Float", "Int", "Int64",
+    "Optional", "Sendable", "String", "UUID", "Void"
+  ]
+}

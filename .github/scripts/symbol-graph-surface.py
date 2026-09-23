@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Владелец файла — разработчик CI (MEE-166).
+# Владелец файла — архитектор (MEE-166, MEE-191).
 #
 # Шаг снимает символьный граф таргетов и разбирает публичную поверхность каждого.
 # Способ назван самими контрактами: инвариант 25 C-004, инвариант 9 C-005,
@@ -7,18 +7,34 @@
 # инвариант 23 C-012, инвариант 32 C-014, инварианты 19 и 20 C-015 — и критерием 45
 # MEE-74. Полнее всех механизм расписан инвариантом 32 C-014, и код ниже следует ему.
 #
-# ЧЕГО ЗДЕСЬ НЕТ НАМЕРЕННО — разрешённых списков типов по таргетам.
-# Списки выведены каждым контрактом из его раздела «Определение» и меняются вместе
-# с ним. Копия списка в репозитории разошлась бы с оригиналом на первом же издании,
-# и разошлась бы молча — то есть дала бы зелёный шаг при нарушенном контракте.
-# Поэтому список остаётся в контракте, а шаг делает две вещи, которые выводятся
-# из самого дерева и копии не требуют:
+# ИЗДАНИЕ MEE-191. До этой правки здесь намеренно не было ни одного разрешённого
+# списка типов по таргетам — барьер стоял только по МОДУЛЮ объявления (ниже), и
+# это было решением, а не недосмотром (MEE-166): копия списка в репозитории
+# разошлась бы с контрактом на первом же издании и разошлась бы молча — зелёный
+# шаг при нарушенном контракте. Довод был верным, но цена оказалась практической:
+# на приёмке MEE-324 и MEE-317 барьер по модулю пропустил ровно то, что был обязан
+# ловить перечень контракта (тип из Foundation/Swift, которого в перечне нет).
+#
+# Решение MEE-191 — не отменяет довод MEE-166, а меняет сторону, которой он
+# дороже: копия списка теперь ЕСТЬ, в `allowed-types/<Target>.json`, и она
+# ДОПОЛНЯЕТ барьер по модулю, а не заменяет его. Цена принятого — второй
+# источник истины: файл может отстать от следующего издания контракта. Цена
+# смягчена, а не снята: файл несёт `_count`, и расхождение `_count` с
+# фактическим числом позиций — отказ самого скрипта (`load_allowed_types`
+# ниже), а не тихий пропуск. Отставание же в СОСТАВЕ при неизменном счёте
+# (контракт заменил одну позицию на другую, не поменяв длину) счётом не
+# ловится ничем — это остаточная цена, названная здесь и в отчёте MEE-191,
+# а не спрятанная.
+#
+# Шаг по-прежнему делает то, что не требует копии:
 #   1) барьер по МОДУЛЮ объявления: тип в публичной сигнатуре обязан быть объявлен
 #      в таргете этого репозитория либо в базовом наборе модулей (ниже);
 #   2) выгрузка самой поверхности — по таргету, по модулю, поимённо, — чтобы
-#      сверку с разрешённым списком контракта можно было сделать по выводу шага,
-#      а не по чтению исходников.
-# Барьер (1) строго слабее списков контрактов: см. --report и раздел «Не ловит».
+#      сверку с разрешённым списком контракта можно было сделать по выводу шага
+#      и для таргетов БЕЗ файла в `allowed-types/` — а не по чтению исходников.
+# Барьер (1) в одиночку строго слабее списков контрактов: см. --report и раздел
+# «Не ловит». Файл (см. `load_allowed_types`) закрывает эту разницу поимённо
+# для таргетов, у которых он заведён.
 
 import argparse
 import json
@@ -98,6 +114,56 @@ def load_graphs(graph_dir):
     return graphs, set(graphs.keys())
 
 
+def load_allowed_types(allowed_dir):
+    """Разрешённые списки типов по таргетам — MEE-191, `allowed-types/<Target>.json`.
+
+    Каждый файл — построчная копия перечня из раздела «Определение» контракта-
+    владельца: `_source` называет контракт, издание, инвариант и ссылку на
+    задачу, `_count` — число позиций, которое контракт называет сам, `types` —
+    сам список. Копия — решение MEE-191, а не молчаливое допущение: довод и
+    цена (второй источник истины) — в комментарии в начале файла и в отчёте
+    MEE-191. Список ДОПОЛНЯЕТ барьер по модулю, а не заменяет его: тип из
+    модуля репозитория разрешён всегда, независимо от этого файла.
+
+    `_count`, разошедшийся с фактической длиной списка, — отказ шага, а не
+    предупреждение: транскрипция обязана быть точной, и опечатка, стёршая
+    одну позицию без изменения счёта, тем самым исключена по построению —
+    хотя обратное (контракт поменял позицию, не тронув счёт) этим не ловится,
+    и это названо прямо, а не спрятано (см. шапку файла).
+    """
+    allowed = {}
+    if not allowed_dir or not os.path.isdir(allowed_dir):
+        return allowed
+    for name in sorted(os.listdir(allowed_dir)):
+        if not name.endswith(".json"):
+            continue
+        with open(os.path.join(allowed_dir, name), encoding="utf-8") as handle:
+            data = json.load(handle)
+        allowed[name[: -len(".json")]] = validate_allowed_data(name, data)
+    return allowed
+
+
+def validate_allowed_data(name, data):
+    """Проверка одного файла `allowed-types/`, вынесена отдельно ради self-test.
+
+    Обе проверки — отказ, не предупреждение: список, который сам с собой не
+    сходится, доверия не заслуживает, и молчаливо пропущенная позиция здесь
+    страшнее остановленного прогона.
+    """
+    types = set(data["types"])
+    if len(types) != len(data["types"]):
+        raise SystemExit(
+            "allowed-types/%s: список несёт повторяющуюся позицию — "
+            "%d строк, %d различных" % (name, len(data["types"]), len(types))
+        )
+    if len(types) != data["_count"]:
+        raise SystemExit(
+            "allowed-types/%s: заявлено %d позиций (_count), в списке %d — "
+            "файл разошёлся сам с собой, транскрипция неверна" % (name, data["_count"], len(types))
+        )
+    return {"source": data["_source"], "count": data["_count"], "types": types}
+
+
 def surface_of(graph_files):
     """Публичная поверхность одного таргета.
 
@@ -170,8 +236,24 @@ def target_of_path(path):
     return "?"
 
 
+def type_allowed(module, spelling, own_modules, allowed_entry):
+    """Разрешён ли тип на границе таргета.
+
+    Модуль репозитория разрешён всегда. Иначе, если для таргета заведён
+    список MEE-191 (`allowed_entry`), решает ОН поимённо — включая случай,
+    когда модуль базовый (`BASELINE_MODULES`): список тогда строже барьера
+    и главный. Без списка действует прежний барьер по модулю (MEE-166).
+    """
+    if module in own_modules:
+        return True
+    if allowed_entry is not None:
+        return spelling in allowed_entry["types"]
+    return module in BASELINE_MODULES
+
+
 def run(args):
     graphs, own_modules = load_graphs(args.graph_dir)
+    allowed_types = load_allowed_types(args.allowed_types_dir)
     lines = []
     violations = []
     notices = []
@@ -184,27 +266,35 @@ def run(args):
         lines.append("Это не отказ: граф есть артефакт сборки, и на таргете без "
                      "публичных объявлений он пуст (инвариант 32 C-014).")
     else:
-        lines.append("Таргетов с графом: **%d**. Модули репозитория, известные шагу: %s."
-                     % (len(graphs), ", ".join("`%s`" % m for m in sorted(own_modules))))
+        covered = sorted(t for t in allowed_types if t in graphs)
+        lines.append("Таргетов с графом: **%d**. Модули репозитория, известные шагу: %s. "
+                     "Точный список типов (MEE-191) заведён для: %s."
+                     % (len(graphs), ", ".join("`%s`" % m for m in sorted(own_modules)),
+                        ", ".join("`%s`" % t for t in covered) or "ни одного — везде барьер по модулю"))
         lines.append("")
-        lines.append("| Таргет | Публичных объявлений | Типов в сигнатурах | Модули объявления |")
-        lines.append("| -- | -- | -- | -- |")
+        lines.append("| Таргет | Публичных объявлений | Типов в сигнатурах | Модули объявления | Список MEE-191 |")
+        lines.append("| -- | -- | -- | -- | -- |")
 
     for target in sorted(graphs):
         count, referenced, _ = surface_of(graphs[target])
+        allowed_entry = allowed_types.get(target)
         by_module = defaultdict(set)
         for usr, spelling in referenced.items():
             by_module[module_of(usr) or "<не разобран: %s>" % usr].add(spelling)
         for module in sorted(by_module):
-            if module in own_modules or module in BASELINE_MODULES:
-                continue
             for spelling in sorted(by_module[module]):
-                violations.append((target, module, spelling))
+                if not type_allowed(module, spelling, own_modules, allowed_entry):
+                    violations.append((target, module, spelling))
         shown = ", ".join(
-            "`%s`%s" % (module, "" if module in own_modules or module in BASELINE_MODULES else " ❌")
+            "`%s`%s" % (
+                module,
+                "" if all(type_allowed(module, s, own_modules, allowed_entry) for s in by_module[module]) else " ❌",
+            )
             for module in sorted(by_module)
         ) or "—"
-        lines.append("| `%s` | %d | %d | %s |" % (target, count, len(referenced), shown))
+        list_note = ("`%s`, %d поз." % (allowed_entry["source"], allowed_entry["count"])
+                     if allowed_entry else "нет — барьер по модулю")
+        lines.append("| `%s` | %d | %d | %s | %s |" % (target, count, len(referenced), shown, list_note))
 
     if graphs:
         lines.append("")
@@ -212,6 +302,7 @@ def run(args):
         lines.append("")
         for target in sorted(graphs):
             count, referenced, declared = surface_of(graphs[target])
+            allowed_entry = allowed_types.get(target)
             lines.append("**`%s`** — публичных объявлений %d." % (target, count))
             if count == 0:
                 lines.append("")
@@ -224,8 +315,16 @@ def run(args):
                 for usr, spelling in referenced.items():
                     by_module[module_of(usr) or "<не разобран>"].add(spelling)
                 for module in sorted(by_module):
-                    lines.append("* из `%s`: %s"
-                                 % (module, ", ".join("`%s`" % s for s in sorted(by_module[module]))))
+                    if allowed_entry is None:
+                        spellings = ", ".join("`%s`" % s for s in sorted(by_module[module]))
+                    else:
+                        # Список заведён — метка у каждого типа, а не только у модуля:
+                        # модуль сам по себе больше не решает (см. type_allowed).
+                        spellings = ", ".join(
+                            "`%s`%s" % (s, "" if type_allowed(module, s, own_modules, allowed_entry) else " ❌")
+                            for s in sorted(by_module[module])
+                        )
+                    lines.append("* из `%s`: %s" % (module, spellings))
             lines.append("")
         lines.append("</details>")
 
@@ -247,10 +346,21 @@ def run(args):
     lines.append("")
     lines.append("**Чего этот шаг не ловит** — сказано здесь, а не подразумевается:")
     lines.append("")
-    lines.append("* **разрешённые списки типов контрактов.** Шаг сверяет модуль объявления, "
-                 "а не позицию в списке: `Data` и `Process` из `Foundation` он пропускает "
-                 "везде, хотя список инварианта 9 C-005 их не содержит. Сверку списка делает "
-                 "приёмка — по выгрузке выше, а не по чтению исходников;")
+    covered_targets = sorted(t for t in allowed_types if t in graphs)
+    uncovered_targets = sorted(t for t in graphs if t not in allowed_types)
+    covered_note = (", ".join("`%s`" % t for t in covered_targets)
+                    if covered_targets else "ни одного таргета сегодня")
+    if not uncovered_targets:
+        uncovered_note = "нет ни одного таргета без него"
+    else:
+        uncovered_note = "нет для %s" % ", ".join("`%s`" % t for t in uncovered_targets)
+    lines.append("* **разрешённые списки типов контрактов — только там, где список заведён.** "
+                 "Для %s список MEE-191 сверяет каждый тип поимённо; %s, и там шаг по-прежнему "
+                 "сверяет только модуль объявления: `Data` и `Process` из `Foundation` он "
+                 "пропускает всегда, хотя список инварианта 9 C-005 их не содержит. Сверку по "
+                 "непокрытым таргетам делает приёмка — по выгрузке выше, а не по чтению "
+                 "исходников;"
+                 % (covered_note, uncovered_note))
     lines.append("* **псевдоним системного типа.** `OSStatus` есть `Int32`, `pid_t` есть "
                  "`Int32`, `TimeInterval` есть `Double` — разбор графа псевдоним от своего "
                  "типа не отличает. Это граница способа, названная самими C-005, C-009, "
@@ -343,7 +453,49 @@ def self_test():
     for usr, expected, got in failures:
         print("ОТКАЗ self-test: %r ожидалось %r, получено %r" % (usr, expected, got))
     print("self-test разбора USR: случаев %d, отказов %d" % (len(cases), len(failures)))
-    return 1 if failures else 0
+
+    own = {"DomainCore"}
+    entry = {"source": "тест", "count": 2, "types": {"OpaquePointer", "Date"}}
+    type_cases = [
+        # (модуль, тип, allowed_entry, ожидание)
+        ("DomainCore", "RecordingManifest", None, True),           # свой модуль — всегда да
+        ("Foundation", "Date", None, True),                        # список не заведён — старый барьер по модулю
+        ("Foundation", "NSData", None, True),                      # тот же барьер: любой тип модуля Foundation
+        ("Foundation", "Date", entry, True),                       # список заведён, тип в нём — да
+        ("Swift", "OpaquePointer", entry, True),                   # список заведён, тип в нём — да (сам сценарий MEE-191)
+        ("Swift", "UInt32", entry, False),                         # список заведён, типа в нём нет — нет, хотя модуль базовый
+        ("DomainCore", "RecordingManifest", entry, True),          # список заведён, но модуль свой — список ни при чём
+    ]
+    type_failures = [
+        (module, spelling, expected, type_allowed(module, spelling, own, allowed_entry))
+        for module, spelling, allowed_entry, expected in type_cases
+        if type_allowed(module, spelling, own, allowed_entry) != expected
+    ]
+    for module, spelling, expected, got in type_failures:
+        print("ОТКАЗ self-test: type_allowed(%r, %r) ожидалось %r, получено %r"
+              % (module, spelling, expected, got))
+    print("self-test type_allowed: случаев %d, отказов %d" % (len(type_cases), len(type_failures)))
+
+    validation_failures = 0
+    try:
+        validate_allowed_data("Fake.json", {"_source": "т", "_count": 3, "types": ["A", "B"]})
+        print("ОТКАЗ self-test: validate_allowed_data не остановил расхождение _count со списком")
+        validation_failures += 1
+    except SystemExit:
+        pass
+    try:
+        validate_allowed_data("Fake.json", {"_source": "т", "_count": 1, "types": ["A", "A"]})
+        print("ОТКАЗ self-test: validate_allowed_data не остановил повторяющуюся позицию")
+        validation_failures += 1
+    except SystemExit:
+        pass
+    good = validate_allowed_data("Fake.json", {"_source": "т", "_count": 2, "types": ["A", "B"]})
+    if good != {"source": "т", "count": 2, "types": {"A", "B"}}:
+        print("ОТКАЗ self-test: validate_allowed_data исказил корректный файл: %r" % (good,))
+        validation_failures += 1
+    print("self-test validate_allowed_data: случаев 3, отказов %d" % validation_failures)
+
+    return 1 if failures or type_failures or validation_failures else 0
 
 
 def main():
@@ -352,6 +504,8 @@ def main():
     parser.add_argument("--sources", action="append", default=[], help="каталог Sources для чтения строк import")
     parser.add_argument("--job", default="", help="имя работы CI, для заголовка отчёта")
     parser.add_argument("--report", help="куда записать отчёт")
+    parser.add_argument("--allowed-types-dir", default="",
+                        help="каталог с `<Target>.json` — точные разрешённые списки типов (MEE-191)")
     parser.add_argument("--self-test", action="store_true", help="проверить разбор USR и выйти")
     args = parser.parse_args()
     if args.self_test:

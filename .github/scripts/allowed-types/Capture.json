@@ -1,0 +1,13 @@
+{
+  "_source": "C-004 v5, инвариант 25, https://linear.app/easypto/issue/MEE-77 (перепроверено переписью MEE-191)",
+  "_count": 35,
+  "types": [
+    "AudioCaptureLimits", "TrackFormat", "InputSelection", "CaptureRequest", "CaptureStarted",
+    "CaptureDiscontinuity", "CapturedProcessSnapshot", "CaptureLevels", "CaptureEvent", "CaptureError",
+    "AudioCapturePort", "ProcessGroup", "RecordingManifest", "RecordingManifest.Track",
+    "RecordingManifest.DiscontinuityReason", "RecordingManifest.CapturedProcess",
+    "RecordingManifest.InputDeviceSpan", "PermissionKind", "PermissionStatus", "PowerPort",
+    "Array", "AsyncStream", "Bool", "Codable", "Date", "Equatable", "Error", "Float", "Int",
+    "Optional", "Sendable", "String", "URL", "UUID", "Void"
+  ]
+}

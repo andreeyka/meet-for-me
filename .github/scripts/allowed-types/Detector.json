@@ -1,0 +1,11 @@
+{
+  "_source": "C-009 v9, инвариант 21, https://linear.app/easypto/issue/MEE-15 (перепроверено переписью MEE-191) — 27 поимённых позиций плюс SendableMetatype, признанный отдельно (не в счёте 27) как производный символ синтезированного соответствия Swift 6.2+, IR-084 (https://linear.app/easypto/issue/MEE-196); итого 28",
+  "_count": 28,
+  "types": [
+    "AudioProcess", "ProcessGroup", "MeetingSignalKind", "MeetingSignal", "ProcessMonitorError",
+    "ProcessMonitorPort", "JoinInfo", "JoinInfo.Source", "PlatformResolver", "MeetingEvent",
+    "PermissionKind", "Array", "AsyncStream", "Bool", "CaseIterable", "Codable", "Date", "Double",
+    "Equatable", "Error", "Int32", "Optional", "Sendable", "String", "URL", "UUID", "Void",
+    "SendableMetatype"
+  ]
+}

@@ -1,0 +1,10 @@
+{
+  "_source": "C-012 v6, инвариант 23 (часть про таргет EngineXPCClient), https://linear.app/easypto/issue/MEE-20 (перепроверено переписью MEE-191)",
+  "_count": 23,
+  "types": [
+    "EngineXPCServiceProtocol", "EngineXPCClientProtocol", "TranscriptionJobSpec",
+    "TranscriptionProgress", "TranscriptionServiceError", "TranscriptionServicePort", "Transcript",
+    "ModelCatalogPort", "Array", "Bool", "Codable", "Double", "Equatable", "Error", "Float", "Int",
+    "NSError", "NSObject", "Optional", "Sendable", "String", "UUID", "Void"
+  ]
+}
