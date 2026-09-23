@@ -30,6 +30,14 @@ let package = Package(
         .target(name: "Detector", dependencies: [.product(name: "DomainCore", package: "Core")],
                 resources: [.copy("providers.json"), .copy("clients.json")]),
         .target(name: "CalendarEventKit", dependencies: [.product(name: "DomainCore", package: "Core")]),
+        // Харнесс модуля capture (MEE-316): носитель ручных М1/М2 и писатель К27(б) плана
+        // MEE-315. Исполняемый таргет в этом же пакете, а не отдельный пакет: доступ
+        // `package` не пересекает границу SPM-пакета, а писателю нужна точка входа
+        // записи внутри Capture. Каталог принадлежит модулю capture (docs/module-map.md).
+        .executableTarget(
+            name: "CaptureManualHarness",
+            dependencies: ["Capture", .product(name: "DomainCore", package: "Core")]
+        ),
         .target(
             name: "EngineXPCClient",
             dependencies: [
