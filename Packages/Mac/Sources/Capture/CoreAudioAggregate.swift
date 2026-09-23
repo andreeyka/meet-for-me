@@ -20,12 +20,19 @@ import AudioToolbox
 import CoreAudio
 import Foundation
 
+/// Одна регистрация `AudioObjectAddPropertyListenerBlock` — снимается тем же трио аргументов.
+private struct ListenerRegistration {
+    let object: AudioObjectID
+    let address: AudioObjectPropertyAddress
+    let block: AudioObjectPropertyListenerBlock
+}
+
 final class AggregateRuntime: @unchecked Sendable {
 
     let tapObject: AudioObjectID?
     private var aggregateID = AudioObjectID(kAudioObjectUnknown)
     private var procID: AudioDeviceIOProcID?
-    private var listeners: [(AudioObjectID, AudioObjectPropertyAddress, AudioObjectPropertyListenerBlock)] = []
+    private var listeners: [ListenerRegistration] = []
     private var isTornDown = false
     private let onBuffer: @Sendable (HardwareBuffer) -> Void
     private let onEvent: @Sendable (HardwareEvent) -> Void
@@ -46,67 +53,86 @@ final class AggregateRuntime: @unchecked Sendable {
         return runtime
     }
 
-    private func assemble(microphoneUID: String?) throws {
+    private struct Composition {
         var subDevices: [[String: Any]] = []
+        var tapList: [[String: Any]] = []
         var mainUID: String?
-        var micRoute: (index: Int, channels: Int)?
+    }
 
+    private struct Routes {
+        let mic: (index: Int, channels: Int)?
+        let tap: (index: Int, channels: Int)?
+    }
+
+    private func assemble(microphoneUID: String?) throws {
+        let composition = buildComposition(microphoneUID: microphoneUID)
+        aggregateID = try createAggregateDevice(composition)
+        let routes = resolveRoutes(microphoneUID: microphoneUID, composition: composition)
+        try installIO(microphoneRoute: routes.mic, tapRoute: routes.tap)
+        installAggregateListeners()
+        try startIO()
+    }
+
+    /// Состав саб-устройств и tap-ов: микрофон (или, без него, выход по умолчанию — только ради
+    /// часов, см. шапку файла) плюс единственный tap этого сеанса.
+    private func buildComposition(microphoneUID: String?) -> Composition {
+        var result = Composition()
         if let micUID = microphoneUID, let micDevice = HALObject.devices().first(where: {
             HALObject.string($0, kAudioDevicePropertyDeviceUID) == micUID
         }) {
-            subDevices.append([kAudioSubDeviceUIDKey: micUID, kAudioSubDeviceDriftCompensationKey: 0])
-            mainUID = micUID
+            result.subDevices.append([kAudioSubDeviceUIDKey: micUID, kAudioSubDeviceDriftCompensationKey: 0])
+            result.mainUID = micUID
             installMicrophoneListeners(micDevice)
         } else if let output = HALObject.defaultOutputForClock() {
-            subDevices.append([kAudioSubDeviceUIDKey: output, kAudioSubDeviceDriftCompensationKey: 0])
-            mainUID = output
+            result.subDevices.append([kAudioSubDeviceUIDKey: output, kAudioSubDeviceDriftCompensationKey: 0])
+            result.mainUID = output
         }
-
-        var tapList: [[String: Any]] = []
-        var tapUID: String?
         if let tapObject, let uid = HALTap.uid(of: tapObject) {
-            tapUID = uid
-            tapList.append([kAudioSubTapUIDKey: uid, kAudioSubTapDriftCompensationKey: mainUID == nil ? 0 : 1])
-            if mainUID == nil { mainUID = uid }
+            result.tapList.append([kAudioSubTapUIDKey: uid,
+                                   kAudioSubTapDriftCompensationKey: result.mainUID == nil ? 0 : 1])
+            if result.mainUID == nil { result.mainUID = uid }
         }
+        return result
+    }
 
-        var composition: [String: Any] = [
+    private func createAggregateDevice(_ composition: Composition) throws -> AudioObjectID {
+        var dictionary: [String: Any] = [
             kAudioAggregateDeviceNameKey: "MeetForMe capture",
             kAudioAggregateDeviceUIDKey: "meetforme-capture-\(UUID().uuidString)",
             kAudioAggregateDeviceIsPrivateKey: 1,
             kAudioAggregateDeviceIsStackedKey: 0,
             kAudioAggregateDeviceTapAutoStartKey: 0,
-            kAudioAggregateDeviceSubDeviceListKey: subDevices,
-            kAudioAggregateDeviceTapListKey: tapList,
+            kAudioAggregateDeviceSubDeviceListKey: composition.subDevices,
+            kAudioAggregateDeviceTapListKey: composition.tapList
         ]
-        if let mainUID { composition[kAudioAggregateDeviceMainSubDeviceKey] = mainUID }
+        if let mainUID = composition.mainUID { dictionary[kAudioAggregateDeviceMainSubDeviceKey] = mainUID }
 
         var newAggregateID = AudioObjectID(kAudioObjectUnknown)
-        let status = AudioHardwareCreateAggregateDevice(composition as CFDictionary, &newAggregateID)
+        let status = AudioHardwareCreateAggregateDevice(dictionary as CFDictionary, &newAggregateID)
         guard status == noErr else {
             throw NSError(domain: "CoreAudioGateway", code: Int(status),
                           userInfo: [NSLocalizedDescriptionKey: "AudioHardwareCreateAggregateDevice: \(status)"])
         }
-        aggregateID = newAggregateID
+        return newAggregateID
+    }
 
+    /// Раскладка буферов IO (шапка файла): сперва входной поток микрофона, если он вошёл в
+    /// состав, затем tap — оба индекса считаются от накопленного смещения.
+    private func resolveRoutes(microphoneUID: String?, composition: Composition) -> Routes {
         var index = 0
-        if let micUID = mainUID, subDevices.contains(where: { $0[kAudioSubDeviceUIDKey] as? String == micUID }),
-           microphoneUID != nil {
+        var micRoute: (index: Int, channels: Int)?
+        if let micUID = composition.mainUID, microphoneUID != nil,
+           composition.subDevices.contains(where: { $0[kAudioSubDeviceUIDKey] as? String == micUID }) {
             let device = HALObject.devices().first { HALObject.string($0, kAudioDevicePropertyDeviceUID) == micUID }
             let channels = device.map(HALObject.inputChannelCount) ?? 0
             if channels > 0 { micRoute = (index, channels) }
-            index += channels > 0 ? channels : 0
+            index += channels
         }
         var tapRoute: (index: Int, channels: Int)?
         if let tapObject {
-            let channels = HALTap.channelCount(of: tapObject)
-            tapRoute = (index, channels)
+            tapRoute = (index, HALTap.channelCount(of: tapObject))
         }
-
-        try installIO(microphoneRoute: micRoute, tapRoute: tapRoute)
-        installAggregateListeners()
-        try startIO()
-        _ = tapUID
+        return Routes(mic: micRoute, tap: tapRoute)
     }
 
     private func installIO(
@@ -177,14 +203,14 @@ final class AggregateRuntime: @unchecked Sendable {
             handler()
         }
         let status = AudioObjectAddPropertyListenerBlock(object, &address, nil, block)
-        if status == noErr { listeners.append((object, address, block)) }
+        if status == noErr { listeners.append(ListenerRegistration(object: object, address: address, block: block)) }
     }
 
     func teardown() {
         isTornDown = true
-        for (object, address, block) in listeners {
-            var address = address
-            AudioObjectRemovePropertyListenerBlock(object, &address, nil, block)
+        for registration in listeners {
+            var address = registration.address
+            AudioObjectRemovePropertyListenerBlock(registration.object, &address, nil, registration.block)
         }
         listeners = []
         if let procID {

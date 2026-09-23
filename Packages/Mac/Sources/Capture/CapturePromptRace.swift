@@ -11,6 +11,9 @@
 //  а с ней и исход, который контракт требует дождаться отдельно. Поэтому попытка живёт
 //  собственной задачей `Task`, не дочерней задаче группы, а гонка собрана вручную через
 //  continuation, резюмируемый ровно один раз — тем, кто пришёл первым.
+
+import Foundation
+
 struct PromptRaceResult<Value: Sendable>: Sendable {
     enum Outcome: Sendable {
         case value(Value)

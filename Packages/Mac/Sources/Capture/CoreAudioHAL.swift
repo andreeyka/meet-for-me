@@ -17,6 +17,12 @@ import Darwin
 import DomainCore
 import Foundation
 
+struct ResolvedInputDevice {
+    let id: AudioObjectID
+    let uid: String?
+    let name: String?
+}
+
 enum TapCreationOutcome: Sendable {
     case success(AudioObjectID)
     case permissionDenied
@@ -70,15 +76,16 @@ enum HALObject {
         return status == noErr && value != kAudioObjectUnknown ? value : nil
     }
 
-    static func resolveInputDevice(_ selection: InputSelection) -> (id: AudioObjectID, uid: String?, name: String?)? {
+    static func resolveInputDevice(_ selection: InputSelection) -> ResolvedInputDevice? {
         switch selection {
         case .systemDefault:
             guard let id = defaultInputDevice() else { return nil }
-            return (id, string(id, kAudioDevicePropertyDeviceUID), string(id, kAudioObjectPropertyName))
+            return ResolvedInputDevice(id: id, uid: string(id, kAudioDevicePropertyDeviceUID),
+                                       name: string(id, kAudioObjectPropertyName))
         case .uid(let uid):
             guard let id = devices().first(where: { string($0, kAudioDevicePropertyDeviceUID) == uid })
             else { return nil }
-            return (id, uid, string(id, kAudioObjectPropertyName))
+            return ResolvedInputDevice(id: id, uid: uid, name: string(id, kAudioObjectPropertyName))
         case .none:
             return nil
         }

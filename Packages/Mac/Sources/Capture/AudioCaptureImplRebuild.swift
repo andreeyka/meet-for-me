@@ -24,7 +24,6 @@ extension AudioCaptureImpl {
             reason: reason, atMs: atMs,
             oldMicrophoneUID: session.currentMicrophoneUID, oldMicrophoneName: session.currentMicrophoneName,
             requestedHostTime: atHostTime,
-            framesAtRequest: [:],
             fileMinusHostMs: Double(atMs) - hostPositionMs
         )
         session.pendingRebuild = pending
@@ -111,8 +110,10 @@ extension AudioCaptureImpl {
             beginRebuild(session, reason: reason, newMicrophone: nil, atHostTime: currentHostTime(session))
             return
         }
-        let raced = await race(timeoutSeconds: AudioCaptureLimits.microphonePromptWaitSeconds, deadline: deadline) {
-            [gateway] in await gateway.requestMicrophone(selection)
+        let raced = await race(
+            timeoutSeconds: AudioCaptureLimits.microphonePromptWaitSeconds, deadline: deadline
+        ) { [gateway] in
+            await gateway.requestMicrophone(selection)
         }
         switch raced.outcome {
         case .timedOut:

@@ -30,8 +30,10 @@ extension AudioCaptureImpl {
 
     private func acquireTap(for group: ProcessGroup?) async throws -> TapHandle? {
         guard let group else { return nil }
-        let raced = await race(timeoutSeconds: AudioCaptureLimits.systemAudioPromptWaitSeconds, deadline: deadline) {
-            [gateway] in await gateway.requestSystemAudioTap(for: group)
+        let raced = await race(
+            timeoutSeconds: AudioCaptureLimits.systemAudioPromptWaitSeconds, deadline: deadline
+        ) { [gateway] in
+            await gateway.requestSystemAudioTap(for: group)
         }
         switch raced.outcome {
         case .timedOut:
@@ -52,8 +54,10 @@ extension AudioCaptureImpl {
         _ selection: InputSelection, releasing tap: TapHandle?
     ) async throws -> MicrophoneHandle? {
         guard selection != .none else { return nil }
-        let raced = await race(timeoutSeconds: AudioCaptureLimits.microphonePromptWaitSeconds, deadline: deadline) {
-            [gateway] in await gateway.requestMicrophone(selection)
+        let raced = await race(
+            timeoutSeconds: AudioCaptureLimits.microphonePromptWaitSeconds, deadline: deadline
+        ) { [gateway] in
+            await gateway.requestMicrophone(selection)
         }
         switch raced.outcome {
         case .timedOut:
@@ -102,48 +106,16 @@ extension AudioCaptureImpl {
             recordingId: request.recordingId, meetingId: request.meetingId, directory: request.directory,
             request: request, startedAt: Date(), aggregate: AggregateHandle()
         )
-        var openedFiles: [TrackFile] = []
-        do {
-            if tap != nil {
-                let track = try openTrack(.system, request: request)
-                openedFiles.append(track)
-                session.systemTrack = track
-            }
-            if microphone != nil {
-                let track = try openTrack(.mic, request: request)
-                openedFiles.append(track)
-                session.micTrack = track
-            }
-        } catch {
-            rollback(openedFiles, in: request.directory)
-            throw CaptureError.directoryUnusable(message: "\(error)")
-        }
-
+        let openedFiles = try openTracks(request: request, tap: tap, microphone: microphone, into: session)
         session.tap = tap
         session.microphone = microphone
         session.captureGroupKey = request.group?.appKey
-        if let microphone {
-            session.currentMicrophoneUID = microphone.uid
-            session.currentMicrophoneName = microphone.name
-            session.currentMicrophoneChannelCount = microphone.channelCount
-            do {
-                let span = try RecordingManifest.InputDeviceSpan(atMs: 0, present: true, name: microphone.name,
-                                                                  uid: microphone.uid)
-                session.inputDevices.append(span)
-            } catch {
-                rollback(openedFiles, in: request.directory)
-                throw CaptureError.systemUnavailable(message: "\(error)")
-            }
-        }
-
         do {
-            let aggregate = try gateway.buildAggregate(tap: tap, microphone: microphone) { [weak self] buffer in
-                self?.handleBuffer(buffer)
-            }
-            session.aggregate = aggregate
+            try attachMicrophoneSpan(microphone, to: session)
+            try attachAggregate(tap: tap, microphone: microphone, to: session)
         } catch {
             rollback(openedFiles, in: request.directory)
-            throw CaptureError.systemUnavailable(message: "\(error)")
+            throw error
         }
 
         session.subscription = gateway.subscribeEvents { [weak self] event in
@@ -166,6 +138,54 @@ extension AudioCaptureImpl {
             gateway.teardownAggregate(session.aggregate)
             session.subscription?.cancel()
             rollback(openedFiles, in: request.directory)
+            throw CaptureError.systemUnavailable(message: "\(error)")
+        }
+    }
+
+    private func openTracks(
+        request: CaptureRequest, tap: TapHandle?, microphone: MicrophoneHandle?, into session: CaptureSessionState
+    ) throws -> [TrackFile] {
+        var openedFiles: [TrackFile] = []
+        do {
+            if tap != nil {
+                let track = try openTrack(.system, request: request)
+                openedFiles.append(track)
+                session.systemTrack = track
+            }
+            if microphone != nil {
+                let track = try openTrack(.mic, request: request)
+                openedFiles.append(track)
+                session.micTrack = track
+            }
+            return openedFiles
+        } catch {
+            rollback(openedFiles, in: request.directory)
+            throw CaptureError.directoryUnusable(message: "\(error)")
+        }
+    }
+
+    private func attachMicrophoneSpan(_ microphone: MicrophoneHandle?, to session: CaptureSessionState) throws {
+        guard let microphone else { return }
+        session.currentMicrophoneUID = microphone.uid
+        session.currentMicrophoneName = microphone.name
+        session.currentMicrophoneChannelCount = microphone.channelCount
+        do {
+            let span = try RecordingManifest.InputDeviceSpan(atMs: 0, present: true, name: microphone.name,
+                                                              uid: microphone.uid)
+            session.inputDevices.append(span)
+        } catch {
+            throw CaptureError.systemUnavailable(message: "\(error)")
+        }
+    }
+
+    private func attachAggregate(
+        tap: TapHandle?, microphone: MicrophoneHandle?, to session: CaptureSessionState
+    ) throws {
+        do {
+            session.aggregate = try gateway.buildAggregate(tap: tap, microphone: microphone) { [weak self] buffer in
+                self?.handleBuffer(buffer)
+            }
+        } catch {
             throw CaptureError.systemUnavailable(message: "\(error)")
         }
     }
