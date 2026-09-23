@@ -85,6 +85,10 @@ public final class StorageDatabase: Sendable {
         GRDBRecordingRepository(database: self, fileLayout: fileLayout)
     }
 
+    public func transcriptRepository() -> TranscriptRepository {
+        GRDBTranscriptRepository(database: self)
+    }
+
     public func personRepository() -> PersonRepository {
         GRDBPersonRepository(database: self)
     }

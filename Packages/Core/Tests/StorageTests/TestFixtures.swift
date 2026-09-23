@@ -66,4 +66,31 @@ enum TestFixtures {
             lastModified: start
         )
     }
+
+    static func segment(
+        startMs: Int, endMs: Int, text: String,
+        channel: RecordingManifest.Channel = .mic, speakerCluster: Int? = nil
+    ) throws -> Transcript.Segment {
+        try Transcript.Segment(
+            startMs: startMs, endMs: endMs, channel: channel, speakerCluster: speakerCluster,
+            text: text, textOriginal: nil, textConfidence: nil, words: []
+        )
+    }
+
+    static func transcript(
+        recordingId: UUID, segments: [Transcript.Segment], speakers: [Transcript.Speaker] = []
+    ) throws -> Transcript {
+        try Transcript(
+            recordingId: recordingId, language: "en", engine: "engine", modelVersion: "1.0",
+            createdAt: epoch, segments: segments, speakers: speakers
+        )
+    }
+
+    static func threeDistinctSegments(prefix: String) throws -> [Transcript.Segment] {
+        try [
+            segment(startMs: 0, endMs: 1_000, text: "\(prefix) alpha"),
+            segment(startMs: 1_000, endMs: 2_000, text: "\(prefix) bravo"),
+            segment(startMs: 2_000, endMs: 3_000, text: "\(prefix) charlie")
+        ]
+    }
 }
