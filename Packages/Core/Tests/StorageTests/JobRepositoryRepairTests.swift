@@ -85,7 +85,7 @@ final class JobRepositoryRepairTests: StorageAsyncTestCase {
             try db.execute(sql: "PRAGMA ignore_check_constraints = OFF")
         }
         await XCTAssertThrowsErrorAsync(
-            try await jobs.failUnreadable(jobId: job.id, message: "m", now: TestFixtures.epoch)
+            _ = try await jobs.failUnreadable(jobId: job.id, message: "m", now: TestFixtures.epoch)
         )
     }
 
@@ -150,7 +150,7 @@ final class JobRepositoryRepairTests: StorageAsyncTestCase {
         let jobs = temp.database.jobRepository()
         try Self.insertRawPendingJob(temp.database, id: "not-a-uuid")
 
-        await XCTAssertThrowsErrorAsync(try await jobs.jobs(status: .pending))
+        await XCTAssertThrowsErrorAsync(_ = try await jobs.jobs(status: .pending))
     }
 
     func testK36_jobByIdThrowsRatherThanNilOnBrokenRow() async throws {
@@ -164,7 +164,7 @@ final class JobRepositoryRepairTests: StorageAsyncTestCase {
                 sql: "UPDATE jobs SET payload_json = 'not-json' WHERE id = ?", arguments: [job.id.uuidString]
             )
         }
-        await XCTAssertThrowsErrorAsync(try await jobs.job(id: job.id))
+        await XCTAssertThrowsErrorAsync(_ = try await jobs.job(id: job.id))
     }
 
     private static func insertRawPendingJob(_ database: StorageDatabase, id: String) throws {
