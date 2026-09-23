@@ -69,6 +69,16 @@ final class HarnessWriterKillTests: CaptureAsyncTestCase {
         // восстанавливает незавершённые записи после реального краха процесса.
         let recovered = try await Harness().port.recover(directory: directory)
         XCTAssertNotNil(recovered.endedAt)
-        XCTAssertTrue(recovered.discontinuities.contains { $0.reason == .truncated })
+        let discontinuity = try XCTUnwrap(recovered.discontinuities.first { $0.reason == .truncated })
+
+        // Возврат MEE-317 (24.09), К27(б): `gapMs` — верхняя граница из инварианта 26, не
+        // измерение (см. `CaptureRecovery.swift`), и обязана оставаться в её пределах, а не расти
+        // без ограничения. Тот же порядок величины, что у частоты сброса писателя
+        // (`AudioCaptureLimits.truncatedTailBudgetMs`, ровно та политика, которой теперь следует
+        // и харнесс-писатель — `CaptureManualHarness.writeChunksForever`, не «после каждого чанка»).
+        XCTAssertLessThanOrEqual(discontinuity.gapMs, AudioCaptureLimits.truncatedTailBudgetMs,
+                                 "обрезанный хвост не может заявляться больше бюджета сброса")
+        XCTAssertEqual(discontinuity.gapMs, AudioCaptureLimits.truncatedTailBudgetMs,
+                       "верхняя граница — тот же порядок величины, что бюджет сброса, а не произвольное число")
     }
 }

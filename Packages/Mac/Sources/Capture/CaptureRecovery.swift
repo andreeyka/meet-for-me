@@ -28,6 +28,14 @@ extension AudioCaptureImpl {
             let durationSeconds = Double(frames) / Double(reference.sampleRate)
             let endedAt = manifest.startedAt.addingTimeInterval(durationSeconds)
             let atMs = Int((durationSeconds * 1000).rounded())
+            // `gapMs` здесь — не измерение (измерить нечем: данные после последнего `flush()`
+            // до SIGKILL на диск не попали и не оставили ни байта, по которому их длительность
+            // можно было бы прочесть постфактум), а верхняя граница из инварианта 26: реализация
+            // сбрасывает буферы на диск не реже `truncatedTailBudgetMs`, значит обрезанный хвост
+            // не может превышать эту величину. Возврат MEE-317 (24.09), К27(б): харнесс-писатель
+            // (`CaptureManualHarness.writeChunksForever`) теперь сбрасывает с той же частотой —
+            // не после каждой порции, — так что и его собственный необрезанный хвост не превышает
+            // тот же бюджет: граница здесь и реальный сценарий писателя согласованы.
             let discontinuity = try RecordingManifest.Discontinuity(
                 atMs: atMs, gapMs: AudioCaptureLimits.truncatedTailBudgetMs,
                 scaleErrorMs: ScaleError.compute(reason: .truncated, fileMinusHostMs: nil), reason: .truncated
