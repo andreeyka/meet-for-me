@@ -77,7 +77,19 @@ final class CompositionTests: CaptureAsyncTestCase {
         try await Task.sleep(nanoseconds: 20_000_000)
 
         let events = await collector.value
-        XCTAssertTrue(events.contains { if case .inputFormatChanged = $0 { return true }; return false })
+        // Возврат MEE-317 (24.09): не только факт события — реальные `from`/`to`, а не любые
+        // значения того же кейса. `from` — формат ДО смены (1 канал, тот, с которым открылся
+        // микрофон), `to` — новый (3 канала), а не то же самое значение дважды (что и было бы
+        // недостатком: `session.request.micFormat` не меняется никогда, такая проверка сошла бы
+        // при полностью сломанной подстановке `old`/`new`).
+        let formatChange = events.compactMap { event -> (from: TrackFormat, to: TrackFormat)? in
+            if case .inputFormatChanged(let from, let to) = event { return (from, to) }
+            return nil
+        }.first
+        let change = try XCTUnwrap(formatChange, "ожидался inputFormatChanged")
+        XCTAssertEqual(change.from, TrackFormat(sampleRate: 48_000, channelCount: 1), "формат до смены — исходный")
+        XCTAssertEqual(change.to, TrackFormat(sampleRate: 48_000, channelCount: 3), "формат после смены — новый")
+
         let lastDiscontinuity = events.last { if case .discontinuity = $0 { return true }; return false }
         guard case .discontinuity(let discontinuity)? = lastDiscontinuity
         else { return XCTFail("ожидался discontinuity") }
@@ -88,5 +100,26 @@ final class CompositionTests: CaptureAsyncTestCase {
         XCTAssertEqual(micTrack.channelCount, 1, "CaptureStarted.tracks — объявленный формат не меняется")
         let frames = TrackFile.framesOnDisk(at: directory.appendingPathComponent(micTrack.fileName), channelCount: 1)
         XCTAssertGreaterThan(frames, 0, "данные после смены формата дописаны, приведённые к объявленному")
+    }
+
+    // MARK: - К7 (продолжение). Само приведение каналов — не только факт записи
+
+    /// Возврат MEE-317 (24.09): предыдущий тест проверял только `frames > 0` — этого достаточно и
+    /// для сломанного приведения (например, если бы `ChannelAdapter` писал нули или обрезал не тот
+    /// канал). Здесь — различимые по каналам значения и точное сравнение массивов на выходе,
+    /// отдельно для сужения (3→1, требует выбора канала) и расширения (1→2, требует дублирования).
+    func test_k07_channelAdapterProducesExactSamplesNotJustNonzeroCount() {
+        // 2 кадра, 3 канала, значения различимы по каналу и по кадру: канал c, кадр f → c*10 + f.
+        let threeChannel: [Float] = [0, 1, 10, 11, 20, 21]
+        let narrowed = ChannelAdapter.adapt(threeChannel, frameCount: 2, from: 3, to: 1)
+        // Целевой единственный канал берёт источник 0 (`min(channel, sourceChannels-1)`) — те же
+        // значения, что были у канала 0, не среднее и не канал 1/2.
+        XCTAssertEqual(narrowed, [0, 1], "сужение 3→1 берёт канал 0 дословно")
+
+        let oneChannel: [Float] = [5, 7]
+        let widened = ChannelAdapter.adapt(oneChannel, frameCount: 2, from: 1, to: 2)
+        // Расширение дублирует единственный источник на оба целевых канала — не нули, не один
+        // из кадров потерян.
+        XCTAssertEqual(widened, [5, 5, 7, 7], "расширение 1→2 дублирует источник на оба канала")
     }
 }

@@ -57,11 +57,16 @@ final class DiscontinuityTests: CaptureAsyncTestCase {
         XCTAssertEqual(reason, .rebuild)
     }
 
+    // СТРОКА: план MEE-315 называет для К11 (половина Б) способ Б — обзор кода; сделано, как и
+    // К19 (см. `ModuleTextTests.swift`), способом Г (греп по точному паттерну `reason: .truncated`
+    // / `reason: .unknown`, не голой подстрокой — она поймала бы и `AudioCaptureLimits.
+    // truncatedTailBudgetMs`, и сравнение `reason != .truncated` в `ScaleError.swift`, ни то ни
+    // другое не конструирование). Обзор кода как отдельный ручной шаг вне зоны этой задачи и
+    // CI-агностичности способа Г; свой инструмент разбора AST/symbol-graph под этот один критерий —
+    // та же цена, что и у К19. Решение о способе Б отдельным инструментом — за РП/QA, как и там.
+    //
     /// Инвариант 11, способ Б — обзор кода: `.unknown` не производится реализацией ни разу
     /// (значение только для чтения чужого файла, C-001 §0.3), `.truncated` — только в `recover`.
-    /// Точный паттерн `reason: .truncated` — та же осторожность, что и у проверки `.unknown` ниже:
-    /// голая подстрока `.truncated` ловит и `AudioCaptureLimits.truncatedTailBudgetMs` (не то же
-    /// имя), и сравнение `reason != .truncated` в `ScaleError.swift` (не конструирование).
     func test_k11_unknownNeverConstructedTruncatedOnlyInRecovery() throws {
         let sources = try CaptureSources.sources()
         for file in sources where file.name != "CaptureRecovery.swift" {
