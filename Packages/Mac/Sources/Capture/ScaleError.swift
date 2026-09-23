@@ -24,7 +24,11 @@ enum ScaleError {
     }
 
     /// `fileMinusHostMs` — `nil`, если измерить не удалось (контракт: тогда берётся `floor`).
+    /// `.truncated` — особый случай, не общее правило: «после последнего разрыва содержимого
+    /// нет, и смещать нечего» — ноль безусловно, измерение сюда не подставляется (контракт,
+    /// §«Оценка ошибки шкалы», дословно), даже если вызывающая сторона его всё же передаст.
     static func compute(reason: RecordingManifest.DiscontinuityReason, fileMinusHostMs: Double?) -> Int {
+        guard reason != .truncated else { return 0 }
         let floor = floorMs(for: reason)
         guard let fileMinusHostMs else { return floor }
         let measured = Int(fileMinusHostMs.magnitude.rounded(.up))
