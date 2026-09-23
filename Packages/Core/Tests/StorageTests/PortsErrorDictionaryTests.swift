@@ -71,6 +71,7 @@ final class PortsErrorDictionaryTests: StorageAsyncTestCase {
         try await Self.assertNilNotThrowing(try await repos.recordings.recording(id: UUID()))
         try await Self.assertEmptyNotThrowing(try await repos.recordings.recordings(meetingId: UUID()))
         try await Self.assertEmptyNotThrowing(try await repos.recordings.unfinalized())
+        try await Self.assertEmptyNotThrowing(try await repos.recordings.adHoc())
     }
 
     func testK27_transcriptPortReadsOnAbsentEntity() async throws {

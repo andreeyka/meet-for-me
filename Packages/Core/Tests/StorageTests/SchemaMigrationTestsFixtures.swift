@@ -195,4 +195,40 @@ extension SchemaMigrationTests {
             ExpectedColumn("value", "TEXT", notNull: true)
         ])
     ]
+
+    /// Текст каждого из четырнадцати `CHECK` DDL §3, по таблице — не только их
+    /// число (К3, граница критерия: «реализация, забывшая одно допустимое
+    /// значение внутри CHECK, критерий не проходит»).
+    static let expectedChecksByTable: [(table: String, checks: [String])] = [
+        ("person_name_forms", ["kind IN ('full','first','last','translit','diminutive','user_added')"]),
+        ("meetings", [
+            "status IN ('scheduled','armed','awaitingSignal','recording',"
+                + "'stopping','processing','ready','failed','skipped')"
+        ]),
+        ("attendees", ["response_status IN ('accepted','declined','tentative','needsAction','unknown')"]),
+        ("recordings", ["status IN ('recording','stopping','finalized','failed')"]),
+        ("segments", [
+            "end_ms > start_ms",
+            "channel IN ('mic','system')",
+            "speaker_confidence IS NULL OR (speaker_confidence BETWEEN 0 AND 1)",
+            "attribution_source IN ('micChannel','voiceProfile','oneOnOne',"
+                + "'textualHint','nameDictionary','user')",
+            "text_confidence IS NULL OR (text_confidence BETWEEN 0 AND 1)"
+        ]),
+        ("jobs", [
+            "type IN ('transcode','transcribe','diarize','attribute','summarize')",
+            "status IN ('pending','running','succeeded','failed','cancelled')",
+            "max_thermal_pressure IN ('nominal','fair','serious','critical')"
+        ]),
+        ("connectors", ["type IN ('eventkit','stdio')"]),
+        ("meeting_outputs", ["kind IN ('summary','decisions','action_items','open_questions')"])
+    ]
+
+    /// Схлопывает всякий пробельный прогон (включая переносы строк — DDL §3
+    /// переносит длинные `CHECK (... IN (...))` на несколько строк) в один
+    /// пробел, чтобы сверка текста не зависела от того, как контракт и
+    /// собственная транскрипция расставили переносы.
+    static func normalizeWhitespace(_ text: String) -> String {
+        text.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+    }
 }

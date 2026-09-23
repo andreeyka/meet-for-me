@@ -77,18 +77,23 @@ final class TranscriptRepositoryFileTests: StorageAsyncTestCase {
         try fixtureBytes.write(to: fileURL)
 
         let rows = try await transcripts.segments(transcriptId: header.id)
-        try await transcripts.updateAttribution([
+        try await transcripts.updateAttribution(rows.map {
             SegmentAttributionUpdate(
-                segmentId: rows[0].id, personId: personId, speakerConfidence: 0.9, attributionSource: .voiceProfile
+                segmentId: $0.id, personId: personId, speakerConfidence: 0.9, attributionSource: .voiceProfile
             )
-        ])
+        })
         try await transcripts.updateSegmentText(segmentId: rows[1].id, text: "edited", isUserEdited: true)
 
         let afterBytes = try Data(contentsOf: fileURL)
         XCTAssertEqual(afterBytes, fixtureBytes, "transcript.v<N>.json не тронут")
 
         let updatedRows = try await transcripts.segments(transcriptId: header.id)
-        XCTAssertEqual(updatedRows.first { $0.id == rows[0].id }?.attributionSource, .voiceProfile)
+        for row in rows where row.id != rows[1].id {
+            XCTAssertEqual(
+                updatedRows.first { $0.id == row.id }?.attributionSource, .voiceProfile,
+                "атрибуция применена на всех трёх сегментах"
+            )
+        }
         XCTAssertEqual(updatedRows.first { $0.id == rows[1].id }?.segment.text, "edited")
     }
 

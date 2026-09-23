@@ -29,7 +29,19 @@ final class PersonRepositoryTests: StorageAsyncTestCase {
 
         // (ii) прямая вставка второй строки is_me=1 через Ш7 — отвергнута
         // частичным уникальным индексом; то же событие, пропущенное через
-        // отображение ошибок репозитория, даёт StorageError.constraintViolation.
+        // отображение ошибок репозитория, даёт StorageError.constraintViolation
+        // со сверкой текста самого ограничения (idx_persons_me), а не только
+        // регистронезависимой проверкой случая перечисления.
+        //
+        // НЕ через вызов метода PersonRepository: ни один объявленный метод
+        // порта не может физически столкнуться с этим нарушением —
+        // `setMe(personId:)` сперва снимает `is_me` со всех строк и только
+        // затем ставит его целевой, поэтому конфликт с `idx_persons_me`
+        // структурно недостижим через легитимный вызов репозитория; другого
+        // публичного пути записать `is_me = 1` в модуле нет. Единственный
+        // наблюдаемый путь к этому нарушению — прямая запись через Ш7,
+        // пропущенная тем же `StorageErrorMapping.mapWrite`, которым
+        // пользуется всякий пишущий метод порта.
         do {
             try temp.database.rawWrite { db in
                 try db.execute(
@@ -41,10 +53,14 @@ final class PersonRepositoryTests: StorageAsyncTestCase {
             XCTFail("вставка второй is_me=1 строки обязана быть отвергнута")
         } catch {
             let mapped = StorageErrorMapping.mapWrite(error)
-            guard case .constraintViolation = mapped else {
+            guard case .constraintViolation(let message) = mapped else {
                 XCTFail("ожидался constraintViolation, получено \(mapped)")
                 return
             }
+            XCTAssertTrue(
+                message.contains("idx_persons_me") || message.uppercased().contains("UNIQUE"),
+                "текст несёт само ограничение, не общую фразу: \(message)"
+            )
         }
     }
 

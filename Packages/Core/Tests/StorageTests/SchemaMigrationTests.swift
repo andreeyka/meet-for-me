@@ -117,12 +117,24 @@ final class SchemaMigrationTests: StorageAsyncTestCase {
                 }
             }
 
-            // Все четырнадцать CHECK DDL — по числу вхождений `CHECK` в текстах создания таблиц.
-            let createTableSQL = try String.fetchAll(
-                db, sql: "SELECT sql FROM sqlite_master WHERE type = 'table' AND \(Self.ownTablesFilterSQL)"
-            ).joined()
-            let checkCount = createTableSQL.components(separatedBy: "CHECK").count - 1
-            XCTAssertEqual(checkCount, 14)
+            // Все четырнадцать CHECK — текст каждого ограничения отдельно, а не
+            // только их число: реализация, забывшая одно допустимое значение
+            // внутри CHECK, этой сверкой критерий не проходит (граница К3).
+            var totalChecks = 0
+            for (table, checks) in Self.expectedChecksByTable {
+                let tableSQL = try String.fetchOne(
+                    db, sql: "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?", arguments: [table]
+                ) ?? ""
+                let normalizedTableSQL = Self.normalizeWhitespace(tableSQL)
+                for check in checks {
+                    XCTAssertTrue(
+                        normalizedTableSQL.contains(Self.normalizeWhitespace(check)),
+                        "\(table): CHECK не найден дословно — \(check)"
+                    )
+                }
+                totalChecks += checks.count
+            }
+            XCTAssertEqual(totalChecks, 14, "четырнадцать CHECK всего")
         }
     }
 
