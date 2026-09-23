@@ -1,26 +1,34 @@
-//  JobQueue и её типы — контракт C-013 (MEE-21), «Определение», §§1—2
+//  JobQueue и её типы — контракт C-013 (MEE-21) v6, «Определение», §§1—3
 //
 //  Модуль: domain-core · Владелец: DEV-2 · Слой: домен
 //
-//  Только объявления (MEE-289, прецедент формы — MEE-86). Реализацию очереди пишет
-//  `domain-core` отдельной задачей; фейков `FakeJobQueue`, `FakeJobHandler`,
-//  `InMemoryJobRepository` и `ManualClock` в дереве нет — они предмет MEE-290 и дальше.
+//  Только объявления (MEE-289, прецедент формы — MEE-86; продолжение — MEE-319).
+//  Реализацию очереди пишет `domain-core` отдельной задачей; фейков `FakeJobQueue` и
+//  `FakeJobHandler` в дереве два — они предмет MEE-290 и не трогаются здесь;
+//  `InMemoryJobRepository` и `ManualClock` в дереве по-прежнему нет — обе предмет
+//  задачи на реализацию `storage`/`JobQueue`, не этой (зона МЕЕ-319 — только фейк
+//  записей, «Предмет», п. 6).
 //
-//  Состав взят из §§1—2 контракта целиком: план MEE-288 §6 назвал четыре типа
-//  (Job, JobEvent, JobPayload, JobSubmission) и порт `JobQueue`, а «Определение»
-//  объявляет в §§1—2 двенадцать имён, и без остальных семи ни одна подпись порта
-//  не компилируется — начиная с `register(handler:)`, которому нужен `JobHandler`.
+//  §§1—2 объявлены MEE-289 целиком. §3 «Хранилище задач» (`JobRepository`,
+//  `JobListing`, `UnreadableJobRow`) ДОПИСАН MEE-319: тогдашний план MEE-288 §6 не
+//  называл `JobRepository` среди шести портов и подписи `JobQueue` его не требовали —
+//  сегодняшний перечень MEE-189/план MEE-311 требуют его для критериев C-013 §3, и
+//  без него `storage`/`JobQueue` не собрать.
 //
-//  §3 «Хранилище задач» (`JobRepository`, `JobListing`, `UnreadableJobRow`) здесь НЕ
-//  объявлен: §6 плана назвал шесть портов, и `JobRepository` среди них нет, а подписи
-//  `JobQueue` его не требуют. Назван в отчёте MEE-289.
+//  `ModelCatalogPort` ДОПИСАН MEE-319 тем же изданием — C-013 §1.1 требует его
+//  объявленным в `DomainCore` («Новой зависимости у домена не появляется —
+//  `ModelCatalogPort` объявлен в `DomainCore`»), а до этой задачи его не было нигде.
+//  На нём стоит заглушка К57 плана MEE-311 (объявляется прямо в `DomainCoreTests`,
+//  не здесь и не в `DomainTestKit` — план §7). Объявлен в СОСЕДНЕМ файле,
+//  `ModelCatalogPort.swift`, не здесь — по объёму (шапка того файла), не по смыслу;
+//  развилка по объёму протокола и правка по возврату РП на приёмке MEE-319 — там же.
 //
 //  НЕ ОБЪЯВЛЕНЫ ТРИ ФУНКЦИИ КОНТРАКТА, И ЭТО РЕШЕНИЕ: `JobPayload.type`,
 //  `JobPayload.profileId` и `JobSubmission.standard(_:runAfter:)`. Все три — тела, а не
 //  типы: их ответ задают §1.1 и таблица §4, то есть поведение, которое MEE-289 писать
 //  запрещено прямо. Цена названа в отчёте.
 //
-//  Порядок типов и порядок полей внутри типа — дословно по §§1—2 контракта
+//  Порядок типов и порядок полей внутри типа — дословно по §§1—3 контракта
 //  (порядок значим: правило обхода C-001 §0.2 п. 9).
 
 import Foundation
@@ -213,4 +221,62 @@ public protocol JobQueue: Sendable {
     func start() async
     func stop() async
     func events() -> AsyncStream<JobEvent>
+}
+
+// MARK: - §3. Хранилище задач
+
+/// Строка `jobs`, которую невозможно собрать в `Job`, названная поимённо.
+public struct UnreadableJobRow: Codable, Equatable, Sendable {
+    public let id: UUID
+    public let message: String   // текст StorageError.dataCorrupted.message дословно
+
+    public init(id: UUID, message: String) {
+        self.id = id
+        self.message = message
+    }
+}
+
+/// Выдача `jobs(status:)`: собранные задачи и названные нечитаемые строки (§6, п. 5).
+/// В норме `unreadable` пуст.
+public struct JobListing: Codable, Equatable, Sendable {
+    public let jobs: [Job]
+    public let unreadable: [UnreadableJobRow]
+
+    public init(jobs: [Job], unreadable: [UnreadableJobRow]) {
+        self.jobs = jobs
+        self.unreadable = unreadable
+    }
+}
+
+public protocol JobRepository: Sendable {
+    func insert(_ job: Job) async throws
+    func update(_ job: Job) async throws
+    func job(id: UUID) async throws -> Job?
+
+    /// Единственный метод порта, который на нечитаемой строке НЕ бросает:
+    /// такая строка не попадает в `jobs` и обязана быть названа
+    /// в `unreadable` вместе с текстом отказа целиком (§6, п. 5; инвариант 26).
+    func jobs(status: JobStatus) async throws -> JobListing
+
+    func activeJob(dedupKey: String) async throws -> Job?   // status pending или running
+
+    /// `excluding` — идентификаторы, уже рассмотренные и отвергнутые
+    /// в текущем пересмотре: кандидатами они не являются (§7).
+    /// Пустое множество даёт поведение v2.
+    func claimNext(types: [JobType],
+                   excluding: Set<UUID>,
+                   now: Date,
+                   leaseSeconds: Int) async throws -> Job?
+
+    func reclaimExpiredLeases(now: Date) async throws -> [Job]
+
+    /// Перевести в `failed` строку, которую невозможно собрать в `Job`, —
+    /// единственный способ убрать её с дороги очереди (§6).
+    /// Это единственный метод порта, который НЕ разбирает `payload_json`.
+    /// Пишет `status = failed`, `last_error = message`, `updated_at = now`
+    /// и снимает `leaseExpiresAt`; `attempts` не меняет.
+    /// Действует только на строки в статусе `pending` или `running`.
+    /// Возвращает тип задачи, которую перевёл; `nil` — строка не изменена
+    /// (её нет либо её статус уже терминальный).
+    func failUnreadable(jobId: UUID, message: String, now: Date) async throws -> JobType?
 }

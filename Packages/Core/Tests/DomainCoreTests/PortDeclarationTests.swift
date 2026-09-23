@@ -1,5 +1,7 @@
-//  MEE-289: полнота и порядок объявлений девяти протоколов против разделов
-//  «Определение» их контрактов-владельцев, и имена полей `AppSettings` против §2.1 C-016.
+//  MEE-289 (девять протоколов) + MEE-319 (ещё семь: пять портов C-010 §5,
+//  `JobRepository` и `ModelCatalogPort` C-013): полнота и порядок объявлений против
+//  разделов «Определение» их контрактов-владельцев, и имена полей `AppSettings` против
+//  §2.1 C-016.
 //
 //  ПОЧЕМУ ЭТИ ПРОВЕРКИ, А НЕ ДРУГИЕ. Предмет MEE-289 — объявления, поведения в нём нет
 //  ни строки, и тестов на поведение постановка запрещает прямо. Что остаётся проверяемым,
@@ -25,128 +27,20 @@
 //  в исходнике, требованием не считается (вектор ниже); требование, записанное иначе, чем
 //  в контракте, покраснеет, даже если оно верно по смыслу, — это цена дословности, и она
 //  принята: расхождение читается на приёмке за один взгляд.
+//
+//  Ожидаемые блоки контрактов (шестнадцать статических массивов, структура `PortContract`
+//  и сам список `contracts`) живут в `PortContractExpectations.swift`, тем же типом через
+//  `extension` — деление по объёму, а не по смыслу: файл на весь класс целиком превышал и
+//  порог `file_length`, и порог `type_body_length` SwiftLint (--strict, «Core + Mac»).
 
 import Foundation
 import XCTest
 import DomainCore
 
 final class PortDeclarationTests: XCTestCase {
+}
 
-    // MARK: - Ожидания: блоки контрактов дословно, в их порядке
-
-    /// C-004 (MEE-77), «Определение» §4.
-    static let audioCapturePort = [
-        "func start(_ request: CaptureRequest) async throws -> CaptureStarted",
-        "func stop() async throws -> RecordingManifest",
-        "func pause() async throws",
-        "func resume() async throws",
-        "func setInput(_ selection: InputSelection) async throws",
-        "func events() -> AsyncStream<CaptureEvent>",
-        "func recover(directory: URL) async throws -> RecordingManifest"
-    ]
-
-    /// C-005 (MEE-9), «Определение».
-    static let calendarPort = [
-        "func listSources() async -> [CalendarSourceId]",
-        "func listCalendars(source: CalendarSourceId) async throws -> [CalendarInfo]",
-        "func setSelectedCalendars(source: CalendarSourceId, calendarIds: [String]) async throws",
-        "func events(from: Date, to: Date) async throws -> [MeetingEvent]",
-        "func event(id: UUID) async throws -> MeetingEvent?",
-        "func sync(trigger: CalendarSyncTrigger) async -> [CalendarSyncResult]",
-        "func changes() -> AsyncStream<CalendarChange>"
-    ]
-
-    /// C-010 (MEE-18), «Определение» §5.
-    static let meetingRepository = [
-        "func save(_ record: MeetingRecord) async throws",
-        "func meeting(id: UUID) async throws -> MeetingRecord?",
-        "func meeting(dedupKey: DedupKey) async throws -> MeetingRecord?",
-        "func meetings(from: Date, to: Date) async throws -> [MeetingRecord]",
-        "func setStatus(_ status: MeetingStatus, meetingId: UUID) async throws",
-        "func delete(meetingIds: [UUID]) async throws"
-    ]
-
-    static let recordingRepository = [
-        "func save(_ record: RecordingRecord) async throws",
-        "func recording(id: UUID) async throws -> RecordingRecord?",
-        "func recordings(meetingId: UUID) async throws -> [RecordingRecord]",
-        "func unfinalized() async throws -> [RecordingRecord]",
-        "func delete(recordingId: UUID, deleteFiles: Bool) async throws"
-    ]
-
-    static let transcriptRepository = [
-        "func save(_ transcript: Transcript) async throws -> TranscriptHeader",
-        "func headers(recordingId: UUID) async throws -> [TranscriptHeader]",
-        "func latest(recordingId: UUID) async throws -> TranscriptHeader?",
-        "func transcript(id: UUID) async throws -> Transcript?",
-        "func segments(transcriptId: UUID) async throws -> [SegmentRow]",
-        "func updateAttribution(_ updates: [SegmentAttributionUpdate]) async throws",
-        "func updateSegmentText(segmentId: Int64, text: String, isUserEdited: Bool) async throws",
-        "func search(query: String, limit: Int, offset: Int) async throws -> [SearchHit]"
-    ]
-
-    /// C-013 (MEE-21), «Определение» §2.
-    static let jobHandler = [
-        "var type: JobType { get }",
-        "func run(_ job: Job, progress: @Sendable @escaping (Double) -> Void) async -> JobOutcome"
-    ]
-
-    static let jobQueue = [
-        "func register(handler: JobHandler) async throws",
-        "func submit(_ submission: JobSubmission) async throws -> UUID",
-        "func cancel(jobId: UUID) async throws",
-        "func job(id: UUID) async throws -> Job?",
-        "func jobs(status: JobStatus) async throws -> [Job]",
-        "func start() async",
-        "func stop() async",
-        "func events() -> AsyncStream<JobEvent>"
-    ]
-
-    /// C-018 (MEE-276), «Определение» §3.1.
-    static let sessionCoordinator = [
-        "func sessions() async -> [SessionSnapshot]",
-        "func session(id: UUID) async -> SessionSnapshot?",
-        "func prompts() async -> [SessionPrompt]",
-        "func changes() -> AsyncStream<SessionChange>",
-        "func startRecording(meetingId: UUID?, now: Date) async throws -> UUID",
-        "func stopRecording(recordingId: UUID, now: Date) async throws",
-        "func skip(meetingId: UUID, now: Date) async throws",
-        "func answer(promptId: UUID, _ answer: SessionPromptAnswer, now: Date) async throws",
-        "func start(now: Date) async",
-        "func tick(now: Date) async",
-        "func stop() async"
-    ]
-
-    /// C-018 (MEE-276), «Определение» §3.2.
-    static let scheduler = [
-        "func plan(now: Date) async throws -> [ScheduledArm]",
-        "func nextDeadline(now: Date) async throws -> Date?",
-        "func start(now: Date) async",
-        "func reschedule(now: Date) async",
-        "func stop() async"
-    ]
-
-    /// Протокол, файл его исходника и ожидаемый блок контракта.
-    ///
-    /// Тип, а не кортеж из трёх членов: `large_tuple` SwiftLint разрешает два,
-    /// и при `--strict` третий член — отказ работы (прогон CI 140).
-    struct PortContract {
-        let name: String
-        let file: String
-        let expected: [String]
-    }
-
-    static let contracts: [PortContract] = [
-        PortContract(name: "AudioCapturePort", file: "AudioCapturePort.swift", expected: audioCapturePort),
-        PortContract(name: "CalendarPort", file: "CalendarPort.swift", expected: calendarPort),
-        PortContract(name: "MeetingRepository", file: "Repositories.swift", expected: meetingRepository),
-        PortContract(name: "RecordingRepository", file: "Repositories.swift", expected: recordingRepository),
-        PortContract(name: "TranscriptRepository", file: "Repositories.swift", expected: transcriptRepository),
-        PortContract(name: "JobHandler", file: "JobQueue.swift", expected: jobHandler),
-        PortContract(name: "JobQueue", file: "JobQueue.swift", expected: jobQueue),
-        PortContract(name: "SessionCoordinator", file: "SessionCoordinator.swift", expected: sessionCoordinator),
-        PortContract(name: "Scheduler", file: "SessionCoordinator.swift", expected: scheduler)
-    ]
+extension PortDeclarationTests {
 
     // MARK: - Состав
 

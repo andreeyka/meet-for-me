@@ -6,13 +6,15 @@
 //  ОДИН КОНТЕЙНЕР с реализациями всех восьми протоколов поверх словарей в памяти». Перечисление
 //  §6 плана MEE-288 говорит «фейки репозиториев C-010» и ни контейнера, ни имён не называет.
 //
-//  ВОСЬМИ РЕАЛИЗАЦИЙ ЗДЕСЬ НЕТ — ИХ ТРИ, И ЭТО НЕДОСТАЧА ДЕРЕВА, А НЕ РЕШЕНИЕ КОНТЕЙНЕРА.
-//  `PersonRepository`, `SpeakerProfileRepository`, `ConnectorRepository`,
-//  `MeetingOutputRepository` и `SettingsRepository` в `DomainCore` не объявлены (MEE-289
-//  объявил три из восьми — те, на которых стоят пункты плана), а фейк прежде своего протокола
-//  не пишется ничем. `TemporaryFileLayout`, названный тем же разделом контракта, не заводится
-//  по той же причине: `FileLayout` (§1 C-010) не объявлен. Обе недостачи — строки владельцу
-//  C-010, отчёт MEE-290; выдумывать протоколы здесь запрещено (П2).
+//  ВОСЬМИ РЕАЛИЗАЦИЙ ЗДЕСЬ ПО-ПРЕЖНЕМУ НЕТ — ИХ ТРИ, И ЭТО НЕДОСТАЧА ДЕРЕВА, А НЕ РЕШЕНИЕ
+//  КОНТЕЙНЕРА. MEE-319 объявил в `DomainCore` все восемь протоколов §5 и `FileLayout` §1
+//  (было три из восьми и без `FileLayout` — MEE-289), но фейки пяти новых протоколов
+//  (`PersonRepository`, `SpeakerProfileRepository`, `ConnectorRepository`,
+//  `MeetingOutputRepository`, `SettingsRepository`) и `TemporaryFileLayout` — предмет
+//  своей, второй задачи (МЕЕ-319, «Зачем»: «Остальные фейки — вторая задача»), не этой.
+//  Единственное исключение — `RecordingRepository.adHoc()`: без него `InMemoryRecordingRepository`
+//  не собирается, и MEE-319 дописал его фейку вместе с привязкой «запись → встреча»
+//  (инвариант 7), не трогая прочие пять протоколов.
 //
 //  ЗАЧЕМ КОНТЕЙНЕР НУЖЕН, ЕСЛИ РЕПОЗИТОРИИ СОБИРАЮТСЯ И ПОРОЗНЬ, — две причины, и обе
 //  измеримы, а не стилистические:
@@ -45,5 +47,6 @@ public final class InMemoryRepositories: @unchecked Sendable {
         recordings = InMemoryRecordingRepository(log: log)
         transcripts = InMemoryTranscriptRepository(log: log)
         recordings.attachCascade(transcripts: transcripts)
+        meetings.attachCascade(recordings: recordings)
     }
 }

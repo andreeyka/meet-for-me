@@ -24,6 +24,18 @@
 //  вовсе). Предикат «не `.finalized`» отдаёт ровно первые три. Это решение фейка, а не
 //  утверждение о порте.
 //
+//  ПРИВЯЗКА «ЗАПИСЬ → ВСТРЕЧА» (MEE-319, C-010 v7, инвариант 7) — ОТДЕЛЬНАЯ ОТ
+//  `RecordingManifest.meetingId`, КАК ТРЕБУЕТ КОНТРАКТ: «Текущую принадлежность записи
+//  встрече домен читает по колонке… а не по `manifest.meetingId`». `save()` заводит
+//  привязку из `manifest.meetingId` ОДИН РАЗ, при первом появлении записи, и больше её не
+//  трогает; манифест неизменяем (C-002), и перечитывать его при каждом `save()` вернуло бы
+//  устаревшее значение после каскада. Снимает привязку только каскад инварианта 7 —
+//  `detachFromDeletedMeetings(_:)`, которую зовёт `InMemoryMeetingRepository.delete`
+//  через `attachCascade(recordings:)`, тем же устройством, что уже держит каскад
+//  инварианта 8 (`transcripts`, ниже). `recordings(meetingId:)` и `adHoc()` читают
+//  привязку, а не `record.manifest.meetingId` — на этом стоят инварианты 7, 28 и 29
+//  (К48, К86).
+//
 //  ФЕЙК НЕ ЭТАЛОН ПОВЕДЕНИЯ ПОРТА.
 
 import Foundation
@@ -35,6 +47,7 @@ public enum RecordingRepositoryMethod: String, Sendable, CaseIterable {
     case recordingById
     case recordingsByMeeting
     case unfinalized
+    case adHoc
     case delete
 }
 
@@ -51,6 +64,12 @@ public final class InMemoryRecordingRepository: RecordingRepository, @unchecked 
     private var order: [UUID] = []
     private var failures: [RecordingRepositoryMethod: (id: String?, error: StorageError)] = [:]
     private var deletedDirectories: [String] = []
+
+    /// Привязка «запись → встреча» (инвариант 7 C-010 v7), отдельная от
+    /// `RecordingManifest.meetingId`. Ключ — `recordingId`; запись присутствует в словаре
+    /// тогда и только тогда, когда она привязана к встрече. Заводится `save()` один раз,
+    /// при первом появлении записи; снимается только `detachFromDeletedMeetings(_:)`.
+    private var meetingBinding: [UUID: UUID] = [:]
 
     /// Каскад по инварианту 8: удаление записи уносит её транскрипты. Ставится контейнером
     /// `InMemoryRepositories`; у одиночного репозитория каскаду уходить некуда, и его нет.
@@ -79,6 +98,11 @@ public final class InMemoryRecordingRepository: RecordingRepository, @unchecked 
                 let identifier = record.manifest.recordingId
                 if records[identifier] == nil {
                     order.append(identifier)
+                    // Та же привязка, что заводит `save()` — иначе `seed()` и `save()`
+                    // расходятся в устройстве одного и того же инварианта 7.
+                    if let meetingId = record.manifest.meetingId {
+                        meetingBinding[identifier] = meetingId
+                    }
                 }
                 records[identifier] = record
             }
@@ -108,6 +132,18 @@ public final class InMemoryRecordingRepository: RecordingRepository, @unchecked 
         self.transcripts = transcripts
     }
 
+    /// Каскад инварианта 7: удаление встречи обнуляет привязку «запись → встреча» у ЕЁ
+    /// записей. Манифест (C-002) не трогается — он неизменяем, и его `meetingId` после
+    /// этого может устареть; текущую принадлежность держит привязка, а не манифест.
+    /// Зовёт `InMemoryMeetingRepository.delete(meetingIds:)` через `attachCascade(recordings:)`.
+    public func detachFromDeletedMeetings(_ meetingIds: Set<UUID>) {
+        locked {
+            for (recordingId, boundMeetingId) in meetingBinding where meetingIds.contains(boundMeetingId) {
+                meetingBinding.removeValue(forKey: recordingId)
+            }
+        }
+    }
+
     // MARK: - Оснастка
 
     private func failureIfAny(_ method: RecordingRepositoryMethod, id: String?) -> StorageError? {
@@ -133,6 +169,24 @@ public final class InMemoryRecordingRepository: RecordingRepository, @unchecked 
         locked {
             if records[identifier] == nil {
                 order.append(identifier)
+                // Привязка заводится из манифеста ОДИН РАЗ, при первом появлении записи
+                // (инвариант 7 C-010 v7) — см. шапку файла.
+                //
+                // СТРОКА: что делает `save()` с привязкой при ПОВТОРНОЙ записи того же
+                // `recordingId`. Контракт не говорит, пересчитывать ли колонку заново на
+                // каждый `save()` или только на первый; «Фейк для тестов» требует держать
+                // инвариант 7, а не выбор между двумя устройствами реализации. Оба законных
+                // исхода: (а) не пересчитывать — как здесь; цена — если домен когда-нибудь
+                // пересохранит запись с манифестом, чей `meetingId` разошёлся с уже осевшей
+                // привязкой (контракт такого сценария не описывает и не ожидает), новое
+                // значение молча проигнорируется. (б) пересчитывать на каждый `save()`; цена
+                // прямая и измеримая: повторный `save()` ТЕМ ЖЕ (старым) манифестом ПОСЛЕ
+                // каскада инварианта 7 молча восстановил бы привязку, которую каскад снял, —
+                // это отменяло бы ровно то устройство, ради которого заведена привязка.
+                // Беру (а): (б) ломает инвариант 7 на первом же реалистичном входе.
+                if let meetingId = record.manifest.meetingId {
+                    meetingBinding[identifier] = meetingId
+                }
             }
             records[identifier] = record
         }
@@ -151,10 +205,12 @@ public final class InMemoryRecordingRepository: RecordingRepository, @unchecked 
         if let error = failureIfAny(.recordingsByMeeting, id: meetingId.uuidString) {
             throw error
         }
+        // Инвариант 7: принадлежность читается по привязке (колонка), не по манифесту —
+        // после каскада `manifest.meetingId` может быть устаревшим значением.
         return locked {
             order
                 .compactMap { records[$0] }
-                .filter { $0.manifest.meetingId == meetingId }
+                .filter { meetingBinding[$0.manifest.recordingId] == meetingId }
         }
     }
 
@@ -170,6 +226,22 @@ public final class InMemoryRecordingRepository: RecordingRepository, @unchecked 
         }
     }
 
+    /// Инвариант 29: записи без привязки к встрече, независимо от `status` — ad-hoc
+    /// с рождения и записи, чья встреча удалена каскадом (инвариант 7). Предикат читает
+    /// привязку, а не `manifest.meetingId` (К86 (ii): после каскада манифест по-прежнему
+    /// несёт старый идентификатор, а привязки уже нет).
+    public func adHoc() async throws -> [RecordingRecord] {
+        log.record(port: Self.portName, method: "adHoc()")
+        if let error = failureIfAny(.adHoc, id: nil) {
+            throw error
+        }
+        return locked {
+            order
+                .compactMap { records[$0] }
+                .filter { meetingBinding[$0.manifest.recordingId] == nil }
+        }
+    }
+
     public func delete(recordingId: UUID, deleteFiles: Bool) async throws {
         log.record(
             port: Self.portName,
@@ -182,6 +254,7 @@ public final class InMemoryRecordingRepository: RecordingRepository, @unchecked 
         let removed = locked { () -> RecordingRecord? in
             let taken = records.removeValue(forKey: recordingId)
             order.removeAll { $0 == recordingId }
+            meetingBinding.removeValue(forKey: recordingId)
             return taken
         }
         if deleteFiles, let removed {

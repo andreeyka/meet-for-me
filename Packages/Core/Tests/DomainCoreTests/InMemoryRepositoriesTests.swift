@@ -1,13 +1,15 @@
-//  MEE-290: фейки репозиториев C-010 — `InMemoryMeetingRepository`,
+//  MEE-290 + MEE-319: фейки репозиториев C-010 — `InMemoryMeetingRepository`,
 //  `InMemoryRecordingRepository`, `InMemoryTranscriptRepository` и контейнер
 //  `InMemoryRepositories`. Имена взяты у §«Фейк для тестов» C-010.
 //
-//  ЧТО ПРОВЕРЯЕТСЯ. Контракт требует от фейков держать «те же инварианты… чтобы тест на фейке
-//  ловил те же ошибки, что тест на настоящей базе», и дополнение v2 — уметь по команде теста
-//  бросить заданную `StorageError` на заданном методе и заданном идентификаторе. Исполнимы
-//  сегодня инварианты 6, 8, 12, 13, 17, 18 и 20 — они здесь и стоят, по вектору на каждый.
-//  Остальные названы в шапках самих фейков как неисполнимые: их субъекты — порты, которых
-//  в дереве нет.
+//  ЧТО ПРОВЕРЯЕТСЯ. Контракт (C-010 v7, «Фейк для тестов») требует от фейков держать
+//  «те же инварианты 4—6, 10—13, 17, 20, 28 и 29… чтобы тест на фейке ловил те же ошибки,
+//  что тест на настоящей базе», и дополнение v2 — уметь по команде теста бросить заданную
+//  `StorageError` на заданном методе и заданном идентификаторе. Исполнимы сегодня
+//  инварианты 6, 7 (MEE-319 — привязка «запись → встреча»), 8, 12, 13, 17, 18, 20, 28 и
+//  29 (MEE-319 — `adHoc()`, К86) — они здесь и стоят, по вектору на каждый. Остальные
+//  названы в шапках самих фейков как неисполнимые: их субъекты — порты, которых в дереве
+//  нет.
 //
 //  ГРАНИЦА НАЗВАНА: держимые инварианты суть УСТРОЙСТВО фейка, а не их проверка. Проверяются
 //  они тестами `storage`, которого не существует.
@@ -17,6 +19,13 @@ import DomainCore
 import DomainTestKit
 
 final class InMemoryRepositoriesTests: XCTestCase {
+}
+
+// Тело разбито на несколько `extension` не по смыслу, а по объёму: `type_body_length`
+// SwiftLint (--strict, работа «Core + Mac») считает тело класса и тело каждого
+// `extension` порознь, и одним телом весь файл превышал порог 250 строк (274 строки,
+// прогон CI). Три блока ниже — те же три раздела, что были в одном теле класса.
+extension InMemoryRepositoriesTests {
 
     // MARK: - Встречи: инвариант 6 (уникальность dedup_key) и инвариант 20 (что бросает)
 
@@ -120,6 +129,9 @@ final class InMemoryRepositoriesTests: XCTestCase {
         let restored = try await repositories.meetings.meeting(id: event.id)
         XCTAssertEqual(restored?.event.id, event.id, "отказ снимается")
     }
+}
+
+extension InMemoryRepositoriesTests {
 
     // MARK: - Записи: инвариант 13, предикат `unfinalized()`, каскад инварианта 8
 
@@ -160,10 +172,10 @@ final class InMemoryRepositoriesTests: XCTestCase {
                        "второго вызова не было: значение до порта не доехало")
     }
 
-    /// Перебор по ВСЕМУ перечислению `RecordingStatus`: тест обязан упасть при добавлении
-    /// значения — способ `З` плана. Счёт значений берётся из самого перечисления, а не пишется
-    /// числом; `RecordingStatus` `CaseIterable` не объявлен, поэтому перечень назван здесь и
-    /// сверен с длиной ответа.
+    /// К85 (дельта К MEE-189, инвариант 28) — вход ЧЕРЕЗ `save()`, а не `seed()`, как
+    /// действующая редакция и требует (правлено по возврату РП на приёмке MEE-319, PR #55).
+    /// Заодно перебор по ВСЕМУ `RecordingStatus` — способ `З`: `RecordingStatus` не
+    /// `CaseIterable`, перечень назван здесь и сверен с длиной ответа.
     func test_mee290_recordingRepository_unfinalizedIsEverythingButFinalized() async throws {
         let repositories = InMemoryRepositories()
         let statuses: [RecordingStatus] = [.recording, .stopping, .finalized, .failed]
@@ -174,7 +186,9 @@ final class InMemoryRepositoriesTests: XCTestCase {
             RecordingManifestFixtures.micOnly
         ]
         XCTAssertEqual(statuses.count, manifests.count, "вектор непустоты: на каждый статус своя запись")
-        repositories.recordings.seed(zip(manifests, statuses).map { RecordingRecord(manifest: $0, status: $1) })
+        for (manifest, status) in zip(manifests, statuses) {
+            try await repositories.recordings.save(RecordingRecord(manifest: manifest, status: status))
+        }
         XCTAssertEqual(repositories.recordings.storedRecords.count, 4, "легли все четыре")
 
         let unfinalized = try await repositories.recordings.unfinalized()
@@ -217,6 +231,97 @@ final class InMemoryRepositoriesTests: XCTestCase {
         )
     }
 
+    // MARK: - MEE-319: привязка «запись → встреча» (инвариант 7) и adHoc() (инвариант 29)
+
+    /// К86 (i)–(iii), проверенные одновременно, как требует действующая редакция критерия
+    /// (дельта К перечня MEE-189): `adHoc()` возвращает ровно записи без привязки к
+    /// встрече — ad-hoc с рождения (i), запись, чья встреча удалена каскадом (ii), и
+    /// ad-hoc-запись в ТЕРМИНАЛЬНОМ статусе `.finalized` (iii) — метод не смотрит ни на
+    /// происхождение, ни на `status`.
+    func test_mee319_recordingRepository_adHocReturnsAllThreeK86InputsRegardlessOfStatus() async throws {
+        let repositories = InMemoryRepositories()
+
+        // (i) ad-hoc с рождения, статус нетерминальный.
+        let fromBirth = RecordingManifestFixtures.hourlyTwoChannels
+        XCTAssertNil(fromBirth.meetingId, "вектор непустоты: фикстура ad-hoc с рождения")
+        try await repositories.recordings.save(RecordingRecord(manifest: fromBirth, status: .recording))
+
+        // (ii) была привязана к встрече, встреча удалена каскадом: привязка снята,
+        // `manifest.meetingId` по-прежнему хранит старый идентификатор (проверяется ниже).
+        let meeting = MeetingRecord(
+            event: MeetingEventFixtures.oneOnOneZoom, dedupKey: nil, status: .scheduled, sources: []
+        )
+        try await repositories.meetings.save(meeting)
+        let wasBound = try withMeetingId(RecordingManifestFixtures.deviceChangedMidway, meeting.event.id)
+        try await repositories.recordings.save(RecordingRecord(manifest: wasBound, status: .stopping))
+        try await repositories.meetings.delete(meetingIds: [meeting.event.id])
+
+        // (iii) ad-hoc с рождения, статус ТЕРМИНАЛЬНЫЙ — .finalized.
+        let finalizedFromBirth = RecordingManifestFixtures.unfinished
+        XCTAssertNil(finalizedFromBirth.meetingId, "вектор непустоты: тоже ad-hoc с рождения")
+        try await repositories.recordings.save(
+            RecordingRecord(manifest: finalizedFromBirth, status: .finalized)
+        )
+
+        let adHoc = try await repositories.recordings.adHoc()
+        XCTAssertEqual(
+            Set(adHoc.map(\.manifest.recordingId)),
+            [fromBirth.recordingId, wasBound.recordingId, finalizedFromBirth.recordingId],
+            "все три входа К86, и никого больше"
+        )
+        XCTAssertTrue(
+            adHoc.contains { $0.manifest.recordingId == finalizedFromBirth.recordingId && $0.status == .finalized },
+            "К86 (iii): терминальный статус не исключается adHoc()"
+        )
+
+        // Манифест (ii) каскад не трогает — обнуляется привязка, а не DTO.
+        let stillStale = try await repositories.recordings.recording(id: wasBound.recordingId)
+        XCTAssertEqual(
+            stillStale?.manifest.meetingId, meeting.event.id,
+            "manifest.meetingId переживает каскад устаревшим — инвариант 7, половина «манифест»"
+        )
+    }
+
+    /// Инвариант 7, половина «колонка»: после каскада `recordings(meetingId:)` по СТАРОМУ
+    /// идентификатору отдаёт пусто — привязка снята, хотя `manifest.meetingId` записи
+    /// по-прежнему хранит его. Метод читает привязку, а не манифест.
+    func test_mee319_recordingRepository_recordingsByMeetingReadsBindingNotManifest() async throws {
+        let repositories = InMemoryRepositories()
+        let meeting = MeetingRecord(
+            event: MeetingEventFixtures.withoutConference, dedupKey: nil, status: .scheduled, sources: []
+        )
+        try await repositories.meetings.save(meeting)
+        let manifest = try withMeetingId(RecordingManifestFixtures.micOnly, meeting.event.id)
+        try await repositories.recordings.save(RecordingRecord(manifest: manifest, status: .recording))
+
+        // Вектор непустоты: до каскада запись находится по встрече.
+        let before = try await repositories.recordings.recordings(meetingId: meeting.event.id)
+        XCTAssertEqual(before.map(\.manifest.recordingId), [manifest.recordingId])
+
+        try await repositories.meetings.delete(meetingIds: [meeting.event.id])
+
+        let after = try await repositories.recordings.recordings(meetingId: meeting.event.id)
+        XCTAssertEqual(after, [], "привязка снята каскадом — читаем колонку, не манифест")
+    }
+
+    /// Запись, привязанная к ЖИВОЙ (не удалённой) встрече, в `adHoc()` не попадает:
+    /// предикат не путает «привязки никогда не было» с «встреча ещё существует».
+    func test_mee319_recordingRepository_adHocExcludesRecordingBoundToLiveMeeting() async throws {
+        let repositories = InMemoryRepositories()
+        let meeting = MeetingRecord(
+            event: MeetingEventFixtures.cancelled, dedupKey: nil, status: .scheduled, sources: []
+        )
+        try await repositories.meetings.save(meeting)
+        let manifest = try withMeetingId(RecordingManifestFixtures.sleepDuringRecording, meeting.event.id)
+        try await repositories.recordings.save(RecordingRecord(manifest: manifest, status: .recording))
+
+        let adHoc = try await repositories.recordings.adHoc()
+        XCTAssertTrue(adHoc.isEmpty, "встреча жива — привязка держится, запись не ad-hoc")
+    }
+}
+
+extension InMemoryRepositoriesTests {
+
     // MARK: - Контейнер: один журнал на три порта
 
     func test_mee290_container_sharesOneCallLog() async throws {
@@ -239,6 +344,26 @@ final class InMemoryRepositoriesTests: XCTestCase {
     }
 
     // MARK: - Оснастка
+
+    /// Копия фикстуры с заданным `meetingId` — все фикстуры `RecordingManifestFixtures`
+    /// заведены с `meetingId == nil` (ad-hoc), и тестам инварианта 7 нужна привязанная
+    /// версия той же формы, без нового набора фикстур ради одного поля.
+    private func withMeetingId(_ manifest: RecordingManifest, _ meetingId: UUID) throws -> RecordingManifest {
+        try RecordingManifest(
+            recordingId: manifest.recordingId,
+            meetingId: meetingId,
+            directoryName: manifest.directoryName,
+            startedAt: manifest.startedAt,
+            endedAt: manifest.endedAt,
+            tracks: manifest.tracks,
+            markers: manifest.markers,
+            capturedProcesses: manifest.capturedProcesses,
+            captureGroupKey: manifest.captureGroupKey,
+            inputDevices: manifest.inputDevices,
+            discontinuities: manifest.discontinuities,
+            isFinalized: manifest.isFinalized
+        )
+    }
 
     /// Транскрипт с двумя сегментами, несущими искомую подстроку, и одним без неё.
     private func transcript(for recordingId: UUID) throws -> Transcript {
