@@ -113,8 +113,12 @@ private func parseInput(_ raw: String?) -> InputSelection {
 
 private func buildRequest(_ arguments: Arguments, directory: URL) -> CaptureRequest {
     let group: ProcessGroup? = arguments["group-app-key"].map { appKey in
+        // Возврат MEE-317 (второй круг): раздельно по запятой ИЛИ пробельным символам —
+        // `pgrep` без `-d` даёт один PID на строку, и `$(pgrep …)` в README подставляет их через
+        // перевод строки одним аргументом, не через запятую; прежний разбор только по запятой
+        // такую подстановку не читал вовсе (каждый `Int32(...)` падал на строке с `\n`).
         let pids = (arguments["group-pid"] ?? "")
-            .split(separator: ",")
+            .split(whereSeparator: { $0 == "," || $0.isWhitespace })
             .compactMap { Int32($0) }
         return ProcessGroup(appKey: appKey, pids: pids, observedAt: Date())
     }
@@ -193,13 +197,16 @@ private func writeInitialManifest(channel: RecordingManifest.Channel, track: Tra
 /// Дописывает синтетический PCM порциями до SIGKILL — тест решает, когда убить процесс,
 /// по числу строк "wrote", прочитанных из stdout.
 ///
-/// Возврат MEE-317 (24.09), К27(б): сброс на диск — не после КАЖДОГО чанка, а с той же частотой,
-/// что у реализации (`AudioCaptureImplBuffers.maybeFlush`, инвариант 26 — не реже
-/// `truncatedTailBudgetMs`). Более частый сброс делал бы обрезанный хвост после SIGKILL
-/// нереалистично коротким — `HarnessWriterKillTests`/`recover(directory:)` проверяли бы сценарий,
-/// которого продакшен не производит. Собственные часы (`lastFlushHostTime`), не `track.lastFlushAt`
-/// — то поле `internal`, харнесс (другой таргет) его не видит, и здесь этого не нужно: политика
-/// троттлинга та же самая, свой независимый счётчик её не меняет.
+/// Возврат MEE-317 (24.09, поправлено во втором круге): сброс на диск — не после КАЖДОГО чанка,
+/// а с той же частотой, что у реализации (`AudioCaptureImplBuffers.maybeFlush`, инвариант 26 —
+/// не реже `truncatedTailBudgetMs`). НЕ потому, что более частый сброс терял бы данные иначе —
+/// `TrackFile.append` пишет через `write(2)` без пользовательской буферизации, байты уже в
+/// страничном кэше ядра до всякого `flush()` (`fsync`), и SIGKILL их не заберёт независимо от
+/// частоты сброса (см. `СТРОКА` у `CaptureRecovery.recover`, тот же вывод). Частота здесь совпадает
+/// с реализацией ради верности «тем же путём, что реализация» (план MEE-315 §6) самой по себе, а
+/// не ради влияния на переживаемость SIGKILL. Собственные часы (`lastFlushHostTime`), не `track.
+/// lastFlushAt` — то поле `internal`, харнесс (другой таргет) его не видит, и здесь этого не нужно:
+/// политика троттлинга та же самая, свой независимый счётчик её не меняет.
 private func writeChunksForever(
     track: TrackFile, chunkFrames: Int, channelCount: Int, chunkIntervalMs: UInt64
 ) -> Never {

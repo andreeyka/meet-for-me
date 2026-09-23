@@ -71,14 +71,13 @@ final class HarnessWriterKillTests: CaptureAsyncTestCase {
         XCTAssertNotNil(recovered.endedAt)
         let discontinuity = try XCTUnwrap(recovered.discontinuities.first { $0.reason == .truncated })
 
-        // Возврат MEE-317 (24.09), К27(б): `gapMs` — верхняя граница из инварианта 26, не
-        // измерение (см. `CaptureRecovery.swift`), и обязана оставаться в её пределах, а не расти
-        // без ограничения. Тот же порядок величины, что у частоты сброса писателя
-        // (`AudioCaptureLimits.truncatedTailBudgetMs`, ровно та политика, которой теперь следует
-        // и харнесс-писатель — `CaptureManualHarness.writeChunksForever`, не «после каждого чанка»).
-        XCTAssertLessThanOrEqual(discontinuity.gapMs, AudioCaptureLimits.truncatedTailBudgetMs,
-                                 "обрезанный хвост не может заявляться больше бюджета сброса")
+        // Возврат MEE-317 (второй круг): `gapMs` здесь — заглушка-верхняя-граница, не измерение
+        // (`СТРОКА` у `CaptureRecovery.recover` — по факту `write(2)` без пользовательской
+        // буферизации, SIGKILL не теряет ничего, что уже дошло до `append`, и измерять
+        // содержательно нечего). Эта проверка утверждает ровно то, что реализация делает сегодня —
+        // gapMs равен бюджету сброса, — а не то, что список считает это правильным поведением;
+        // сама трактовка списка («совпадает по порядку с интервалом сброса») открыта в отчёте.
         XCTAssertEqual(discontinuity.gapMs, AudioCaptureLimits.truncatedTailBudgetMs,
-                       "верхняя граница — тот же порядок величины, что бюджет сброса, а не произвольное число")
+                       "текущий выбор реализации — заглушка равна бюджету сброса, см. СТРОКА в CaptureRecovery")
     }
 }

@@ -37,13 +37,17 @@ ProcessMonitorPort.swift` — «непустая строка», без како
 вообще не начнётся (см. `CoreAudioGateway.requestSystemAudioTap`: пустой список HAL-объектов
 из `group.pids` — сразу `systemUnavailable`, без обращения к TCC).
 
-1. Открыть любое приложение, которое прямо сейчас реально выводит звук (например, Music.app
-   с играющим треком, или вкладка со звуком в браузере) — без звукового клиента HAL не отдаст
-   объект процесса, и промпта не будет.
-2. Найти его PID и bundle id:
+1. Открыть приложение, которое прямо сейчас реально выводит звук САМО, а не через дочерний
+   helper-процесс — например, Music.app с играющим треком. НЕ вкладку браузера: у Chrome/Safari
+   звук выводит отдельный процесс-помощник (GPU/renderer helper) со своим PID, а не главный
+   процесс браузера — pid главного процесса не транслируется в HAL-объект с активным звуком, и
+   промпт не появится по той же причине, что и с `--group-pid 1`.
+2. Найти его PID и bundle id. `pgrep` без `-d` печатает один PID на строку — если совпадений
+   несколько, все они попадают в `--group-pid` через `$(...)` одним аргументом с переводами
+   строк, харнесс разбирает и запятую, и пробельные разделители:
 
    ```sh
-   pgrep -x Music                          # PID, например Music.app
+   pgrep -x Music                          # PID (может быть несколько строк)
    osascript -e 'id of app "Music"'        # bundle id, например com.apple.Music
    ```
 
@@ -61,10 +65,16 @@ ProcessMonitorPort.swift` — «непустая строка», без како
    выбранного в шаге 1 приложения.)
 
 5. Дождаться системного промпта о доступе к звуку других приложений; нажать **«Запретить»**.
-6. Сверить вывод дословно:
-   - `start: throw systemAudioDenied` (не `systemUnavailable` — это отличило бы отказ права от
-     любого другого системного сбоя);
-   - в потоке событий строка `event: permissionObserved(kind: systemAudioRecording, status: denied)`.
+6. Сверить вывод:
+   - дословно `start: throw systemAudioDenied` (не `systemUnavailable` — это отличило бы отказ
+     права от любого другого системного сбоя);
+   - в потоке событий строка, СОДЕРЖАЩАЯ `permissionObserved`, `systemAudioRecording` и `denied`
+     — не обязательно дословно `event: permissionObserved(kind: systemAudioRecording,
+     status: denied)`: `PermissionKind`/`PermissionStatus` — типы `DomainCore`, вложенные в
+     `CaptureEvent` того же модуля не помечены `CustomStringConvertible`, и Swift печатает такие
+     вложенные значения полным именем (`DomainCore.PermissionKind.systemAudioRecording`), не
+     голым именем случая — точная строка не прогнана здесь ни разу (нет живого Mac), «дословно»
+     было бы утверждением без прогона.
 
 ## М2 — микрофонный промпт (~15–20 мин, включает ожидание)
 
