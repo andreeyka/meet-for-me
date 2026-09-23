@@ -108,4 +108,8 @@ public final class StorageDatabase: Sendable {
     public func settingsRepository() -> SettingsRepository {
         GRDBSettingsRepository(database: self)
     }
+
+    public func jobRepository() -> JobRepository {
+        GRDBJobRepository(database: self)
+    }
 }

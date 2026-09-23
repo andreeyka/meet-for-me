@@ -93,4 +93,40 @@ enum TestFixtures {
             segment(startMs: 2_000, endMs: 3_000, text: "\(prefix) charlie")
         ]
     }
+
+    /// Поля `Job` сверх пяти обязательных параметров `job(id:type:payload:status:options:)`
+    /// (лимит `function_parameter_count`) — значения по умолчанию соответствуют
+    /// только что созданной, ничем не занятой задаче.
+    struct JobOptions {
+        var priority = 0
+        var attempts = 0
+        var maxAttempts = 3
+        var runAfter = TestFixtures.epoch
+        var conditions = JobConditions(
+            requiresACPower: false, forbidWhileRecording: false,
+            maxThermalPressure: .fair, requiresProfileReady: nil
+        )
+        var dedupKey: String?
+        var leaseExpiresAt: Date?
+        var attemptStartedAt: Date?
+        var lastError: String?
+        var createdAt = TestFixtures.epoch
+        var updatedAt = TestFixtures.epoch
+    }
+
+    static func job(
+        id: UUID = UUID(),
+        type: JobType = .transcode,
+        payload: JobPayload = .transcode(recordingId: UUID()),
+        status: JobStatus = .pending,
+        options: JobOptions = JobOptions()
+    ) -> Job {
+        Job(
+            id: id, type: type, payload: payload, status: status,
+            priority: options.priority, attempts: options.attempts, maxAttempts: options.maxAttempts,
+            runAfter: options.runAfter, conditions: options.conditions, dedupKey: options.dedupKey,
+            leaseExpiresAt: options.leaseExpiresAt, attemptStartedAt: options.attemptStartedAt,
+            lastError: options.lastError, createdAt: options.createdAt, updatedAt: options.updatedAt
+        )
+    }
 }
