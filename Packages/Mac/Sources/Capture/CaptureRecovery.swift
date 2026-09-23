@@ -28,7 +28,8 @@ extension AudioCaptureImpl {
             let durationSeconds = Double(frames) / Double(reference.sampleRate)
             let endedAt = manifest.startedAt.addingTimeInterval(durationSeconds)
             let atMs = Int((durationSeconds * 1000).rounded())
-            // СТРОКА (возврат MEE-317, второй круг — самокоррекция): моё прежнее обоснование было
+            // СТРОКА: (возврат MEE-317, второй круг — самокоррекция; формат метки поправлен в
+            // третьем круге). Моё прежнее обоснование было
             // фактически неверным. `TrackFile.append` пишет через `write(2)` без пользовательской
             // буферизации — байты уходят в страничный кэш ядра сразу, до всякого `flush()`.
             // `flush()` здесь — это `fsync(2)`: он про устойчивость к падению ОС/железа, а не про
