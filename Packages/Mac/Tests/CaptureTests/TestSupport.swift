@@ -26,9 +26,15 @@ final class FakeHardwareGateway: HardwareGateway, @unchecked Sendable {
     private(set) var micRequestArgs: [InputSelection] = []
     /// К6: `driftCompensation` — журнал этого аргумента по каждому вызову отдельно от прочих
     /// (план MEE-315), чтобы тест мог утверждать «`true` в каждом из N вызовов», не только факт
-    /// самого вызова.
-    private(set) var aggregateBuildArgs:
-        [(tap: TapHandle?, microphone: MicrophoneHandle?, driftCompensation: Bool)] = []
+    /// самого вызова. Структура, не тройной тег — `large_tuple` (SwiftLint, порог по умолчанию —
+    /// 3 члена уже ошибка), тот же довод, что уже привёл `resolveInputDevice`/`listeners` к
+    /// структуре в этом же модуле.
+    struct AggregateBuildArgs {
+        let tap: TapHandle?
+        let microphone: MicrophoneHandle?
+        let driftCompensation: Bool
+    }
+    private(set) var aggregateBuildArgs: [AggregateBuildArgs] = []
     private(set) var releasedTaps: [TapHandle] = []
     private(set) var releasedMicrophones: [MicrophoneHandle] = []
     private(set) var teardownCount = 0
@@ -88,7 +94,8 @@ final class FakeHardwareGateway: HardwareGateway, @unchecked Sendable {
         onBuffer: @escaping @Sendable (HardwareBuffer) -> Void
     ) throws -> AggregateHandle {
         lock.lock()
-        aggregateBuildArgs.append((tap, microphone, driftCompensation))
+        aggregateBuildArgs.append(AggregateBuildArgs(tap: tap, microphone: microphone,
+                                                      driftCompensation: driftCompensation))
         let error = aggregateBuildError
         lock.unlock()
         if let error { throw error }
