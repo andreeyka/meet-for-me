@@ -24,10 +24,10 @@ enum TrackFileError: Error {
 }
 
 /// Один трек: заголовок пишется в `init`, дальше только дозапись и периодический `flush()`.
-final class TrackFile: @unchecked Sendable {
+package final class TrackFile: @unchecked Sendable {
 
     let channel: RecordingManifest.Channel
-    let fileName: String
+    package let fileName: String
     let sampleRate: Int
     let channelCount: Int
 
@@ -48,7 +48,7 @@ final class TrackFile: @unchecked Sendable {
         Int((Double(framesWritten) / Double(sampleRate) * 1000).rounded())
     }
 
-    init(directory: URL, channel: RecordingManifest.Channel, format: TrackFormat) throws {
+    package init(directory: URL, channel: RecordingManifest.Channel, format: TrackFormat) throws {
         self.channel = channel
         fileName = TrackFile.fileName(for: channel)
         sampleRate = format.sampleRate
@@ -108,7 +108,7 @@ final class TrackFile: @unchecked Sendable {
 
     /// Дописывает interleaved Float32. Байты идут на диск сразу — накопление и частоту сброса
     /// решает вызывающая сторона (`flush()` ниже), эта функция сама не буферизует.
-    func append(_ samples: [Float]) throws {
+    package func append(_ samples: [Float]) throws {
         guard !samples.isEmpty else { return }
         try samples.withUnsafeBufferPointer { buffer in
             guard let base = buffer.baseAddress else { return }
@@ -122,7 +122,7 @@ final class TrackFile: @unchecked Sendable {
     }
 
     /// Сбрасывает на диск (инвариант 26: не реже `truncatedTailBudgetMs`, пока идут данные).
-    func flush(atHostTime hostTime: UInt64) {
+    package func flush(atHostTime hostTime: UInt64) {
         lock.lock()
         lastFlushHostTime = hostTime
         lock.unlock()
