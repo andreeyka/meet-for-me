@@ -19,34 +19,36 @@ import DomainCore
 final class JobRepositoryDataCorruptedTests: StorageAsyncTestCase {
 
     func testK30_jobByIdGivesDataCorrupted() async throws {
-        let (temp, jobs, brokenId) = try await Self.makeBrokenJob()
-        defer { StorageTestSupport.cleanup(temp) }
-        try await Self.assertDataCorrupted(id: brokenId) { try await jobs.job(id: brokenId) }
+        let broken = try await Self.makeBrokenJob()
+        defer { StorageTestSupport.cleanup(broken.temp) }
+        try await Self.assertDataCorrupted(id: broken.id) { try await broken.jobs.job(id: broken.id) }
     }
 
     func testK30_activeJobGivesDataCorrupted() async throws {
-        let (temp, jobs, brokenId) = try await Self.makeBrokenJob(dedupKey: "k30-dedup")
-        defer { StorageTestSupport.cleanup(temp) }
-        try await Self.assertDataCorrupted(id: brokenId) { try await jobs.activeJob(dedupKey: "k30-dedup") }
+        let broken = try await Self.makeBrokenJob(dedupKey: "k30-dedup")
+        defer { StorageTestSupport.cleanup(broken.temp) }
+        try await Self.assertDataCorrupted(id: broken.id) {
+            try await broken.jobs.activeJob(dedupKey: "k30-dedup")
+        }
     }
 
     func testK30_claimNextGivesDataCorrupted() async throws {
-        let (temp, jobs, brokenId) = try await Self.makeBrokenJob()
-        defer { StorageTestSupport.cleanup(temp) }
-        try await Self.assertDataCorrupted(id: brokenId) {
-            try await jobs.claimNext(
+        let broken = try await Self.makeBrokenJob()
+        defer { StorageTestSupport.cleanup(broken.temp) }
+        try await Self.assertDataCorrupted(id: broken.id) {
+            try await broken.jobs.claimNext(
                 types: [.transcode], excluding: [], now: TestFixtures.epoch, leaseSeconds: 60
             )
         }
     }
 
     func testK30_reclaimExpiredLeasesGivesDataCorrupted() async throws {
-        let (temp, jobs, brokenId) = try await Self.makeBrokenJob(
+        let broken = try await Self.makeBrokenJob(
             status: .running, options: .init(leaseExpiresAt: TestFixtures.epoch)
         )
-        defer { StorageTestSupport.cleanup(temp) }
-        try await Self.assertDataCorrupted(id: brokenId) {
-            try await jobs.reclaimExpiredLeases(now: TestFixtures.epoch.addingTimeInterval(1))
+        defer { StorageTestSupport.cleanup(broken.temp) }
+        try await Self.assertDataCorrupted(id: broken.id) {
+            try await broken.jobs.reclaimExpiredLeases(now: TestFixtures.epoch.addingTimeInterval(1))
         }
     }
 
@@ -54,18 +56,24 @@ final class JobRepositoryDataCorruptedTests: StorageAsyncTestCase {
     /// не бросает, а называет строку (К35): проверяется здесь тем же входом,
     /// чтобы явно закрыть весь список, которым бы он ни был числом.
     func testK30_jobsStatusNamesRatherThanThrows() async throws {
-        let (temp, jobs, brokenId) = try await Self.makeBrokenJob()
-        defer { StorageTestSupport.cleanup(temp) }
-        let listing = try await jobs.jobs(status: .pending)
+        let broken = try await Self.makeBrokenJob()
+        defer { StorageTestSupport.cleanup(broken.temp) }
+        let listing = try await broken.jobs.jobs(status: .pending)
         XCTAssertTrue(listing.jobs.isEmpty)
-        XCTAssertEqual(listing.unreadable.map(\.id), [brokenId])
+        XCTAssertEqual(listing.unreadable.map(\.id), [broken.id])
     }
 
     // MARK: - Оснастка
 
+    private struct BrokenJob {
+        let temp: StorageTestSupport.TemporaryDatabase
+        let jobs: JobRepository
+        let id: UUID
+    }
+
     private static func makeBrokenJob(
         status: JobStatus = .pending, dedupKey: String? = nil, options: TestFixtures.JobOptions = .init()
-    ) async throws -> (StorageTestSupport.TemporaryDatabase, JobRepository, UUID) {
+    ) async throws -> BrokenJob {
         let temp = try StorageTestSupport.makeDatabase()
         let jobs = temp.database.jobRepository()
         var jobOptions = options
@@ -77,7 +85,7 @@ final class JobRepositoryDataCorruptedTests: StorageAsyncTestCase {
                 sql: "UPDATE jobs SET payload_json = 'not-json' WHERE id = ?", arguments: [job.id.uuidString]
             )
         }
-        return (temp, jobs, job.id)
+        return BrokenJob(temp: temp, jobs: jobs, id: job.id)
     }
 
     private static func assertDataCorrupted<T>(

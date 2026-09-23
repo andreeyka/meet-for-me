@@ -101,41 +101,48 @@ final class SchemaMigrationTests: StorageAsyncTestCase {
             ))
             XCTAssertEqual(triggerNames, Set(Self.expectedTriggers))
 
-            // По каждой таблице — имена колонок, объявленные типы, NOT NULL, DEFAULT.
-            for (table, expectedColumns) in Self.expectedColumns {
-                let columns = try Row.fetchAll(db, sql: "PRAGMA table_info(\(table))")
-                XCTAssertEqual(columns.count, expectedColumns.count, "число колонок \(table)")
-                for (row, expected) in zip(columns, expectedColumns) {
-                    XCTAssertEqual(row["name"] as String, expected.name, "\(table).\(expected.name): имя")
-                    XCTAssertEqual(
-                        (row["type"] as String).uppercased(), expected.type, "\(table).\(expected.name): тип"
-                    )
-                    let notNull = (row["notnull"] as Int) != 0
-                    XCTAssertEqual(notNull, expected.notNull, "\(table).\(expected.name): NOT NULL")
-                    let defaultValue = row["dflt_value"] as String?
-                    XCTAssertEqual(defaultValue, expected.defaultValue, "\(table).\(expected.name): DEFAULT")
-                }
-            }
-
-            // Все четырнадцать CHECK — текст каждого ограничения отдельно, а не
-            // только их число: реализация, забывшая одно допустимое значение
-            // внутри CHECK, этой сверкой критерий не проходит (граница К3).
-            var totalChecks = 0
-            for (table, checks) in Self.expectedChecksByTable {
-                let tableSQL = try String.fetchOne(
-                    db, sql: "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?", arguments: [table]
-                ) ?? ""
-                let normalizedTableSQL = Self.normalizeWhitespace(tableSQL)
-                for check in checks {
-                    XCTAssertTrue(
-                        normalizedTableSQL.contains(Self.normalizeWhitespace(check)),
-                        "\(table): CHECK не найден дословно — \(check)"
-                    )
-                }
-                totalChecks += checks.count
-            }
-            XCTAssertEqual(totalChecks, 14, "четырнадцать CHECK всего")
+            try Self.assertColumnsMatch(db)
+            try Self.assertChecksMatchVerbatim(db)
         }
+    }
+
+    /// По каждой таблице — имена колонок, объявленные типы, NOT NULL, DEFAULT.
+    private static func assertColumnsMatch(_ db: Database) throws {
+        for (table, expectedColumns) in Self.expectedColumns {
+            let columns = try Row.fetchAll(db, sql: "PRAGMA table_info(\(table))")
+            XCTAssertEqual(columns.count, expectedColumns.count, "число колонок \(table)")
+            for (row, expected) in zip(columns, expectedColumns) {
+                XCTAssertEqual(row["name"] as String, expected.name, "\(table).\(expected.name): имя")
+                XCTAssertEqual(
+                    (row["type"] as String).uppercased(), expected.type, "\(table).\(expected.name): тип"
+                )
+                let notNull = (row["notnull"] as Int) != 0
+                XCTAssertEqual(notNull, expected.notNull, "\(table).\(expected.name): NOT NULL")
+                let defaultValue = row["dflt_value"] as String?
+                XCTAssertEqual(defaultValue, expected.defaultValue, "\(table).\(expected.name): DEFAULT")
+            }
+        }
+    }
+
+    /// Все четырнадцать CHECK — текст каждого ограничения отдельно, а не
+    /// только их число: реализация, забывшая одно допустимое значение внутри
+    /// CHECK, этой сверкой критерий не проходит (граница К3).
+    private static func assertChecksMatchVerbatim(_ db: Database) throws {
+        var totalChecks = 0
+        for (table, checks) in Self.expectedChecksByTable {
+            let tableSQL = try String.fetchOne(
+                db, sql: "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?", arguments: [table]
+            ) ?? ""
+            let normalizedTableSQL = Self.normalizeWhitespace(tableSQL)
+            for check in checks {
+                XCTAssertTrue(
+                    normalizedTableSQL.contains(Self.normalizeWhitespace(check)),
+                    "\(table): CHECK не найден дословно — \(check)"
+                )
+            }
+            totalChecks += checks.count
+        }
+        XCTAssertEqual(totalChecks, 14, "четырнадцать CHECK всего")
     }
 
     // MARK: - К4
