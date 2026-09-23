@@ -135,7 +135,7 @@ enum HALTap {
             AudioObjectGetPropertyData(tapObject, &address, 0, nil, &size, $0)
         }
         guard status == noErr, let description = value?.takeRetainedValue() else { return [] }
-        return description.processes.compactMap { object in
+        return description.processes.compactMap { (object) -> CaptureProcessDescriptor? in
             guard let pid = HALObject.pid(of: object) else { return nil }
             let bundleId = HALObject.string(object, kAudioProcessPropertyBundleID)
             return CaptureProcessDescriptor(
