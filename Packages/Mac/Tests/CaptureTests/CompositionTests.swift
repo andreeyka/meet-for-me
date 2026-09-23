@@ -109,12 +109,14 @@ final class CompositionTests: CaptureAsyncTestCase {
     /// канал). Здесь — различимые по каналам значения и точное сравнение массивов на выходе,
     /// отдельно для сужения (3→1, требует выбора канала) и расширения (1→2, требует дублирования).
     func test_k07_channelAdapterProducesExactSamplesNotJustNonzeroCount() {
-        // 2 кадра, 3 канала, значения различимы по каналу и по кадру: канал c, кадр f → c*10 + f.
-        let threeChannel: [Float] = [0, 1, 10, 11, 20, 21]
+        // 2 кадра, 3 канала, interleaved (кадр за кадром, внутри кадра — канал за каналом, как
+        // несёт HardwareBuffer.samples): кадр f, канал c → f*100 + c. Кадр 0 — [0, 1, 2], кадр 1 —
+        // [100, 101, 102].
+        let threeChannel: [Float] = [0, 1, 2, 100, 101, 102]
         let narrowed = ChannelAdapter.adapt(threeChannel, frameCount: 2, from: 3, to: 1)
-        // Целевой единственный канал берёт источник 0 (`min(channel, sourceChannels-1)`) — те же
-        // значения, что были у канала 0, не среднее и не канал 1/2.
-        XCTAssertEqual(narrowed, [0, 1], "сужение 3→1 берёт канал 0 дословно")
+        // Целевой единственный канал берёт источник 0 (`min(channel, sourceChannels-1)`) — канал 0
+        // каждого кадра ([0, 100]), не канал 1/2 и не смешение каналов внутри кадра.
+        XCTAssertEqual(narrowed, [0, 100], "сужение 3→1 берёт канал 0 дословно")
 
         let oneChannel: [Float] = [5, 7]
         let widened = ChannelAdapter.adapt(oneChannel, frameCount: 2, from: 1, to: 2)
