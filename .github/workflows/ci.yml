@@ -24,6 +24,17 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - run: swift --version
+      # MEE-321, условие Г, прогон CI на PR #56: без этого шага `swift build`
+      # падает на первом же файле GRDB, который импортирует системный C-модуль
+      # CSQLite, — `Sources/CSQLite/shim.h:1:10: error: 'sqlite3.h' file not
+      # found`. В образе `swift:5.10-jammy` заголовков libsqlite3-dev нет —
+      # только рантайм-библиотека, которую тянет сам тулчейн. `apt-get update`
+      # обязателен: слой образа не гарантирует свежий индекс пакетов.
+      - name: Установка libsqlite3-dev (GRDB/CSQLite)
+        run: |
+          set -euo pipefail
+          apt-get update
+          apt-get install -y libsqlite3-dev
       # `id` заведён изданием 11 и несущий: это единственная настоящая
       # предпосылка тестового шага ниже, и он гейтится на неё поимённо, а не на
       # порядок шагов. Без `id` условие пришлось бы писать через `success()`,
@@ -75,6 +86,30 @@ jobs:
               -Xswiftc -emit-symbol-graph \
               -Xswiftc -emit-symbol-graph-dir -Xswiftc "$graph_dir"
             ls -l "$graph_dir"
+            # MEE-321. `-emit-symbol-graph-dir` пишет графы ВСЕХ таргетов сборки,
+            # включая зависимость (GRDB) — не только таргеты этого репозитория.
+            # Скрипт ниже (не моя зона — «Владелец файла — разработчик CI»,
+            # .github/scripts/symbol-graph-surface.py) считает own_modules ==
+            # ключам этой директории и разбирает КАЖДЫЙ найденный граф как таргет
+            # репозитория; на графе GRDB это даёт 110 ложных «нарушений» — сам
+            # GRDB легально экспортирует Combine и типы ObjC/C, к контракту
+            # C-010 отношения не имеющие. Фильтр здесь, в ci.yml (моя зона),
+            # убирает из каталога графы всего, что не является каталогом
+            # `Packages/Core/Sources/<Таргет>` — то есть только сторонние
+            # зависимости. Побочный эффект — предусмотренный, а не случайный:
+            # GRDB перестаёт быть «своим модулем» для сверки ссылок, и публичный
+            # тип GRDB в сигнатуре Storage начинает читаться нарушением ровно
+            # так, как того требует C-010 §4 («отдавать наружу типы GRDB
+            # запрещено»).
+            for f in "$graph_dir"/*.symbols.json; do
+              [ -e "$f" ] || continue
+              owner="$(basename "$f" .symbols.json)"
+              owner="${owner%%@*}"
+              if [ ! -d "Packages/Core/Sources/$owner" ]; then
+                echo "исключён из разбора (не таргет репозитория): $owner"
+                rm -f "$f"
+              fi
+            done
             python3 .github/scripts/symbol-graph-surface.py \
               --graph-dir "$graph_dir" \
               --sources Packages/Core/Sources \
@@ -253,6 +288,23 @@ jobs:
                 -Xswiftc -emit-symbol-graph-dir -Xswiftc "$graph_dir" \
                 || { : > "$build_failed"; exit 1; }
               ls -l "$graph_dir"
+              # MEE-321, тот же довод, что у работы Core (Linux) выше: каталог
+              # графа несёт и графы зависимостей (GRDB) — их публичная
+              # поверхность не подчиняется контрактам этого репозитория, и
+              # разбор всех найденных графов как «своих» таргетов даёт ложные
+              # нарушения на легальном Combine/ObjC-экспорте самого GRDB.
+              # Фильтр — по каталогу таргета в Packages/$pkg/Sources/, а не по
+              # имени зависимости: универсален для любой будущей внешней
+              # зависимости, не только GRDB.
+              for f in "$graph_dir"/*.symbols.json; do
+                [ -e "$f" ] || continue
+                owner="$(basename "$f" .symbols.json)"
+                owner="${owner%%@*}"
+                if [ ! -d "Packages/$pkg/Sources/$owner" ]; then
+                  echo "исключён из разбора (не таргет репозитория): $owner"
+                  rm -f "$f"
+                fi
+              done
               python3 .github/scripts/symbol-graph-surface.py \
                 --graph-dir "$graph_dir" \
                 --sources "Packages/$pkg/Sources" \
