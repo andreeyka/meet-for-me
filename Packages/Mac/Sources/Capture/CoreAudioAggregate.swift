@@ -48,11 +48,11 @@ final class AggregateRuntime: @unchecked Sendable {
     }
 
     static func build(
-        tapObject: AudioObjectID?, microphoneUID: String?,
+        tapObject: AudioObjectID?, microphoneUID: String?, driftCompensation: Bool,
         onBuffer: @escaping @Sendable (HardwareBuffer) -> Void, onEvent: @escaping @Sendable (HardwareEvent) -> Void
     ) throws -> AggregateRuntime {
         let runtime = AggregateRuntime(tapObject: tapObject, onBuffer: onBuffer, onEvent: onEvent)
-        try runtime.assemble(microphoneUID: microphoneUID)
+        try runtime.assemble(microphoneUID: microphoneUID, driftCompensation: driftCompensation)
         return runtime
     }
 
@@ -67,8 +67,8 @@ final class AggregateRuntime: @unchecked Sendable {
         let tap: (index: Int, channels: Int)?
     }
 
-    private func assemble(microphoneUID: String?) throws {
-        let composition = buildComposition(microphoneUID: microphoneUID)
+    private func assemble(microphoneUID: String?, driftCompensation: Bool) throws {
+        let composition = buildComposition(microphoneUID: microphoneUID, driftCompensation: driftCompensation)
         aggregateID = try createAggregateDevice(composition)
         let routes = resolveRoutes(microphoneUID: microphoneUID, composition: composition)
         try installIO(microphoneRoute: routes.mic, tapRoute: routes.tap)
@@ -78,7 +78,19 @@ final class AggregateRuntime: @unchecked Sendable {
 
     /// Состав саб-устройств и tap-ов: микрофон (или, без него, выход по умолчанию — только ради
     /// часов, см. шапку файла) плюс единственный tap этого сеанса.
-    private func buildComposition(microphoneUID: String?) -> Composition {
+    ///
+    /// `driftCompensation` доходит до HAL-словаря буквально (`kAudioSubTapDriftCompensationKey`) —
+    /// возврат MEE-317 (второй круг): аргумент раньше не участвовал в сборке вовсе.
+    ///
+    /// СТРОКА: опорный элемент (микрофон, либо выход по умолчанию без микрофона) держит
+    /// `kAudioSubDeviceDriftCompensationKey: 0` БЕЗУСЛОВНО, независимо от `driftCompensation`, —
+    /// это не решение за контракт, а его же инвариант 6 буквально («включена ВСЕГДА, кроме
+    /// единственного опорного элемента, без которого дрейфу не от чего считаться»): компенсация
+    /// опорного элемента относительно самого себя лишена смысла (обычная практика Core Audio для
+    /// master clock), а не отдельный выключатель поверх аргумента порта. Развилка контракту не
+    /// задана явно (§«Поведение» не оговаривает опорный элемент отдельно от «остальных»), но
+    /// вывод из формулировки самого инварианта 6 — однозначный, а не мой произвольный выбор.
+    private func buildComposition(microphoneUID: String?, driftCompensation: Bool) -> Composition {
         var result = Composition()
         if let micUID = microphoneUID, let micDevice = HALObject.devices().first(where: {
             HALObject.string($0, kAudioDevicePropertyDeviceUID) == micUID
@@ -91,9 +103,10 @@ final class AggregateRuntime: @unchecked Sendable {
             result.mainUID = output
         }
         if let tapObject, let uid = HALTap.uid(of: tapObject) {
-            result.tapList.append([kAudioSubTapUIDKey: uid,
-                                   kAudioSubTapDriftCompensationKey: result.mainUID == nil ? 0 : 1])
-            if result.mainUID == nil { result.mainUID = uid }
+            let tapIsReference = result.mainUID == nil
+            let compensationValue = tapIsReference ? 0 : (driftCompensation ? 1 : 0)
+            result.tapList.append([kAudioSubTapUIDKey: uid, kAudioSubTapDriftCompensationKey: compensationValue])
+            if tapIsReference { result.mainUID = uid }
         }
         return result
     }

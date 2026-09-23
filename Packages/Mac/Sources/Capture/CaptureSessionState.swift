@@ -36,10 +36,11 @@ final class CaptureSessionState {
     var pauseStartedAtMs: Int?
     var lastProcessPollHostTime: UInt64 = 0
     /// Инвариант 23 (`.levels`): последнее значение на канал и момент последней публикации —
-    /// троттлинг ≤10 Гц считается по `hostTime` данных, не по счётчику буферов.
+    /// троттлинг ≤10 Гц считается по метке времени ДОСТАВКИ буфера порту (часы вызова), не по
+    /// `hostTime` данных — возврат MEE-317 (второй круг), см. `AudioCaptureImplBuffers.updateLevels`.
     var lastMicLevel: Float?
     var lastSystemLevel: Float?
-    var lastLevelsEmitHostTime: UInt64 = 0
+    var lastLevelsEmitAt: Date?
     var currentMicrophoneUID: String?
     var currentMicrophoneName: String?
     var currentMicrophoneChannelCount: Int?

@@ -62,17 +62,37 @@ extension AudioCaptureImpl {
         // §«Сон»: контракт требует ОБА маркера сразу — `.sleep` и `.discontinuity` — и немедленный
         // сброс буферов на диск, а не отложенные до первого буфера после пробуждения: система
         // может проспать сколь угодно долго, а до пробуждения на диске обязан остаться след
-        // случившегося разрыва, а не тишина без объяснения. Точную запись `Discontinuity` (с
-        // посчитанным `gapMs`) по-прежнему делает `resolveRebuild` при пробуждении — раньше её
-        // посчитать не из чего (см. там же — маркер для `reason == .sleep` не дублируется).
-        if let marker = try? RecordingManifest.Marker(kind: .discontinuity, atMs: atMs, detail: "sleep") {
-            session.markers.append(marker)
+        // случившегося разрыва, а не тишина без объяснения.
+        //
+        // Возврат MEE-317 (второй круг): маркер `.discontinuity` без парного элемента в
+        // `discontinuities` нарушает инвариант 15 C-002 (RecordingManifestValidation) — writeManifest
+        // ниже молча проваливался бы (через `try?`), а stop() до пробуждения падал бы вовсе.
+        // Значит пара пишется здесь целиком: маркер и предварительный `Discontinuity` с известным
+        // на этот момент `fileMinusHostMs` (то же значение, что вычисляет `beginRebuild` для
+        // `pendingRebuild`) и `gapMs: 0` — гап ещё не начал накапливаться, сон только что начался.
+        // `resolveRebuild` при пробуждении заменяет эту запись точной (см. там же), а не добавляет
+        // вторую — иначе на диске остались бы два разрыва на один сон.
+        //
+        // Если сон пришёл поверх уже идущей пересборки другой причины (`session.pendingRebuild`
+        // уже занят), `beginRebuild` ниже не заводит новый `pendingRebuild` (охрана на его первой
+        // строке) — и тогда пары для НОВОГО маркера `.discontinuity` не появится никогда (сон
+        // "потерялся" бы за старой пересборкой). Поэтому маркер и запись добавляются только когда
+        // `beginRebuild` в самом деле завёл `pendingRebuild` для этого сна, а не раньше.
+        let hadPendingRebuild = session.pendingRebuild != nil
+        beginRebuild(session, reason: .sleep, newMicrophone: nil, atHostTime: atHostTime)
+        if !hadPendingRebuild, let pending = session.pendingRebuild {
+            let scaleErrorMs = ScaleError.compute(reason: .sleep, fileMinusHostMs: pending.fileMinusHostMs)
+            if let discontinuity = try? RecordingManifest.Discontinuity(
+                atMs: pending.atMs, gapMs: 0, scaleErrorMs: scaleErrorMs, reason: .sleep
+            ), let marker = try? RecordingManifest.Marker(kind: .discontinuity, atMs: pending.atMs, detail: "sleep") {
+                session.discontinuities.append(discontinuity)
+                session.markers.append(marker)
+            }
         }
         for track in [session.micTrack, session.systemTrack].compactMap({ $0 }) {
             track.flush(atHostTime: atHostTime)
         }
         writeManifest(session, endedAt: nil, isFinalized: false)
-        beginRebuild(session, reason: .sleep, newMicrophone: nil, atHostTime: atHostTime)
     }
 
     /// «После `.didWake` порт берёт новый токен удержания и продолжает» — дословно контракт:

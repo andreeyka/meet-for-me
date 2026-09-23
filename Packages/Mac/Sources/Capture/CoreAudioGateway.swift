@@ -74,19 +74,19 @@ final class CoreAudioGateway: HardwareGateway, @unchecked Sendable {
         tap: TapHandle?, microphone: MicrophoneHandle?, driftCompensation: Bool,
         onBuffer: @escaping @Sendable (HardwareBuffer) -> Void
     ) throws -> AggregateHandle {
-        // `driftCompensation` порт всегда шлёт `true` (инвариант 6) — сама реализация решает,
-        // какой элемент aggregate опорный и потому без компенсации, безусловно и без участия
-        // этого аргумента (см. шапку файла и `AggregateRuntime.buildComposition`). Параметр
-        // существует ради наблюдаемости швом теста (К6), не ради управления реализацией.
         var tapObject: AudioObjectID?
         if let tap {
             lock.lock()
             tapObject = openTaps[tap.token]
             lock.unlock()
         }
+        // `driftCompensation` доходит до самого HAL-словаря (`AggregateRuntime.buildComposition`),
+        // а не отбрасывается здесь — возврат MEE-317 (второй круг): раньше порт передавал `true`,
+        // а реализация решала сама, без участия аргумента, и К6 через шов проверял бы константу,
+        // которую сам же порт и шлёт, ничего не доказывая про реальный HAL.
         let runtime = try AggregateRuntime.build(
-            tapObject: tapObject, microphoneUID: microphone?.uid, onBuffer: onBuffer,
-            onEvent: { [weak self] event in self?.broadcast(event) }
+            tapObject: tapObject, microphoneUID: microphone?.uid, driftCompensation: driftCompensation,
+            onBuffer: onBuffer, onEvent: { [weak self] event in self?.broadcast(event) }
         )
         let handle = AggregateHandle()
         lock.lock()

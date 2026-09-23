@@ -24,23 +24,30 @@ extension AudioCaptureImpl {
                                            from: buffer.channelCount, to: track.channelCount)
         try? track.append(adapted)
         maybeFlush(session, track: track, hostTime: buffer.hostTime)
-        updateLevels(session, slot: buffer.slot, samples: buffer.samples, hostTime: buffer.hostTime)
+        updateLevels(session, slot: buffer.slot, samples: buffer.samples)
     }
 
-    /// Инвариант 23: `.levels`, частота ≤10 Гц (питает C-016 — индикатор уровня, не измерение).
-    /// Троттлинг — по `hostTime` буфера, тем же приёмом, что `maybeFlush` (инвариант 26): по
-    /// монотонным часам данных, а не по часам вызова.
-    private func updateLevels(
-        _ session: CaptureSessionState, slot: HardwareBuffer.Slot, samples: [Float], hostTime: UInt64
-    ) {
+    /// Инвариант 23: `.levels`, частота ≤10 Гц. Возврат MEE-317 (второй круг): троттлинг — по
+    /// МЕТКЕ ВРЕМЕНИ ДОСТАВКИ буфера порту (часы вызова, `Date()`), не по `hostTime` данных
+    /// (как `maybeFlush`, инвариант 26) — тот приём здесь был ошибкой: `.levels` кормит
+    /// индикатор для человека (C-016), а не позицию на диске, и обязан не превышать 10
+    /// событий в РЕАЛЬНУЮ секунду наблюдателя. Пачка буферов, доставленная разом (устройство
+    /// отдало данные одним куском), но с `hostTime` каждого буфера, разнесённым больше чем на
+    /// `minimumIntervalMs` (например, буферы старого формата, оставшиеся в очереди HAL), прошла
+    /// бы троттлинг по `hostTime` на каждом буфере и дала бы больше 10 событий за реальную
+    /// секунду — то, что перечень и запрещает.
+    private func updateLevels(_ session: CaptureSessionState, slot: HardwareBuffer.Slot, samples: [Float]) {
         let level = AudioLevel.value(fromSamples: samples)
         switch slot {
         case .mic: session.lastMicLevel = level
         case .system: session.lastSystemLevel = level
         }
-        let last = session.lastLevelsEmitHostTime
-        guard last == 0 || hostTime &- last >= UInt64(AudioLevel.minimumIntervalMs) else { return }
-        session.lastLevelsEmitHostTime = hostTime
+        let now = Date()
+        if let last = session.lastLevelsEmitAt,
+           now.timeIntervalSince(last) * 1000 < Double(AudioLevel.minimumIntervalMs) {
+            return
+        }
+        session.lastLevelsEmitAt = now
         emit(.levels(.init(
             mic: session.micTrack != nil ? session.lastMicLevel : nil,
             system: session.systemTrack != nil ? session.lastSystemLevel : nil

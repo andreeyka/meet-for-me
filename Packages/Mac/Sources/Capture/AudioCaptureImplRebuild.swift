@@ -67,11 +67,17 @@ extension AudioCaptureImpl {
         guard let discontinuity = try? RecordingManifest.Discontinuity(
             atMs: pending.atMs, gapMs: gapMs, scaleErrorMs: scaleErrorMs, reason: pending.reason
         ) else { return }
-        session.discontinuities.append(discontinuity)
-        // `.sleep`: маркер `.discontinuity` уже добавлен немедленно в `handleSleep` (§«Сон») —
-        // не дублируем; запись `Discontinuity` выше по-прежнему делается здесь, раньше её
-        // посчитать не из чего (нужен `firstBufferHostTime`, известный только после пробуждения).
-        if pending.reason != .sleep {
+        if pending.reason == .sleep {
+            // `handleSleep` уже добавил и маркер `.discontinuity`, и предварительную запись (с
+            // `gapMs: 0`, инвариант 15 требует пару немедленно, §«Сон») — здесь заменяем ту
+            // запись точной, а не добавляем вторую: на один сон — один разрыв на диске.
+            if let idx = session.discontinuities.lastIndex(where: { $0.atMs == pending.atMs && $0.reason == .sleep }) {
+                session.discontinuities[idx] = discontinuity
+            } else {
+                session.discontinuities.append(discontinuity)
+            }
+        } else {
+            session.discontinuities.append(discontinuity)
             let detail = "aggregate rebuilt (\(pending.reason.rawValue))"
             guard let marker = try? RecordingManifest.Marker(kind: .discontinuity, atMs: pending.atMs, detail: detail)
             else { return }
