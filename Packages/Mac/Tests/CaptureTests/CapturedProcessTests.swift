@@ -151,6 +151,56 @@ final class CapturedProcessTests: CaptureAsyncTestCase {
         XCTAssertFalse(snapshots[2].containsUnrequested, "только запрошенный процесс")
     }
 
+    /// Возврат MEE-317 (второй круг), инвариант 13 / C-009 §4.1 шаг 1: сравнение обязано идти
+    /// по `responsibleBundleId ?? bundleId`, а не по голому `bundleId` — иначе дочерний процесс с
+    /// чужим `bundleId`, но тем же ответственным приложением, ложно считался бы посторонним (и
+    /// наоборот: процесс с совпадающим `bundleId`, но ответственным за другое приложение, ложно
+    /// считался бы своим). Оба направления — в одном тесте, разными процессами одного снимка.
+    func test_k13_containsUnrequestedFollowsResponsibleBundleIdNotRawBundleId() async throws {
+        let harness = Harness()
+        let directory = try Harness.makeDirectory()
+        let group = ProcessGroup(appKey: "us.zoom.xos", pids: [111], observedAt: Date())
+        try await harness.start(directory: directory, group: group)
+
+        // Дочерний процесс: bundleId совсем не похож на requestedAppKey (сырое сравнение сочло бы
+        // его посторонним), но responsibleBundleId — ровно requestedAppKey. Не посторонний.
+        let helperOfZoom = CaptureProcessDescriptor(
+            pid: 112, bundleId: "com.apple.WebKit.GPU", executableName: "com.apple.WebKit.GPU",
+            responsibleBundleId: "us.zoom.xos"
+        )
+        let collector = Task { () -> CapturedProcessSnapshot? in
+            for await event in harness.port.events() {
+                if case .capturedProcessesChanged(let snapshot) = event { return snapshot }
+            }
+            return nil
+        }
+        try await Task.sleep(nanoseconds: 10_000_000)
+        harness.gateway.emit(.processesChanged([helperOfZoom], atHostTime: 1_000))
+        let firstReceived = await collector.value
+        let first = try XCTUnwrap(firstReceived)
+        XCTAssertFalse(first.containsUnrequested,
+                       "responsibleBundleId совпадает с requestedAppKey — не посторонний, хотя bundleId не совпадает")
+
+        // Обратный случай: bundleId дословно совпадает с requestedAppKey, но responsibleBundleId
+        // называет другое приложение — посторонний, шаг 1 берёт responsibleBundleId, не bundleId.
+        let impostor = CaptureProcessDescriptor(
+            pid: 113, bundleId: "us.zoom.xos", executableName: "impostor",
+            responsibleBundleId: "com.apple.WebKit.GPU"
+        )
+        let secondCollector = Task { () -> CapturedProcessSnapshot? in
+            for await event in harness.port.events() {
+                if case .capturedProcessesChanged(let snapshot) = event { return snapshot }
+            }
+            return nil
+        }
+        try await Task.sleep(nanoseconds: 10_000_000)
+        harness.gateway.emit(.processesChanged([impostor], atHostTime: 2_000))
+        let secondReceived = await secondCollector.value
+        let second = try XCTUnwrap(secondReceived)
+        XCTAssertTrue(second.containsUnrequested,
+                      "responsibleBundleId называет чужое приложение — посторонний, несмотря на совпавший bundleId")
+    }
+
     func test_k13_requestedAppKeyNilMeansAlwaysFalse() async throws {
         let harness = Harness()
         let directory = try Harness.makeDirectory()
