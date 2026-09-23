@@ -25,7 +25,8 @@ final class DiscontinuityTests: CaptureAsyncTestCase {
         try await Task.sleep(nanoseconds: 10_000_000)
         harness.gateway.feed(.samples(.system, frameCount: 480, channelCount: 2, hostTime: 9_120))
 
-        let fromEvent = try await XCTUnwrap(collector.value)
+        let collected = await collector.value
+        let fromEvent = try XCTUnwrap(collected)
         let manifest = try await harness.port.stop()
         let fromManifest = try XCTUnwrap(manifest.discontinuities.first)
 
@@ -85,6 +86,7 @@ final class DiscontinuityTests: CaptureAsyncTestCase {
         trigger(harness)
         try await Task.sleep(nanoseconds: 10_000_000)
         harness.gateway.feed(.samples(.system, frameCount: 480, channelCount: 2, hostTime: 9_200))
-        return try await XCTUnwrap(collector.value)
+        let collected = await collector.value
+        return try XCTUnwrap(collected)
     }
 }

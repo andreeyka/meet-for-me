@@ -31,7 +31,8 @@ final class CapturedProcessTests: CaptureAsyncTestCase {
         // самого порта, не событие шва: сеанс не порождал ни одного processesChanged.
         harness.gateway.setCapturedProcesses([first], for: tap)
         harness.port.pollCapturedProcesses()
-        let snapshot = try await XCTUnwrap(collector.value)
+        let collected = await collector.value
+        let snapshot = try XCTUnwrap(collected)
         XCTAssertEqual(snapshot.requestedAppKey, "bundle:us.zoom.xos")
 
         // Второй снимок — другой процесс; манифест хранит ОБЪЕДИНЕНИЕ, не последний снимок.
@@ -91,7 +92,8 @@ final class CapturedProcessTests: CaptureAsyncTestCase {
         harness.gateway.emit(.processesChanged(
             [CaptureProcessDescriptor(pid: 1, bundleId: "anything", executableName: nil)], atHostTime: 1_000
         ))
-        let snapshot = try await XCTUnwrap(collector.value)
+        let collected = await collector.value
+        let snapshot = try XCTUnwrap(collected)
         XCTAssertFalse(snapshot.containsUnrequested)
     }
 
