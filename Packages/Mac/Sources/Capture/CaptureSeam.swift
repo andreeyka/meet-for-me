@@ -100,9 +100,21 @@ struct CaptureProcessDescriptor: Sendable, Equatable {
     let pid: Int32
     let bundleId: String?
     let executableName: String?
-    /// C-009 §4.1, шаг 1: `responsibleBundleId ?? bundleId` — appKey процесса. `nil` по
-    /// умолчанию (не каждый источник его знает); шаг 1 сворачивает к `bundleId`, если так.
-    let responsibleBundleId: String? = nil
+    /// C-009 §4.1, шаг 1: `responsibleBundleId ?? bundleId` — appKey процесса. `nil`, если
+    /// источник его не знает; шаг 1 сворачивает к `bundleId`, если так.
+    let responsibleBundleId: String?
+}
+
+extension CaptureProcessDescriptor {
+    /// Для мест, которым `responsibleBundleId` неизвестен (весь `CaptureTests`, кроме самого
+    /// поля, не источник HAL) — `nil` сворачивает шаг 1 к обычному `bundleId`. Объявлен в
+    /// расширении, а не в теле структуры, намеренно: свой `init` в теле структуры подавил бы
+    /// синтезированный четырёхаргументный memberwise-инициализатор целиком, а он нужен
+    /// `CoreAudioHAL.describedProcesses` — единственному месту, которое знает реальный
+    /// `responsibleBundleId`.
+    init(pid: Int32, bundleId: String?, executableName: String?) {
+        self.init(pid: pid, bundleId: bundleId, executableName: executableName, responsibleBundleId: nil)
+    }
 }
 
 /// События, наблюдаемые между собранным aggregate device и реализацией. `atHostTime` — момент
