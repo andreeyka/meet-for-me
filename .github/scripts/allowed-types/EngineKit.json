@@ -1,0 +1,17 @@
+{
+  "_source": "Объединение (правило композиции): C-011 v5 инв. 15 (44 поз., https://linear.app/easypto/issue/MEE-19) + C-012 v6 инв. 23, часть про таргет EngineKit (30 поз., https://linear.app/easypto/issue/MEE-20), объединено переписью MEE-191 — 9 позиций C-012 не входили в список C-011 (EngineJobId, EngineRequest, EngineReply, EngineProgressMessage, EngineWire, EngineTransportFault, Decodable, Encodable, Hashable), итого 53",
+  "_count": 53,
+  "types": [
+    "AudioRef", "AudioSlice", "TranscriptionRequest", "DiarizationRequest", "DiarizationResult",
+    "DiarizationResult.Turn", "EmbeddingRequest", "EmbeddingResult", "PostProcessRequest",
+    "MeetingOutputDraft", "MeetingOutputDraft.Kind", "EngineStage", "EngineProgress", "EngineError",
+    "TranscriptionEngine", "DiarizationEngine", "EmbeddingEngine", "PostProcessor", "ModelBundle",
+    "ModelRole", "ModelRuntime", "Transcript", "Transcript.Speaker", "RecordingManifest.Channel",
+    "DomainValidatable", "DomainValidationError",
+    "EngineJobId", "EngineRequest", "EngineReply", "EngineProgressMessage", "EngineWire",
+    "EngineTransportFault",
+    "Array", "Bool", "CaseIterable", "Codable", "Data", "Decodable", "Decoder", "Double", "Encodable",
+    "Encoder", "Equatable", "Error", "Float", "Hashable", "Int", "Optional", "Sendable", "String",
+    "URL", "UUID", "Void"
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "_source": "C-010 v8, инвариант 19, https://linear.app/easypto/issue/MEE-18 (перепроверено переписью MEE-191)",
+  "_count": 56,
+  "types": [
+    "FileLayout", "MeetingStatus", "MeetingSource", "MeetingRecord", "PersonRecord", "NameForm",
+    "NameForm.Kind", "RecordingStatus", "RecordingRecord", "TranscriptHeader", "SegmentRow",
+    "SegmentAttributionUpdate", "SearchHit", "SpeakerProfile", "ConnectorRecord", "MeetingOutput",
+    "MeetingOutput.Kind", "StorageError", "MeetingRepository", "PersonRepository",
+    "RecordingRepository", "TranscriptRepository", "SpeakerProfileRepository", "ConnectorRepository",
+    "MeetingOutputRepository", "SettingsRepository", "MeetingEvent", "RecordingManifest",
+    "Transcript", "Transcript.Segment", "DedupKey", "AttributionSource", "JobRepository", "Job",
+    "JobType", "JobStatus", "JobListing", "UnreadableJobRow",
+    "Array", "Bool", "Codable", "Data", "Date", "Double", "Equatable", "Error", "Float", "Int",
+    "Int64", "Optional", "Sendable", "Set", "String", "URL", "UUID", "Void"
+  ]
+}

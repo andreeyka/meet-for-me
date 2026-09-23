@@ -1,0 +1,13 @@
+{
+  "_source": "C-014 v4, инвариант 32, https://linear.app/easypto/issue/MEE-22 (перепроверено переписью MEE-191). ОСОБЕННОСТЬ: контракт не называет единого счёта для этого инварианта (в отличие от всех прочих восьми) — даёт три класса допуска раздельно: (а) семнадцать доменных типов, (б) семнадцать поимённых стандартных/Foundation-типов плюс две формы синтаксического сахара (Optional, Array), не входящие в счёт (б), и (в) открытый допуск «хотя бы один собственный публичный тип модуля» (не список, не счётный). _count здесь — МОЙ подсчёт объединения (а)+(б)+сахар = 17+19 = 36, а не число, названное контрактом буквально; названо здесь прямо, а не выдано за цитату",
+  "_count": 36,
+  "types": [
+    "ModelRole", "ModelRuntime", "MinChip", "ModelFile", "ModelDescriptor", "ModelCatalogFile",
+    "ModelManifestFile", "DiarizationParameters", "TranscriptionProfile", "ModelBundle",
+    "ResolvedProfile", "ModelState", "ModelCatalogEvent", "ModelCatalogError", "ModelDiskUsage",
+    "ModelUseToken", "ModelCatalogPort",
+    "String", "Int", "Int64", "Double", "Bool", "URL", "UUID", "Date", "AsyncStream", "Decoder",
+    "Error", "Sendable", "Codable", "Equatable", "Hashable", "Comparable", "CaseIterable",
+    "Optional", "Array"
+  ]
+}
