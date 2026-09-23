@@ -99,17 +99,20 @@ final class PromptTimeoutTests: XCTestCase {
     func test_k18_permissionObservedOnGrantAndDenyOnlyForSystemAudio() async throws {
         let harness = Harness()
         let directory = try Harness.makeDirectory()
+        // Успешный старт публикует ровно два события по порядку — permissionObserved(.granted),
+        // затем started(_): цикл берёт их счётом и завершается сам, не полагаясь на отмену
+        // задачи поверх AsyncStream (риск незавершённого потока — шов теста, не порт).
         let collector = Task { () -> [CaptureEvent] in
             var collected: [CaptureEvent] = []
-            for await event in harness.port.events() { collected.append(event) }
+            for await event in harness.port.events() {
+                collected.append(event)
+                if collected.count >= 2 { break }
+            }
             return collected
         }
         try await Task.sleep(nanoseconds: 10_000_000)
 
         _ = try await harness.start(directory: directory)
-
-        try await Task.sleep(nanoseconds: 20_000_000)
-        collector.cancel()
         let events = await collector.value
 
         let observed = events.compactMap { event -> (PermissionKind, PermissionStatus)? in
@@ -126,9 +129,14 @@ final class PromptTimeoutTests: XCTestCase {
         let directory = try Harness.makeDirectory()
         let request = Harness.request(directory: directory, input: .none)
 
+        // Отказ права публикует ровно одно событие — permissionObserved(.denied) — и на этом
+        // start() бросает: `.started` не следует, цикл берёт единственное событие счётом.
         let collector = Task { () -> [CaptureEvent] in
             var collected: [CaptureEvent] = []
-            for await event in harness.port.events() { collected.append(event) }
+            for await event in harness.port.events() {
+                collected.append(event)
+                if collected.count >= 1 { break }
+            }
             return collected
         }
         try await Task.sleep(nanoseconds: 10_000_000)
@@ -141,8 +149,6 @@ final class PromptTimeoutTests: XCTestCase {
             XCTFail("ожидался systemAudioDenied")
         } catch CaptureError.systemAudioDenied {}
 
-        try await Task.sleep(nanoseconds: 20_000_000)
-        collector.cancel()
         let events = await collector.value
         let observed = events.compactMap { event -> PermissionStatus? in
             if case .permissionObserved(.systemAudioRecording, let status) = event { return status }
