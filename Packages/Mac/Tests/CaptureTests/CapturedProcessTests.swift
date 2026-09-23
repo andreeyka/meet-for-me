@@ -78,7 +78,8 @@ final class CapturedProcessTests: CaptureAsyncTestCase {
         ))
         _ = try await started
 
-        let snapshot = try XCTUnwrap(await collector.value)
+        let received = await collector.value
+        let snapshot = try XCTUnwrap(received)
         XCTAssertEqual(snapshot.processes.map(\.pid), [111], "снимок, заданный ДО start(), пришёл при самом старте")
     }
 
@@ -107,7 +108,8 @@ final class CapturedProcessTests: CaptureAsyncTestCase {
         )
         harness.gateway.emit(.tapInvalidated(atHostTime: 9_000))
 
-        let snapshot = try XCTUnwrap(await collector.value)
+        let received = await collector.value
+        let snapshot = try XCTUnwrap(received)
         XCTAssertEqual(Set(snapshot.processes.map(\.pid)), [111, 333], "снимок читается заново на каждой пересборке")
     }
 
