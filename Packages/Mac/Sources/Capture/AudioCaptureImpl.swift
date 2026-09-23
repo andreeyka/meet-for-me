@@ -57,10 +57,10 @@ public final class AudioCaptureImpl: AudioCapturePort, @unchecked Sendable {
     /// `power` реализацией не владеет (карта модулей: `capture` потребляет `PowerPort`,
     /// реализует его модуль `permissions`) — composition root `App/` передаёт готовый порт.
     ///
-    // СТРОКА: `PowerPort` — тип публичной сигнатуры этого инициализатора, а composition root
-    // в `App/` не может собрать `AudioCaptureImpl` без него. Разрешённый список инварианта 25
-    // выведен только из раздела «Определение» (подписи самого `AudioCapturePort`) — `PowerPort`
-    // среди тридцати четырёх позиций нет. Заведён IR-112 (MEE-325); решение — за контрактом.
+    /// СТРОКА: `PowerPort` — тип публичной сигнатуры этого инициализатора, а composition root
+    /// в `App/` не может собрать `AudioCaptureImpl` без него. Разрешённый список инварианта 25
+    /// выведен только из раздела «Определение» (подписи самого `AudioCapturePort`) — `PowerPort`
+    /// среди тридцати четырёх позиций нет. Заведён IR-112 (MEE-325); решение — за контрактом.
     public convenience init(power: PowerPort) {
         self.init(power: power, gateway: CoreAudioGateway(), deadline: SystemPromptDeadline(),
                   pollDriver: SystemPollDriver())
