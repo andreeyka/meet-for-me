@@ -50,9 +50,8 @@ extension InMemoryJobRepositoryTests {
         XCTAssertNil(excludingBoth, "исключены все — кандидатов нет")
     }
 
-    /// Инвариант 3 C-013: приоритет; при равном — `runAfter`; при равенстве обоих —
-    /// `createdAt`; при равенстве всех трёх — `id` лексикографически.
-    func test_mee320_claimNext_ordersByPriorityThenRunAfterThenCreatedAtThenId() async throws {
+    /// Инвариант 3 C-013, ступень «`runAfter`»: тот же приоритет — раньше по `runAfter`.
+    func test_mee320_claimNext_ordersByPriorityThenRunAfter() async throws {
         let repo = InMemoryJobRepository()
         let laterRunAfter = job(priority: 10, runAfter: epoch.addingTimeInterval(10), createdAt: epoch)
         let earlierRunAfter = job(priority: 10, runAfter: epoch, createdAt: epoch)
@@ -63,6 +62,46 @@ extension InMemoryJobRepositoryTests {
             types: JobType.allCases, excluding: [], now: epoch.addingTimeInterval(100), leaseSeconds: 60
         )
         XCTAssertEqual(picked?.id, earlierRunAfter.id, "тот же приоритет — раньше по runAfter")
+    }
+
+    /// Инвариант 3 C-013, ступень «`createdAt`» (возврат по приёмке MEE-320 — эта ступень
+    /// не проверялась вовсе): при равном `priority` и `runAfter` берётся более ранняя
+    /// `createdAt`.
+    func test_mee320_claimNext_ordersByCreatedAtWhenPriorityAndRunAfterTie() async throws {
+        let repo = InMemoryJobRepository()
+        let laterCreated = job(priority: 5, runAfter: epoch, createdAt: epoch.addingTimeInterval(10))
+        let earlierCreated = job(priority: 5, runAfter: epoch, createdAt: epoch)
+        try await repo.insert(laterCreated)
+        try await repo.insert(earlierCreated)
+
+        let picked = try await repo.claimNext(
+            types: JobType.allCases, excluding: [], now: epoch.addingTimeInterval(100), leaseSeconds: 60
+        )
+        XCTAssertEqual(picked?.id, earlierCreated.id, "тот же priority и runAfter — раньше по createdAt")
+    }
+
+    /// Инвариант 3 C-013, последняя ступень «`id`» (возврат по приёмке MEE-320 — эта ступень
+    /// не проверялась вовсе): при равенстве всех трёх прежних ключей побеждает меньший
+    /// `UUID.uuidString` лексикографически.
+    func test_mee320_claimNext_ordersByIdWhenEverythingElseTies() async throws {
+        let repo = InMemoryJobRepository()
+        let smallerId = try XCTUnwrap(UUID(uuidString: "00000000-0000-0000-0000-000000000001"))
+        let largerId = try XCTUnwrap(UUID(uuidString: "FFFFFFFF-0000-0000-0000-000000000001"))
+        let tiedRunAfter = epoch
+        let tiedCreatedAt = epoch
+        let withSmallerId = job(
+            id: smallerId, priority: 5, runAfter: tiedRunAfter, createdAt: tiedCreatedAt
+        )
+        let withLargerId = job(
+            id: largerId, priority: 5, runAfter: tiedRunAfter, createdAt: tiedCreatedAt
+        )
+        try await repo.insert(withLargerId)
+        try await repo.insert(withSmallerId)
+
+        let picked = try await repo.claimNext(
+            types: JobType.allCases, excluding: [], now: epoch.addingTimeInterval(100), leaseSeconds: 60
+        )
+        XCTAssertEqual(picked?.id, smallerId, "priority, runAfter, createdAt равны — меньший id лексикографически")
     }
 
     /// Инвариант 26 C-010: `claimNext`, взяв кандидата, снимает `attemptStartedAt` в `nil`
@@ -231,10 +270,53 @@ extension InMemoryJobRepositoryTests {
         XCTAssertEqual(byId[started.id]?.attempts, 1, "с отметкой — attempts + 1")
         XCTAssertEqual(byId[started.id]?.lastError, "interrupted")
         XCTAssertEqual(byId[started.id]?.status, .pending)
+        // Формула §5 C-013 (возврат по приёмке MEE-320 — runAfter не проверялся числом):
+        // min(30 * 2^(attempts_new - 1), 1800) = min(30 * 2^0, 1800) = 30 секунд от `now`.
+        XCTAssertEqual(byId[started.id]?.runAfter, epoch.addingTimeInterval(30), "задержка §5: 30 * 2^(1-1)")
 
         XCTAssertEqual(byId[notStarted.id]?.attempts, 1, "без отметки — прежний")
         XCTAssertEqual(byId[notStarted.id]?.status, .pending)
         XCTAssertEqual(byId[notStarted.id]?.runAfter, notStarted.runAfter, "runAfter не тронут — работы не было")
+    }
+
+    /// Инвариант 10 C-013 (через инвариант 11): исчерпаны попытки — переход в `failed`,
+    /// а не в `pending` (возврат по приёмке MEE-320 — эта ветка не проверялась).
+    func test_mee320_reclaimExpiredLeases_transitionsToFailedWhenAttemptsExhausted() async throws {
+        let repo = InMemoryJobRepository()
+        let exhausted = job(
+            status: .running, attempts: 2, maxAttempts: 3,
+            leaseExpiresAt: epoch.addingTimeInterval(-1), attemptStartedAt: epoch.addingTimeInterval(-10)
+        )
+        try await repo.insert(exhausted)
+
+        let reclaimed = try await repo.reclaimExpiredLeases(now: epoch)
+
+        let after = try XCTUnwrap(reclaimed.first)
+        XCTAssertEqual(after.attempts, 3, "attempts_new = 2 + 1 = 3 = maxAttempts")
+        XCTAssertEqual(after.status, .failed, "attempts_new >= maxAttempts — failed, не pending")
+        XCTAssertEqual(after.lastError, "interrupted")
+        XCTAssertNil(after.leaseExpiresAt)
+        XCTAssertNil(after.attemptStartedAt)
+    }
+
+    /// К84: `reclaimExpiredLeases` на нечитаемой строке бросает заданную ошибку — ровно как
+    /// `claimNext` (возврат по приёмке MEE-320 — этот метод в векторах нечитаемости
+    /// отсутствовал).
+    func test_mee320_reclaimExpiredLeases_throwsOnUnreadableRow() async throws {
+        let repo = InMemoryJobRepository()
+        let stale = job(
+            status: .running, leaseExpiresAt: epoch.addingTimeInterval(-1), attemptStartedAt: epoch
+        )
+        try await repo.insert(stale)
+        let corrupted = StorageError.dataCorrupted(entity: "Job", id: stale.id.uuidString, message: "лизинг битый")
+        repo.markUnreadable(jobId: stale.id, error: corrupted)
+
+        do {
+            _ = try await repo.reclaimExpiredLeases(now: epoch)
+            XCTFail("ожидался dataCorrupted")
+        } catch let error as StorageError {
+            XCTAssertEqual(error, corrupted)
+        }
     }
 }
 
@@ -245,6 +327,7 @@ extension InMemoryJobRepositoryTests {
     var epoch: Date { Date(timeIntervalSince1970: 1_000_000) }
 
     private func job(
+        id: UUID = UUID(),
         priority: Int = 0,
         status: JobStatus = .pending,
         attempts: Int = 0,
@@ -256,7 +339,7 @@ extension InMemoryJobRepositoryTests {
         createdAt: Date = Date(timeIntervalSince1970: 1_000_000)
     ) -> Job {
         Job(
-            id: UUID(), type: .transcode, payload: .transcode(recordingId: UUID()), status: status,
+            id: id, type: .transcode, payload: .transcode(recordingId: UUID()), status: status,
             priority: priority, attempts: attempts, maxAttempts: maxAttempts, runAfter: runAfter,
             conditions: JobConditions(
                 requiresACPower: false, forbidWhileRecording: false,

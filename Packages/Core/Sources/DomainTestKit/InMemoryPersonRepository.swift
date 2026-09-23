@@ -138,9 +138,17 @@ public final class InMemoryPersonRepository: PersonRepository, @unchecked Sendab
             if records[identifier] == nil {
                 order.append(identifier)
             }
-            let wasMe = records[identifier]?.isMe ?? false
+            let existing = records[identifier]
+            // Адреса ДОБАВЛЯЮТСЯ, а не заменяются (шапка файла: «адреса добавляются»,
+            // возврат по приёмке MEE-320) — иначе адрес, унесённый предыдущим `upsert`,
+            // остаётся ключом в `emailOwner`, а `person(email:)` находит запись, из чьих
+            // `emails` он уже пропал. Существующий список — первым, новые — следом, без
+            // дублей; порядок стабилен между вызовами.
+            let existingEmails = existing?.emails ?? []
+            let mergedEmails = existingEmails + normalized.filter { !existingEmails.contains($0) }
+            let wasMe = existing?.isMe ?? false
             records[identifier] = PersonRecord(
-                id: identifier, displayName: displayName, emails: normalized, isMe: wasMe
+                id: identifier, displayName: displayName, emails: mergedEmails, isMe: wasMe
             )
             for email in normalized {
                 emailOwner[email] = identifier
