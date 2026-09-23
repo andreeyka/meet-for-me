@@ -88,15 +88,22 @@ extension InMemoryFiveRepositoriesTests {
     /// разрешимым.
     func test_mee320_personRepository_upsertAddsEmailsRatherThanReplacing() async throws {
         let repositories = InMemoryRepositories()
-        let identifier = try await repositories.persons.upsert(displayName: "Аня", emails: ["a@e.example"])
-        let again = try await repositories.persons.upsert(displayName: "Аня", emails: ["a2@e.example"])
-        XCTAssertEqual(identifier, again, "тот же человек — тот же email разрешает владельца")
+        let identifier = try await repositories.persons.upsert(
+            displayName: "Аня", emails: ["a@e.example", "a2@e.example"]
+        )
+        // Второй вызов разрешает владельца по ОДНОМУ из ранее заданных адресов
+        // (`a2@e.example` не подан) — ровно сценарий возврата по приёмке MEE-320: буг был
+        // в том, что такой вызов терял неподанный адрес из `emails`, хотя `emailOwner`
+        // продолжал его разрешать.
+        let again = try await repositories.persons.upsert(displayName: "Аня (правка)", emails: ["a@e.example"])
+        XCTAssertEqual(identifier, again, "тот же человек — a@e.example разрешает владельца")
 
-        let byOldEmail = try await repositories.persons.person(email: "a@e.example")
-        XCTAssertEqual(byOldEmail?.id, identifier, "старый адрес по-прежнему разрешим")
-        let byNewEmail = try await repositories.persons.person(email: "a2@e.example")
-        XCTAssertEqual(byNewEmail?.id, identifier, "новый добавлен")
-        XCTAssertEqual(Set(byOldEmail?.emails ?? []), ["a@e.example", "a2@e.example"], "оба адреса на одной записи")
+        let byOldEmail = try await repositories.persons.person(email: "a2@e.example")
+        XCTAssertEqual(byOldEmail?.id, identifier, "адрес, не поданный повторным upsert, по-прежнему разрешим")
+        XCTAssertEqual(
+            Set(byOldEmail?.emails ?? []), ["a@e.example", "a2@e.example"],
+            "оба адреса остались на записи, а не только поданный"
+        )
     }
 
     /// Инвариант 5: `upsert`, чьи адреса указывают на ДВУХ РАЗНЫХ существующих людей,
