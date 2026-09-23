@@ -1,6 +1,15 @@
 # Карта модулей
 
-Версия 1.3. Утверждена пользователем (MEE-1). Источник: `docs/architecture.md` v0.7.
+Версия 1.4. Утверждена пользователем (MEE-1). Источник: `docs/architecture.md` v0.7.
+Изменение против v1.3: MEE-321, условие Г плана MEE-311 решено прогоном CI — ложно. GRDB (закреплена
+6.29.3) на тулчейне 5.10 компилируется на Linux, но не линкуется: `libsqlite3-dev` Ubuntu собран без
+`SQLITE_ENABLE_SNAPSHOT`, а GRDB ссылается на `sqlite3_snapshot_*` безусловно при компиляторе ≥5.7.1
+(её собственный guard, не наш выбор; downstream-обхода нет — подтверждено discussion groue/GRDB.swift#1821,
+фикс требует правки пяти файлов самого GRDB и не издан). Таргеты `Storage`/`StorageTests` объявлены в
+`Packages/Core/Package.swift` условно (`#if !os(Linux)`) — на Linux их нет в графе вовсе. Следствие для
+§2 и §3 ниже: `storage` перестаёт быть модулем, который DEV-2 может собрать и протестировать в своей
+облачной (Linux) сессии — только на `macos-14` (в CI или локально на Mac); прочие модули DEV-2 это
+ограничение не затрагивает.
 Изменение против v1.2: решение о владельце каталога эталонов сшито со своим номером запроса — §1
 называет теперь оба имени решения, `IR-003` и приёмку MEE-26 (находка 5.2 MEE-211); из живых ссылок
 карты сняты номера изданий контрактов, семь вхождений в четырёх строках, — ссылка в живом месте
@@ -70,7 +79,7 @@ DEV-2 читает эти файлы из своих тестов, но **не �
 | Владелец | Где работает | Модули |
 | -- | -- | -- |
 | DEV-1 | сессия на Mac с Xcode | `capture`, `permissions`, `detector`, `calendar-eventkit` |
-| DEV-2 | облачная сессия (Linux) + проверка на macos-14 в CI | `domain-core`, `storage`, `calendar-hub`, `engine-xpc`, `gigaam`, `model-manager`, `attribution`, `plugin-graph` |
+| DEV-2 | облачная сессия (Linux) + проверка на macos-14 в CI; `storage` — только macos-14 (см. ниже, MEE-321) | `domain-core`, `storage`, `calendar-hub`, `engine-xpc`, `gigaam`, `model-manager`, `attribution`, `plugin-graph` |
 | DEV-3 | сессия на Mac с Xcode | `app-ui` |
 | Архитектор | сессия РП | файлы сборки, `docs/`, контракты |
 
@@ -78,6 +87,15 @@ DEV-2 работает в облаке, поэтому все его модул�
 Foundation, `storage` — Foundation + GRDB, `engine-xpc`/`gigaam` — код инференса отделён от `NSXPCConnection`
 (сама XPC-обвязка проверяется на CI и на Mac). Это не пожелание, а условие, при котором DEV-2 вообще может
 прогнать свои тесты.
+
+**Исключение — `storage`, с MEE-321.** GRDB (зависимость таргета, закреплена версией 6.29.3) на Linux
+компилируется, но не линкуется: `libsqlite3-dev` Ubuntu собран без `SQLITE_ENABLE_SNAPSHOT`, а GRDB
+безусловно ссылается на `sqlite3_snapshot_*` при компиляторе ≥5.7.1 — свойство самого GRDB, не наше
+решение и не обходимое без правки его исходников (downstream-обхода нет, discussion
+groue/GRDB.swift#1821). Таргеты `Storage`/`StorageTests` объявлены в `Packages/Core/Package.swift`
+условно (`#if !os(Linux)`) и на Linux в графе отсутствуют. Следствие: DEV-2 не может собрать и
+прогнать тесты `storage` в своей облачной (Linux) сессии — только на `macos-14`, в CI или локально на
+Mac. Работа `Core (Linux)` `storage` не проверяет вовсе; барьер по нему — исключительно `Core + Mac`.
 
 Объективный барьер приёмки для всех троих — зелёный прогон на macos-14 в GitHub Actions. Локальный прогон
 у DEV-1 и DEV-3 обязателен до PR, но приёмку закрывает CI.
@@ -201,8 +219,12 @@ Foundation, `storage` — Foundation + GRDB, `engine-xpc`/`gigaam` — код и
 ### МОДУЛЬ: storage
 - Слой: хранилище
 - Процесс: App
-- Каталоги: `Packages/Core/Sources/Storage/`, `Packages/Core/Tests/StorageTests/`
+- Каталоги: `Packages/Core/Sources/Storage/`, `Packages/Core/Tests/StorageTests/` — физически в
+  `Packages/Core`, но таргеты объявлены в `Package.swift` условно (`#if !os(Linux)`, MEE-321): на
+  Linux их нет в графе пакета вовсе
 - Владелец: DEV-2
+- Среда: только `macos-14` — ни в CI, ни локально на Linux модуль не собирается (MEE-321, §2 выше);
+  единственная сборка/тесты `storage` — работа `Core + Mac`
 - Реализует контракты: схема SQLite и миграции, репозитории по DTO, FTS5, раскладка файлов записей
 - Потребляет контракты: DTO домена
 - Запрещено: бизнес-решения (что записывать, когда транскрибировать); отдавать наружу типы GRDB —
