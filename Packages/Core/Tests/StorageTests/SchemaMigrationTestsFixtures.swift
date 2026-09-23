@@ -202,7 +202,7 @@ extension SchemaMigrationTests {
     static let expectedChecksByTable: [(table: String, checks: [String])] = [
         ("person_name_forms", ["kind IN ('full','first','last','translit','diminutive','user_added')"]),
         ("meetings", [
-            "status IN ('scheduled','armed','awaitingSignal','recording',"
+            "status IN ('scheduled','armed','awaitingSignal','recording', "
                 + "'stopping','processing','ready','failed','skipped')"
         ]),
         ("attendees", ["response_status IN ('accepted','declined','tentative','needsAction','unknown')"]),
@@ -211,7 +211,7 @@ extension SchemaMigrationTests {
             "end_ms > start_ms",
             "channel IN ('mic','system')",
             "speaker_confidence IS NULL OR (speaker_confidence BETWEEN 0 AND 1)",
-            "attribution_source IN ('micChannel','voiceProfile','oneOnOne',"
+            "attribution_source IN ('micChannel','voiceProfile','oneOnOne', "
                 + "'textualHint','nameDictionary','user')",
             "text_confidence IS NULL OR (text_confidence BETWEEN 0 AND 1)"
         ]),
