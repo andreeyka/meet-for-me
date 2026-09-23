@@ -23,7 +23,7 @@ final class TranscriptRepositoryTests: StorageAsyncTestCase {
 
         try await recordingRepository.delete(recordingId: recordingId, deleteFiles: false)
 
-        let ids = [first.id.uuidString, second.id.uuidString]
+        let ids = StatementArguments([first.id.uuidString, second.id.uuidString])
         let segmentsCount = try temp.database.rawRead { db in
             try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM segments WHERE transcript_id IN (?, ?)", arguments: ids)
         }
