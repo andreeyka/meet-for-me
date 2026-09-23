@@ -44,65 +44,73 @@ final class PortsErrorDictionaryTests: StorageAsyncTestCase {
     // MARK: - К27 (nil/пустая коллекция на отсутствующей сущности)
 
     func testK27_meetingPortReadsOnAbsentEntity() async throws {
-        let (temp, r) = try makeRepositories()
+        let (temp, repos) = try makeRepositories()
         defer { StorageTestSupport.cleanup(temp) }
         let missing = UUID()
         let dedupKey = DedupKey.icalUid("absent", startEpochSeconds: 0)
-        try await Self.assertNilNotThrowing(r.meetings.meeting(id: missing))
-        try await Self.assertNilNotThrowing(r.meetings.meeting(dedupKey: dedupKey))
-        try await Self.assertEmptyNotThrowing(r.meetings.meetings(from: TestFixtures.epoch, to: TestFixtures.epoch))
+        try await Self.assertNilNotThrowing(try await repos.meetings.meeting(id: missing))
+        try await Self.assertNilNotThrowing(try await repos.meetings.meeting(dedupKey: dedupKey))
+        try await Self.assertEmptyNotThrowing(
+            try await repos.meetings.meetings(from: TestFixtures.epoch, to: TestFixtures.epoch)
+        )
     }
 
     func testK27_personPortReadsOnAbsentEntity() async throws {
-        let (temp, r) = try makeRepositories()
+        let (temp, repos) = try makeRepositories()
         defer { StorageTestSupport.cleanup(temp) }
-        try await Self.assertNilNotThrowing(r.persons.person(id: UUID()))
-        try await Self.assertNilNotThrowing(r.persons.person(email: "absent@example.com"))
-        try await Self.assertEmptyNotThrowing(r.persons.persons(ids: [UUID()]))
-        try await Self.assertNilNotThrowing(r.persons.me())
-        try await Self.assertEmptyNotThrowing(r.persons.nameForms(personIds: [UUID()]))
+        try await Self.assertNilNotThrowing(try await repos.persons.person(id: UUID()))
+        try await Self.assertNilNotThrowing(try await repos.persons.person(email: "absent@example.com"))
+        try await Self.assertEmptyNotThrowing(try await repos.persons.persons(ids: [UUID()]))
+        try await Self.assertNilNotThrowing(try await repos.persons.me())
+        try await Self.assertEmptyNotThrowing(try await repos.persons.nameForms(personIds: [UUID()]))
     }
 
     func testK27_recordingPortReadsOnAbsentEntity() async throws {
-        let (temp, r) = try makeRepositories()
+        let (temp, repos) = try makeRepositories()
         defer { StorageTestSupport.cleanup(temp) }
-        try await Self.assertNilNotThrowing(r.recordings.recording(id: UUID()))
-        try await Self.assertEmptyNotThrowing(r.recordings.recordings(meetingId: UUID()))
-        try await Self.assertEmptyNotThrowing(r.recordings.unfinalized())
+        try await Self.assertNilNotThrowing(try await repos.recordings.recording(id: UUID()))
+        try await Self.assertEmptyNotThrowing(try await repos.recordings.recordings(meetingId: UUID()))
+        try await Self.assertEmptyNotThrowing(try await repos.recordings.unfinalized())
     }
 
     func testK27_transcriptPortReadsOnAbsentEntity() async throws {
-        let (temp, r) = try makeRepositories()
+        let (temp, repos) = try makeRepositories()
         defer { StorageTestSupport.cleanup(temp) }
-        try await Self.assertEmptyNotThrowing(r.transcripts.headers(recordingId: UUID()))
-        try await Self.assertNilNotThrowing(r.transcripts.latest(recordingId: UUID()))
-        try await Self.assertNilNotThrowing(r.transcripts.transcript(id: UUID()))
-        try await Self.assertEmptyNotThrowing(r.transcripts.segments(transcriptId: UUID()))
-        try await Self.assertEmptyNotThrowing(r.transcripts.search(query: "absent", limit: 10, offset: 0))
+        try await Self.assertEmptyNotThrowing(try await repos.transcripts.headers(recordingId: UUID()))
+        try await Self.assertNilNotThrowing(try await repos.transcripts.latest(recordingId: UUID()))
+        try await Self.assertNilNotThrowing(try await repos.transcripts.transcript(id: UUID()))
+        try await Self.assertEmptyNotThrowing(try await repos.transcripts.segments(transcriptId: UUID()))
+        try await Self.assertEmptyNotThrowing(try await repos.transcripts.search(query: "absent", limit: 10, offset: 0))
     }
 
     func testK27_speakerProfileAndConnectorAndOutputAndSettingReadsOnAbsentEntity() async throws {
-        let (temp, r) = try makeRepositories()
+        let (temp, repos) = try makeRepositories()
         defer { StorageTestSupport.cleanup(temp) }
-        try await Self.assertNilNotThrowing(r.speakerProfiles.profile(personId: UUID(), modelVersion: "1.0"))
-        try await Self.assertEmptyNotThrowing(r.speakerProfiles.profiles(personIds: [UUID()], modelVersion: "1.0"))
-        try await Self.assertEmptyNotThrowing(r.connectors.all())
-        try await Self.assertEmptyNotThrowing(r.outputs.outputs(meetingId: UUID()))
-        try await Self.assertNilNotThrowing(r.settings.value(forKey: "absent-key"))
+        try await Self.assertNilNotThrowing(
+            try await repos.speakerProfiles.profile(personId: UUID(), modelVersion: "1.0")
+        )
+        try await Self.assertEmptyNotThrowing(
+            try await repos.speakerProfiles.profiles(personIds: [UUID()], modelVersion: "1.0")
+        )
+        try await Self.assertEmptyNotThrowing(try await repos.connectors.all())
+        try await Self.assertEmptyNotThrowing(try await repos.outputs.outputs(meetingId: UUID()))
+        try await Self.assertNilNotThrowing(try await repos.settings.value(forKey: "absent-key"))
     }
 
     func testK27_jobPortReadsOnAbsentEntity() async throws {
-        let (temp, r) = try makeRepositories()
+        let (temp, repos) = try makeRepositories()
         defer { StorageTestSupport.cleanup(temp) }
-        try await Self.assertNilNotThrowing(r.jobs.job(id: UUID()))
-        try await Self.assertNilNotThrowing(r.jobs.activeJob(dedupKey: "absent"))
-        let listing = try await r.jobs.jobs(status: .pending)
+        try await Self.assertNilNotThrowing(try await repos.jobs.job(id: UUID()))
+        try await Self.assertNilNotThrowing(try await repos.jobs.activeJob(dedupKey: "absent"))
+        let listing = try await repos.jobs.jobs(status: .pending)
         XCTAssertTrue(listing.jobs.isEmpty)
         XCTAssertTrue(listing.unreadable.isEmpty)
         try await Self.assertNilNotThrowing(
-            r.jobs.claimNext(types: [.transcode], excluding: [], now: TestFixtures.epoch, leaseSeconds: 60)
+            try await repos.jobs.claimNext(
+                types: [.transcode], excluding: [], now: TestFixtures.epoch, leaseSeconds: 60
+            )
         )
-        try await Self.assertEmptyNotThrowing(r.jobs.reclaimExpiredLeases(now: TestFixtures.epoch))
+        try await Self.assertEmptyNotThrowing(try await repos.jobs.reclaimExpiredLeases(now: TestFixtures.epoch))
     }
 
     private static func assertNilNotThrowing<T>(
@@ -122,17 +130,21 @@ final class PortsErrorDictionaryTests: StorageAsyncTestCase {
     // MARK: - К28 (semь методов бросают notFound; вне них — никогда)
 
     func testK28_sevenMethodsThrowNotFoundOnMissingRow() async throws {
-        let (temp, r) = try makeRepositories()
+        let (temp, repos) = try makeRepositories()
         defer { StorageTestSupport.cleanup(temp) }
-        try await Self.assertNotFound(r.meetings.setStatus(.recording, meetingId: UUID()))
-        try await Self.assertNotFound(r.persons.rename(personId: UUID(), displayName: "x"))
-        try await Self.assertNotFound(r.persons.setMe(personId: UUID()))
-        try await Self.assertNotFound(r.connectors.setCursor("c", connectorId: "absent-connector"))
+        try await Self.assertNotFound(try await repos.meetings.setStatus(.recording, meetingId: UUID()))
+        try await Self.assertNotFound(try await repos.persons.rename(personId: UUID(), displayName: "x"))
+        try await Self.assertNotFound(try await repos.persons.setMe(personId: UUID()))
+        try await Self.assertNotFound(try await repos.connectors.setCursor("c", connectorId: "absent-connector"))
         try await Self.assertNotFound(
-            r.connectors.setSyncOutcome(at: TestFixtures.epoch, error: nil, connectorId: "absent-connector")
+            try await repos.connectors.setSyncOutcome(
+                at: TestFixtures.epoch, error: nil, connectorId: "absent-connector"
+            )
         )
-        try await Self.assertNotFound(r.outputs.markUserEdited(outputId: UUID(), contentMarkdown: "x"))
-        try await Self.assertNotFound(r.transcripts.updateSegmentText(segmentId: -1, text: "x", isUserEdited: true))
+        try await Self.assertNotFound(try await repos.outputs.markUserEdited(outputId: UUID(), contentMarkdown: "x"))
+        try await Self.assertNotFound(
+            try await repos.transcripts.updateSegmentText(segmentId: -1, text: "x", isUserEdited: true)
+        )
     }
 
     private static func assertNotFound(
