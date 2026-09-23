@@ -32,7 +32,7 @@ extension AudioCaptureImpl {
     /// прерывает подвисший `for await` на `AsyncStream`, и пересоздание подписки на каждый
     /// `start()` рисковало бы копить повисшие задачи, державшие `self` сильной ссылкой.
     /// Событие, пришедшее без идущего сеанса, просто отбрасывается проверкой фазы.
-    private func installPowerEventsIfNeeded() {
+    func installPowerEventsIfNeeded() {
         lock.lock()
         let alreadyInstalled = powerEventsInstalled
         powerEventsInstalled = true
