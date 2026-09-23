@@ -84,4 +84,24 @@ public final class StorageDatabase: Sendable {
     public func recordingRepository(fileLayout: FileLayout) -> RecordingRepository {
         GRDBRecordingRepository(database: self, fileLayout: fileLayout)
     }
+
+    public func personRepository() -> PersonRepository {
+        GRDBPersonRepository(database: self)
+    }
+
+    public func speakerProfileRepository() -> SpeakerProfileRepository {
+        GRDBSpeakerProfileRepository(database: self)
+    }
+
+    public func connectorRepository() -> ConnectorRepository {
+        GRDBConnectorRepository(database: self)
+    }
+
+    public func meetingOutputRepository() -> MeetingOutputRepository {
+        GRDBMeetingOutputRepository(database: self)
+    }
+
+    public func settingsRepository() -> SettingsRepository {
+        GRDBSettingsRepository(database: self)
+    }
 }
