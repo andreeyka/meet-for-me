@@ -8,7 +8,7 @@ import Foundation
 import XCTest
 @testable import Capture
 
-final class PromptTimeoutTests: XCTestCase {
+final class PromptTimeoutTests: CaptureAsyncTestCase {
 
     // MARK: - К15. Системный промпт: таймаут
 

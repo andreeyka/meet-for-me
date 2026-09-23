@@ -5,7 +5,7 @@ import Foundation
 import XCTest
 @testable import Capture
 
-final class SessionLifecycleTests: XCTestCase {
+final class SessionLifecycleTests: CaptureAsyncTestCase {
 
     // MARK: - К3. nothingToCapture
 

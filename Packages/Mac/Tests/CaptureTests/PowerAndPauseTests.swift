@@ -5,7 +5,7 @@ import Foundation
 import XCTest
 @testable import Capture
 
-final class PowerAndPauseTests: XCTestCase {
+final class PowerAndPauseTests: CaptureAsyncTestCase {
 
     // MARK: - К23. Удержание системы
 
