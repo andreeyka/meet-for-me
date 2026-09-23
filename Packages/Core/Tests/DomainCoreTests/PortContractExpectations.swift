@@ -136,11 +136,12 @@ extension PortDeclarationTests {
         "func failUnreadable(jobId: UUID, message: String, now: Date) async throws -> JobType?"
     ]
 
-    /// C-013 (MEE-21) §1.1 — дописан MEE-319. Единственный метод, что C-013 даёт
-    /// дословно; развилка по остальному объёму порта — комментарий над объявлением
-    /// в `JobQueue.swift` (`// СТРОКА:`).
+    /// C-013 (MEE-21) §1.1, тип возврата — C-014 v4 (MEE-22) «Определение» §4, дословно.
+    /// Дописан MEE-319; тип возврата исправлен по возврату РП на приёмке MEE-319 (PR #55):
+    /// был `[String]`, стало `[ModelDescriptor]`. Развилка по остальному объёму порта —
+    /// комментарий над объявлением в `ModelCatalogPort.swift` (`// СТРОКА:`).
     static let modelCatalogPort = [
-        "func missingModels(profileId: String) async throws -> [String]"
+        "func missingModels(profileId: String) async throws -> [ModelDescriptor]"
     ]
 
     /// C-018 (MEE-276), «Определение» §3.1.
@@ -199,7 +200,7 @@ extension PortDeclarationTests {
         PortContract(name: "JobHandler", file: "JobQueue.swift", expected: jobHandler),
         PortContract(name: "JobQueue", file: "JobQueue.swift", expected: jobQueue),
         PortContract(name: "JobRepository", file: "JobQueue.swift", expected: jobRepository),
-        PortContract(name: "ModelCatalogPort", file: "JobQueue.swift", expected: modelCatalogPort),
+        PortContract(name: "ModelCatalogPort", file: "ModelCatalogPort.swift", expected: modelCatalogPort),
         PortContract(name: "SessionCoordinator", file: "SessionCoordinator.swift", expected: sessionCoordinator),
         PortContract(name: "Scheduler", file: "SessionCoordinator.swift", expected: scheduler)
     ]

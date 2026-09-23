@@ -172,10 +172,10 @@ extension InMemoryRepositoriesTests {
                        "второго вызова не было: значение до порта не доехало")
     }
 
-    /// Перебор по ВСЕМУ перечислению `RecordingStatus`: тест обязан упасть при добавлении
-    /// значения — способ `З` плана. Счёт значений берётся из самого перечисления, а не пишется
-    /// числом; `RecordingStatus` `CaseIterable` не объявлен, поэтому перечень назван здесь и
-    /// сверен с длиной ответа.
+    /// К85 (дельта К MEE-189, инвариант 28) — вход ЧЕРЕЗ `save()`, а не `seed()`, как
+    /// действующая редакция и требует (правлено по возврату РП на приёмке MEE-319, PR #55).
+    /// Заодно перебор по ВСЕМУ `RecordingStatus` — способ `З`: `RecordingStatus` не
+    /// `CaseIterable`, перечень назван здесь и сверен с длиной ответа.
     func test_mee290_recordingRepository_unfinalizedIsEverythingButFinalized() async throws {
         let repositories = InMemoryRepositories()
         let statuses: [RecordingStatus] = [.recording, .stopping, .finalized, .failed]
@@ -186,7 +186,9 @@ extension InMemoryRepositoriesTests {
             RecordingManifestFixtures.micOnly
         ]
         XCTAssertEqual(statuses.count, manifests.count, "вектор непустоты: на каждый статус своя запись")
-        repositories.recordings.seed(zip(manifests, statuses).map { RecordingRecord(manifest: $0, status: $1) })
+        for (manifest, status) in zip(manifests, statuses) {
+            try await repositories.recordings.save(RecordingRecord(manifest: manifest, status: status))
+        }
         XCTAssertEqual(repositories.recordings.storedRecords.count, 4, "легли все четыре")
 
         let unfinalized = try await repositories.recordings.unfinalized()
