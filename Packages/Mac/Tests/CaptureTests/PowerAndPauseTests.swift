@@ -36,7 +36,8 @@ final class PowerAndPauseTests: CaptureAsyncTestCase {
             XCTFail("ожидался systemAudioDenied")
         } catch CaptureError.systemAudioDenied {}
 
-        XCTAssertEqual(harness.power.beginActivityCallCount, 0, "токен вообще не берётся, пока start не дошёл до сборки")
+        XCTAssertEqual(harness.power.beginActivityCallCount, 0,
+                       "токен вообще не берётся, пока start не дошёл до сборки")
         XCTAssertEqual(harness.power.liveActivities.count, 0)
     }
 
