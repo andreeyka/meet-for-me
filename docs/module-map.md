@@ -1,6 +1,11 @@
 # Карта модулей
 
-Версия 1.17. Утверждена пользователем (MEE-1). Источник: `docs/architecture.md` v0.7.
+Версия 1.18. Утверждена пользователем (MEE-1). Источник: `docs/architecture.md` v0.7.
+Изменение против v1.17: хвосты приёмки IR-080 (MEE-381), п. (а) — обе ссылки «C-013 §8» вели в никуда: в C-013
+раздел «Определение» кончается §7, восьмого нет. Решение и его цена стоят в архивном разделе C-013 «Ломающие
+изменения v12 против v11» (сохранено для истории). Живая ссылка в разделе «МОДУЛЬ: domain-core» ниже правлена
+на этот раздел по имени; одноимённая ссылка в записи «Изменение против v1.15» ниже не правится — она
+историческая и корректно передаёт то, что было сказано на тот момент.
 Изменение против v1.16: малый возврат РП по IR-080 (MEE-175), п. 5 — раздел «МОДУЛЬ: domain-core» называл
 у обработчика задачи `attribute` четыре репозитория и не называл `AppFacade`, хотя C-015 §7 (та же правка)
 уже называет: обработчик читает `AppFacade.settings()`, чтобы узнать, выключены ли голосовые профили.
@@ -245,8 +250,9 @@ Mac. Работа `Core (Linux)` `storage` не проверяет вовсе; �
 - Реализует контракты: DTO (`MeetingEvent`, `RecordingManifest`, `Transcript`, `JoinInfo`, `MeetingSignal`), определения портов
   (`AudioCapturePort`, `CalendarPort`, `PermissionsPort`, `ProcessMonitorPort`, `PowerPort`), правило дедупа
   `DedupKey.make(from:)` (C-005 — «владеет определением порта и правилом дедупа») [v1.7, IR-118], машина состояний
-  `SessionCoordinator`, `Scheduler`, интерфейс `JobQueue`, обработчик задачи `attribute` (C-013 §8, C-015 §7 —
-  IR-080) поверх `AttributionPort`/`MeetingRepository`/`TranscriptRepository`/`PersonRepository`/`SpeakerProfileRepository`/`AppFacade`,
+  `SessionCoordinator`, `Scheduler`, интерфейс `JobQueue`, обработчик задачи `attribute` (C-013, раздел
+  «Ломающие изменения v12 против v11»; C-015 §7 — IR-080) поверх
+  `AttributionPort`/`MeetingRepository`/`TranscriptRepository`/`PersonRepository`/`SpeakerProfileRepository`/`AppFacade`,
   фейки всех портов в `DomainTestKit`
 - Потребляет контракты: —
 - Запрещено: импорт AppKit, SwiftUI, AVFoundation, CoreAudio, EventKit, GRDB, XPC. Только Foundation.
