@@ -32,8 +32,10 @@
 import argparse
 import glob
 import os
+import re
 import subprocess
 import sys
+import tempfile
 
 # Инвариант 27 C-010 запрещает ровно эти два конструктора — цитата дословная.
 # Обе формы на каждый: `JSONDecoder()` в вызывающем коде компилируется в вызов
@@ -52,22 +54,43 @@ FORBIDDEN_CALLS = [
 ]
 
 
+def object_dir_pattern(target):
+    """Имя каталога object-файлов таргета — по имени, не по фиксированному суффиксу.
+
+    Возврат РП 24.09, п.3: шаблон `%s.build` считал раскладку неизменной
+    приметой тулчейна Swift 5.10. В Swift 6.x тот же каталог называется
+    `<Target>-t.build` — с этим суффиксом старый шаблон не совпадает ни разу,
+    и шаг упал бы явным отказом («object-файлов таргета не найдено») на
+    первой же смене тулчейна, не проверив ничего. Здесь — по имени таргета
+    и границе слова: либо ровно `<Target>.build`, либо `<Target>-<хвост>.build`
+    (`-t`, будущий суффикс любой формы). Граница обязательна: без нее
+    `Engine*.build` совпал бы и с `EngineKit.build`, и с `EngineXPCClient.build`
+    — разными таргетами с общим префиксом имени.
+    """
+    return re.compile(r"^%s(?:\.build|-[^/]+\.build)$" % re.escape(target))
+
+
 def find_object_files(build_dir, target):
     """Object-файлы одного таргета до линковки.
 
-    Раскладка — легаси-сборка SwiftPM: `<build_dir>/**/<Target>.build/**/*.o`.
-    Если раскладка сменится версией тулчейна, шаг обязан упасть явным
-    отказом (пустой список ниже), а не молча решить, что проверять нечего.
+    Каталог ищется по имени (`object_dir_pattern`), не по фиксированной
+    раскладке `<Target>.build` — переживает смену суффикса тулчейном
+    (возврат РП 24.09, п.3). Если каталог таргета не найден вовсе, список
+    пуст, и это отказ шага (`run` ниже), а не молчаливое «проверять нечего».
 
     Дедуп по `realpath` — несущий, не украшение: `.build/debug` в SwiftPM
     сам есть симлинк на `.build/<triple>/debug` (прогон 35934656184 нашёл
     оба пути на один и тот же файл), и без дедупа отчёт вдвое завышал бы
     число объектников и число символов, не меняя вердикт по существу.
     """
-    pattern = os.path.join(build_dir, "**", "%s.build" % target, "**", "*.o")
+    pattern = object_dir_pattern(target)
     seen_real = {}
-    for path in glob.glob(pattern, recursive=True):
-        seen_real.setdefault(os.path.realpath(path), path)
+    for root, dirs, _ in os.walk(build_dir):
+        for name in dirs:
+            if not pattern.match(name):
+                continue
+            for path in glob.glob(os.path.join(root, name, "**", "*.o"), recursive=True):
+                seen_real.setdefault(os.path.realpath(path), path)
     return sorted(seen_real.values())
 
 
@@ -216,7 +239,29 @@ def self_test():
         demangle_failures += 1
     print("self-test undefined_symbol_names/demangle (через фиктивный nm): отказов %d" % demangle_failures)
 
-    return 1 if failures or demangle_failures else 0
+    # Возврат РП 24.09, п.3: раскладка объектников по имени таргета, не по фиксированному
+    # суффиксу `.build` — на настоящей файловой системе, обе раскладки сразу (Swift 5.10
+    # и предполагаемая Swift 6.x), плюс соседний таргет с общим префиксом имени
+    # (`Engine`/`EngineKit`), который граница слова обязана не задеть.
+    object_dir_failures = 0
+    with tempfile.TemporaryDirectory() as build_dir:
+        layouts = {
+            os.path.join(build_dir, "debug", "Storage.build"): "storage_510.o",           # Swift 5.10
+            os.path.join(build_dir, "arm64-apple-macosx", "debug", "Storage-t.build"): "storage_6x.o",  # Swift 6.x
+            os.path.join(build_dir, "debug", "EngineKit.build"): "enginekit.o",            # общий префикс "Engine"
+        }
+        for directory, filename in layouts.items():
+            os.makedirs(directory, exist_ok=True)
+            open(os.path.join(directory, filename), "w").close()
+        found = {os.path.basename(p) for p in find_object_files(build_dir, "Storage")}
+        expected_found = {"storage_510.o", "storage_6x.o"}
+        if found != expected_found:
+            print("ОТКАЗ self-test: find_object_files(target=Storage) нашёл %r, ожидалось %r"
+                  % (found, expected_found))
+            object_dir_failures += 1
+    print("self-test find_object_files (раскладка по суффиксу тулчейна): отказов %d" % object_dir_failures)
+
+    return 1 if failures or demangle_failures or object_dir_failures else 0
 
 
 def main():
