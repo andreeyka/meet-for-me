@@ -342,27 +342,59 @@ extension CalendarPortImpl {
             emit(.deleted([record.event.id]))
             return true
         }
-        // СТРОКА (возврат РП, приёмка #85, дефект 5 — проверено против C-005 п.4 по его
-        // прямому требованию): К65 вход Б — источник теряется у многоисточниковой встречи,
-        // «не .deleted» соблюдено. Контракт НЕ говорит явно, обязан ли `event` при этом
-        // пересчитываться по оставшимся источникам заново, если проигравший (уже удалённый)
-        // источник был победителем правила слияния п.2-3 — молчание того же рода, что
-        // К20-К24/К28 (MeetingSource без сырых полей источника, IR-126/MEE-372): честное
-        // слияние скаляров по правилу «победитель — источник» здесь так же неисполнимо без
-        // той же схемы. Вилка не решена мной:
-        // (а) как сейчас — `event` не пересчитывается, источник просто убирается из списка;
-        //     до IR-126 остаётся тем же временным «последний пишет поверх», что у К20-К24;
-        // (б) `event` обязан пересчитываться по оставшимся источникам сразу, тем же
-        //     проходом `applyIncoming` использовал бы для НОВОГО входящего payload — требует
-        //     ту же схему (per-source сырые поля), которой сегодня нет.
-        // Не меняю поведение до решения IR-126 (инструкция РП, приёмка #85) — находка та же,
-        // не вторая.
         let remaining = record.sources.filter {
             !($0.sourceConnectorId == source.rawValue && $0.externalId == externalId)
         }
+        // Возврат РП (MEE-385, инв. 10 C-005): К65 вход Б — источник теряется у
+        // многоисточниковой встречи. Identity (sourceConnectorId/externalId/icalUid)
+        // ПЕРЕСЧИТЫВАЕТСЯ ВСЕГДА шагом 1 (наибольший lastModified среди оставшихся
+        // строк, тай-брейк — лексикографически меньший sourceConnectorId), даже когда
+        // ушедший источник был identity и снимков (`MeetingSource.payload`) у оставшихся
+        // сегодня ещё нет ни у одного (перенос payload в applyIncoming — следующий шаг
+        // этой же задачи). Без пересчёта, если ушедший источник был identity, `save`
+        // бросает constraintViolation: `sourcesIncludingOwnIdentity` (storage) не находит
+        // identity `event` среди `remaining` и синтезировать её не вправе (инв. 31 C-010
+        // v18 — синтез снимка собственной identity разрешён только при первом сохранении
+        // с одним источником, не здесь).
+        //
+        // Содержимое (шаги 2-3 — title/start/…/conference) НЕ пересчитывается тем же
+        // инвариантом 10, пока ни у одного оставшегося источника нет снимка: `event`
+        // остаётся тем, каким был, кроме identity-полей. Полное слияние по снимкам —
+        // применится само, как только applyIncoming начнёт переносить `payload` (следующий
+        // коммит этой же задачи, MEE-385).
+        let recomputedEvent = try Self.recomputingIdentity(of: record.event, remaining: remaining)
         try await meetingRepository.save(
-            MeetingRecord(event: record.event, dedupKey: record.dedupKey, status: record.status, sources: remaining)
+            MeetingRecord(
+                event: recomputedEvent, dedupKey: DedupKey.make(from: recomputedEvent),
+                status: record.status, sources: remaining
+            )
         )
         return false
+    }
+
+    /// Шаг 1 правила слияния C-005 (наибольший `lastModified`, тай-брейк — лексикографически
+    /// меньший `sourceConnectorId`) над IDENTITY-полями (`sourceConnectorId`/`externalId`/
+    /// `icalUid`) оставшихся источников — инв. 10 C-005 требует пересчёта identity всегда,
+    /// независимо от того, пересчитывается ли содержимое. `remaining` непусто по построению
+    /// (вызывающая сторона уже отделила случай `count <= 1` до вызова).
+    private static func recomputingIdentity(of event: MeetingEvent, remaining: [MeetingSource]) throws -> MeetingEvent {
+        let winner = remaining.min { lhs, rhs in
+            lhs.lastModified != rhs.lastModified
+                ? lhs.lastModified > rhs.lastModified
+                : lhs.sourceConnectorId < rhs.sourceConnectorId
+        }!
+        guard winner.sourceConnectorId != event.sourceConnectorId
+            || winner.externalId != event.externalId
+            || winner.icalUid != event.icalUid
+        else {
+            return event
+        }
+        return try MeetingEvent(
+            id: event.id, sourceConnectorId: winner.sourceConnectorId, externalId: winner.externalId,
+            icalUid: winner.icalUid, title: event.title, start: event.start, end: event.end,
+            timeZone: event.timeZone, isAllDay: event.isAllDay, isCancelled: event.isCancelled,
+            organizer: event.organizer, attendees: event.attendees, location: event.location,
+            bodyText: event.bodyText, conference: event.conference, lastModified: event.lastModified
+        )
     }
 }
