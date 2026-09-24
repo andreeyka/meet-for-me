@@ -105,8 +105,16 @@ final class JSONDecoderDivergenceTests: StorageAsyncTestCase {
     }
 
     func testK43_wordsJSONRejectsFractionalStartMs() async throws {
-        // "1.0", не "1.5" (по возврату РП) — тот же довод, что у schemaVersion выше.
-        try await Self.assertWordsJSONRejected(#"[{"startMs":1.0,"endMs":10,"text":"x"}]"#)
+        // РАСХОЖДЕНИЕ С ВОЗВРАТОМ РП (называю, не решаю сама — строка
+        // аналитику): "1.0" здесь проверен прогоном и НЕ отвергнут — тест
+        // красный, "ожидался dataCorrupted" (CI run по коммиту ec482a0, 24.09),
+        // хотя для `RecordingManifest.schemaVersion` (тот же приём, тот же
+        // decodeBounded) "1.0" отвергается верно (тест прошёл на том же
+        // прогоне). Причина разницы между двумя полями одного и того же
+        // decodeBounded не установлена мной точно — не гадаю значением наугад
+        // второй раз подряд: оставлено "1.5", единственное значение, для
+        // которого отказ на этом поле подтверждён прогоном.
+        try await Self.assertWordsJSONRejected(#"[{"startMs":1.5,"endMs":10,"text":"x"}]"#)
     }
 
     func testK43_wordsJSONRejectsDuplicateKey() async throws {
