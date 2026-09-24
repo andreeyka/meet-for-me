@@ -123,6 +123,27 @@ final class NormalizationTests: XCTestCase {
         } catch ConnectorError.protocolViolation(_) {}
     }
 
+    /// Возврат РП (Д12, 24.09): `FixedPlatformResolver` (DomainTestKit) не хранит `source`, с
+    /// которым его вызвали, — этот, локальный, фейк теста записывает каждый вызов целиком
+    /// (текст и `source`), чтобы доказать порядок полей и то, что `.conferenceField` не звучит
+    /// никогда (у EventKit-источника структурного поля `conference` нет).
+    private final class RecordingPlatformResolver: PlatformResolver, @unchecked Sendable {
+        private let answers: [String: JoinInfo]
+        private(set) var calls: [(text: String, source: JoinInfo.Source)] = []
+
+        init(answers: [String: JoinInfo]) { self.answers = answers }
+
+        func resolve(event: MeetingEvent) -> JoinInfo? { nil }
+        func resolve(text: String, source: JoinInfo.Source) -> JoinInfo? {
+            calls.append((text, source))
+            return answers[text]
+        }
+        func clientBundleIds(for provider: String) -> [String] { [] }
+        func allKnownClientBundleIds() -> [String] { [] }
+        func provider(forAppKey appKey: String) -> String? { nil }
+        func isBrowser(appKey: String) -> Bool { false }
+    }
+
     /// C-009 v11 закрыл IR-118: разбор ссылки на созвон делает `PlatformResolver.resolve(
     /// text:source:)`, инжектированный составным корнем (`app-ui`) — коннектор больше не ведёт
     /// собственную эвристику по доменам (снятая развилка Р4). Порядок — `location`, затем
@@ -131,34 +152,76 @@ final class NormalizationTests: XCTestCase {
     func test_k16_conferenceHeuristicMatchesKnownProviderAndAbsence() async throws {
         let zoomJoinInfo = JoinInfo(
             provider: "zoom", joinUrl: URL(string: "https://zoom.us/j/123456789")!,
-            meetingId: "123456789", passcode: nil, clientBundleIds: [], source: .location
+            meetingId: "123456789", passcode: "042", clientBundleIds: [], source: .location
         )
         let meetJoinInfo = JoinInfo(
             provider: "meet", joinUrl: URL(string: "https://meet.google.com/abc-defg-hij")!,
-            meetingId: nil, passcode: nil, clientBundleIds: [], source: .bodyText
+            meetingId: "abc-defg-hij", passcode: nil, clientBundleIds: [], source: .bodyText
         )
-        let harness = Harness(platformResolver: FixedPlatformResolver(answers: [
+        // Д11: ответ у резолвера ЕСТЬ и на этот текст — если бы `url` события уходил в
+        // резолвер, `evt-url-only` получил бы `conference`; ожидание ниже — не получит.
+        let unusedUrlJoinInfo = JoinInfo(
+            provider: "teams", joinUrl: URL(string: "https://teams.microsoft.com/l/meetup-join/xyz")!,
+            meetingId: nil, passcode: nil, clientBundleIds: [], source: .location
+        )
+        let resolver = RecordingPlatformResolver(answers: [
             "https://zoom.us/j/123456789": zoomJoinInfo,
-            "заметки со ссылкой meet": meetJoinInfo
-        ]))
+            "заметки со ссылкой meet": meetJoinInfo,
+            "https://teams.microsoft.com/l/meetup-join/xyz": unusedUrlJoinInfo
+        ])
+        let harness = Harness(platformResolver: resolver)
         try await harness.initialize()
         harness.permissions.setStatus(.granted, for: .calendars)
         harness.gateway.setEvents([
             .fixture(externalId: "evt-location", location: "https://zoom.us/j/123456789"),
             .fixture(externalId: "evt-bodytext", location: "Переговорка 3", notes: "заметки со ссылкой meet"),
-            .fixture(externalId: "evt-none", location: "Переговорка 3")
+            .fixture(externalId: "evt-none", location: "Переговорка 3"),
+            // Д10 (блокирует): ОБА поля совпадают со словарём — побеждает `location`.
+            .fixture(
+                externalId: "evt-both-match", location: "https://zoom.us/j/123456789",
+                notes: "заметки со ссылкой meet"
+            ),
+            // Д11 (блокирует): у события есть `url`, для которого у резолвера ЕСТЬ ответ.
+            .fixture(
+                externalId: "evt-url-only", location: "Переговорка 3",
+                url: URL(string: "https://teams.microsoft.com/l/meetup-join/xyz")
+            )
         ])
 
         let payloads = try await fetch(harness)
+
         let locationPayload = try XCTUnwrap(payloads.first { $0.externalId == "evt-location" })
         XCTAssertEqual(locationPayload.conference?.provider, "zoom")
         XCTAssertEqual(locationPayload.conference?.joinUrl.absoluteString, "https://zoom.us/j/123456789")
+        XCTAssertEqual(locationPayload.conference?.meetingId, "123456789", "meetingId переносится из JoinInfo")
+        XCTAssertEqual(locationPayload.conference?.passcode, "042", "passcode переносится из JoinInfo")
 
         let bodyTextPayload = try XCTUnwrap(payloads.first { $0.externalId == "evt-bodytext" })
         XCTAssertEqual(bodyTextPayload.conference?.provider, "meet", "location не совпал — проверен bodyText")
+        XCTAssertEqual(bodyTextPayload.conference?.meetingId, "abc-defg-hij")
 
         let nonePayload = try XCTUnwrap(payloads.first { $0.externalId == "evt-none" })
         XCTAssertNil(nonePayload.conference, "нет ответа резолвера ни на одном поле — не отказ")
+
+        // Д10 (блокирует): оба поля совпадают — побеждает location, не bodyText.
+        let bothMatchPayload = try XCTUnwrap(payloads.first { $0.externalId == "evt-both-match" })
+        XCTAssertEqual(bothMatchPayload.conference?.provider, "zoom", "оба поля совпали — победил location")
+
+        // Д11 (блокирует): url события не уходит в резолвер — тот же текст в словаре не сработал.
+        let urlOnlyPayload = try XCTUnwrap(payloads.first { $0.externalId == "evt-url-only" })
+        XCTAssertNil(urlOnlyPayload.conference, "url события не источник для PlatformResolver")
+
+        // Д12 (блокирует): состав и порядок вызовов резолвера — .location, затем .bodyText
+        // (только когда location не совпал), .conferenceField — никогда.
+        XCTAssertTrue(resolver.calls.allSatisfy { $0.source != .conferenceField }, ".conferenceField не звучит никогда")
+        let locationCall = resolver.calls.first { $0.text == "https://zoom.us/j/123456789" }
+        XCTAssertEqual(locationCall?.source, .location, "location размечен верным source")
+        // Тот же текст notes несут ДВА события (`evt-bodytext` и `evt-both-match`), но у
+        // `evt-both-match` location совпал первым — `??` не вычисляет правую часть вовсе,
+        // резолвер обязан увидеть этот текст РОВНО один раз (от `evt-bodytext`).
+        let bodyTextCallsForSharedText = resolver.calls.filter { $0.text == "заметки со ссылкой meet" }
+        XCTAssertEqual(bodyTextCallsForSharedText.count, 1, "bodyText не запрошен для evt-both-match")
+        XCTAssertEqual(bodyTextCallsForSharedText.first?.source, .bodyText, "bodyText размечен верным source")
     }
 
     func test_k17_dateRepresentabilityThreeFieldsGroup() async throws {

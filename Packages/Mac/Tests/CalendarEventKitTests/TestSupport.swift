@@ -59,12 +59,14 @@ struct Harness {
     let gateway = FakeEventKitGateway()
     let permissions = FakePermissionsPort(startingStatus: .granted, startingOutcome: .granted, checkedAt: Date())
     let host = FakeConnectorHostServices()
-    let platformResolver: FixedPlatformResolver
+    let platformResolver: PlatformResolver
     let connector: EventKitConnector
 
-    /// - Parameter platformResolver: словарь «текст → `JoinInfo`» для К16 (IR-118, C-009 v11);
-    ///   пустой — достаточный вход для тестов, не касающихся `conference`.
-    init(platformResolver: FixedPlatformResolver = FixedPlatformResolver(answers: [:])) {
+    /// - Parameter platformResolver: резолвер для К16 (IR-118, C-009 v11) — `FixedPlatformResolver`
+    ///   с пустым словарём для тестов, не касающихся `conference`; возврат РП (Д12, 24.09) — тип
+    ///   параметра сужен до протокола `PlatformResolver`, чтобы принимать и локальные
+    ///   записывающие фейки теста (тот фиксирует не только ответ, но и `source` вызова).
+    init(platformResolver: PlatformResolver = FixedPlatformResolver(answers: [:])) {
         self.platformResolver = platformResolver
         connector = EventKitConnector(gateway: gateway, permissions: permissions, platformResolver: platformResolver)
     }
