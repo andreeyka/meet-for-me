@@ -114,7 +114,7 @@ extension DedupAndMergeTests {
         let permutations = [
             [payloadA, payloadB, payloadC], [payloadA, payloadC, payloadB],
             [payloadB, payloadA, payloadC], [payloadB, payloadC, payloadA],
-            [payloadC, payloadA, payloadB], [payloadC, payloadB, payloadA],
+            [payloadC, payloadA, payloadB], [payloadC, payloadB, payloadA]
         ]
 
         let fixedId = UUID()

@@ -349,7 +349,8 @@ final class ControlSurfaceEntryPointsTests: XCTestCase {
 
         let firstTask = Task { await harness.hub.sync(trigger: .manual) }
         await pollUntil { meetingRepositorySaveCallCount(harness.meetingRepository) >= 1 }
-        let firstGenerationTask = await harness.hub.inFlightSync[source]?.task
+        let firstGeneration = await harness.hub.inFlightSync[source]
+        let firstGenerationTask = firstGeneration?.task
         XCTAssertNotNil(firstGenerationTask, "первое поколение обязано существовать на этот момент")
         firstTask.cancel()
         let firstResults = await firstTask.value
