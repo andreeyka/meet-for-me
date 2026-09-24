@@ -57,6 +57,25 @@ BASELINE_MODULES = {
     "FoundationNetworking",             # Linux-половина Foundation; C-014 §6 её и называет
 }
 
+# Возврат РП по IR-124 (MEE-367) на #88: первая правка держала это глобальным
+# списком ПАР типов в `type_allowed` — довод был верный (компиляторный довесок к
+# `public actor`, не выбор автора), а способ — нет: жёсткий список из четырёх имён
+# ослаблял ВСЕ восемь разрешённых списков сразу (настоящий `Swift.UInt` в чужой
+# сигнатуре молча проходил бы тоже) и не пережил бы смену версии Xcode — другая
+# версия несёт актору ещё `SerialExecutor`/`SendableMetatype` тем же путём, и
+# список из четырёх снова разошёлся бы с находкой MEE-74 п.5 c реальностью.
+# Решено вместо этого — не разрешать по ИМЕНИ типа нигде, а не ДОБАВЛЯТЬ в
+# `referenced` вовсе, каждое по своему источнику:
+#   * `assumeIsolated`/`assertIsolated`/`preconditionIsolated` (несут `file:
+#     StaticString`/`line: UInt`) — СИНТЕЗИРОВАНЫ компилятором для `public actor`,
+#     не написаны автором: их USR несёт `::SYNTHESIZED::` (`surface_of` их
+#     пропускает целиком — ни в `declared`, ни в `referenced`);
+#   * `Actor`/`AnyActor` — приходят ТОЛЬКО связью `conformsTo` (`public actor`
+#     конформит им синтетически, не декларацией) — пропускаются на том же месте,
+#     где `surface_of` разбирает `relationships`, и только там: `type_allowed`
+#     этих имён нигде не знает и знать не должен.
+ACTOR_CONFORMANCE_BASELINE = {"Actor", "AnyActor"}  # только модуль _Concurrency, только kind == conformsTo
+
 # Единственное место, где шаг называет таргет по имени. Основание — инвариант 32
 # C-014 дословно: «`@_exported import` любого модуля … запрещён здесь дословно»,
 # и там же: «запрет обязан проверяться чтением строк `import`, потому что графом
@@ -186,6 +205,14 @@ def surface_of(graph_files):
     Идентификатор самого объявляемого символа исключается — иначе публичный тип
     модуля-реализатора даёт ложный красный на собственном имени (критерий 45 MEE-74,
     те же две оговорки стоят в инварианте 10 C-007 и в допуске (в) инварианта 32 C-014).
+
+    IR-124 (MEE-367), возврат РП: символы с `::SYNTHESIZED::` в USR — компиляторный
+    довесок (у `public actor` это `assumeIsolated`/`assertIsolated`/
+    `preconditionIsolated`), не объявление автора модуля — пропускаются целиком, до
+    попадания и в `declared`, и в `referenced` (иначе их параметры `file:
+    StaticString`/`line: UInt` пришлось бы допускать списком контракта или именным
+    исключением в `type_allowed`, ослабляя барьер для настоящих `StaticString`/`UInt`
+    в чужих сигнатурах).
     """
     declared = []
     referenced = {}
@@ -196,6 +223,8 @@ def surface_of(graph_files):
             if symbol.get("accessLevel") not in PUBLIC_LEVELS:
                 continue
             own = symbol.get("identifier", {}).get("precise")
+            if own and "::SYNTHESIZED::" in own:
+                continue
             public_usrs.add(own)
             declared.append({
                 "usr": own,
@@ -211,7 +240,8 @@ def surface_of(graph_files):
     # Списки наследования и соответствия приезжают отдельно (инвариант 32 C-014).
     for _, graph in graph_files:
         for relation in graph.get("relationships", []):
-            if relation.get("kind") not in ("conformsTo", "inheritsFrom"):
+            kind = relation.get("kind")
+            if kind not in ("conformsTo", "inheritsFrom"):
                 continue
             if relation.get("source") not in public_usrs:
                 continue
@@ -219,7 +249,14 @@ def surface_of(graph_files):
             if not target or target in public_usrs:
                 continue
             fallback = relation.get("targetFallback") or target
-            referenced.setdefault(target, fallback.split(".")[-1])
+            spelling = fallback.split(".")[-1]
+            # IR-124 (MEE-367), возврат РП: `Actor`/`AnyActor` — синтетический
+            # конформанс `public actor`, не декларация автора — не идут в
+            # `referenced` вовсе, и только по этому пути (`conformsTo`, модуль
+            # `_Concurrency`); та же пара, найденная иначе, сюда не подпадает.
+            if kind == "conformsTo" and module_of(target) == "_Concurrency" and spelling in ACTOR_CONFORMANCE_BASELINE:
+                continue
+            referenced.setdefault(target, spelling)
 
     return len(declared), referenced, declared
 
@@ -277,6 +314,15 @@ def type_allowed(module, spelling, target, repo_modules, allowed_entry):
     (MEE-166), этой правкой не тронутый: любой модуль ЭТОГО репозитория
     (`repo_modules`) или базовый набор (`BASELINE_MODULES`) — возврат РП
     указывал находку только для таргетов со списком, не для непокрытых.
+
+    IR-124 (MEE-367): `Actor`/`AnyActor`/синтезированные `StaticString`/`UInt`
+    (компиляторный довесок к `public actor`) сюда не доходят вовсе — `surface_of`
+    не кладёт их в `referenced` по своему источнику каждый (см. её docstring),
+    а не потому, что эта функция знает их по имени. Заводить здесь список пар для
+    них — находка возврата РП по первой попытке: жёсткий список имён ослабил бы
+    проверку для НАСТОЯЩЕГО `Swift.UInt`/`Swift.StaticString` в чужой сигнатуре
+    (он молча прошёл бы тоже) и не пережил бы версию Xcode, несущую актору ещё
+    `SerialExecutor`/`SendableMetatype` тем же путём.
     """
     if module == target:
         return True
@@ -555,7 +601,63 @@ def self_test():
         print("ОТКАЗ self-test: parse_allowed_type(%r) ожидалось %r, получено %r" % (entry, expected, got))
     print("self-test parse_allowed_type: случаев %d, отказов %d" % (len(parse_cases), len(parse_failures)))
 
-    return 1 if failures or type_failures or validation_failures or parse_failures else 0
+    # IR-124 (MEE-367), возврат РП: минимальный поддельный граф `public actor` —
+    # доказывает, что синтезированные методы и конформанс Actor/AnyActor не
+    # доходят до `referenced`, а обычная ссылка и обычный конформанс (Sendable) —
+    # доходят, то есть фильтр узкий, а не блокирует `conformsTo` целиком.
+    fake_actor_graph = {
+        "symbols": [
+            {
+                "accessLevel": "public",
+                "identifier": {"precise": "s:9FakeActorC"},
+                "kind": {"identifier": "swift.class"},
+                "pathComponents": ["FakeActor"],
+                "declarationFragments": [],
+            },
+            {
+                "accessLevel": "public",
+                "identifier": {"precise": "s:9FakeActorC3runyyF"},
+                "kind": {"identifier": "swift.method"},
+                "pathComponents": ["FakeActor", "run"],
+                "declarationFragments": [
+                    {"preciseIdentifier": "s:10Foundation3URLV", "spelling": "URL"},
+                ],
+            },
+            {
+                "accessLevel": "public",
+                "identifier": {"precise": "s:9FakeActorC::SYNTHESIZED::14assumeIsolatedyxxSgYKXEKF"},
+                "kind": {"identifier": "swift.method"},
+                "pathComponents": ["FakeActor", "assumeIsolated"],
+                "declarationFragments": [
+                    {"preciseIdentifier": "s:12StaticStringV", "spelling": "StaticString"},
+                    {"preciseIdentifier": "s:Su", "spelling": "UInt"},
+                ],
+            },
+        ],
+        "relationships": [
+            {"kind": "conformsTo", "source": "s:9FakeActorC", "target": "s:ScA",
+             "targetFallback": "_Concurrency.Actor"},
+            {"kind": "conformsTo", "source": "s:9FakeActorC", "target": "s:s8SendableP",
+             "targetFallback": "Swift.Sendable"},
+        ],
+    }
+    surface_count, surface_referenced, surface_declared = surface_of([("Fake.symbols.json", fake_actor_graph)])
+    surface_checks = [
+        ("declared не несёт SYNTHESIZED-символ",
+         all("::SYNTHESIZED::" not in d["usr"] for d in surface_declared)),
+        ("declared считает ровно 2 (актор + run, без SYNTHESIZED)", surface_count == 2),
+        ("обычная ссылка URL дошла до referenced", surface_referenced.get("s:10Foundation3URLV") == "URL"),
+        ("StaticString синтезированного метода НЕ дошёл", "s:12StaticStringV" not in surface_referenced),
+        ("UInt синтезированного метода НЕ дошёл", "s:Su" not in surface_referenced),
+        ("Actor (conformsTo) НЕ дошёл", "s:ScA" not in surface_referenced),
+        ("Sendable (conformsTo, не Actor/AnyActor) дошёл", surface_referenced.get("s:s8SendableP") == "Sendable"),
+    ]
+    surface_failures = [label for label, ok in surface_checks if not ok]
+    for label in surface_failures:
+        print("ОТКАЗ self-test surface_of: %s" % label)
+    print("self-test surface_of: случаев %d, отказов %d" % (len(surface_checks), len(surface_failures)))
+
+    return 1 if failures or type_failures or validation_failures or parse_failures or surface_failures else 0
 
 
 def main():
