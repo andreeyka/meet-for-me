@@ -149,7 +149,7 @@ final class NormalizationTests: XCTestCase {
     /// собственную эвристику по доменам (снятая развилка Р4). Порядок — `location`, затем
     /// `bodyText` (структурного поля `conference` у EventKit-источника нет, инв. 3 C-009),
     /// первое совпадение побеждает.
-    func test_k16_conferenceHeuristicMatchesKnownProviderAndAbsence() async throws {
+    func test_k29_conferenceHeuristicMatchesKnownProviderAndAbsence() async throws {
         let zoomJoinInfo = JoinInfo(
             provider: "zoom", joinUrl: URL(string: "https://zoom.us/j/123456789")!,
             meetingId: "123456789", passcode: "042", clientBundleIds: [], source: .location
@@ -186,11 +186,14 @@ final class NormalizationTests: XCTestCase {
         XCTAssertNil(nonePayload.conference, "нет ответа резолвера ни на одном поле — не отказ")
     }
 
-    /// Возврат РП (Д10-Д12, 24.09, только test_k16): отдельный тест, вынесенный из
-    /// `test_k16_conferenceHeuristicMatchesKnownProviderAndAbsence` (SwiftLint `function_body_length`,
-    /// строка ≤ 50) — вход «совпали оба поля» (побеждает `location`), доказательство, что `url`
-    /// события не уходит в резолвер, и запись фактических вызовов через `RecordingPlatformResolver`.
-    func test_k16_locationWinsOverBodyTextAndUrlIsIgnored() async throws {
+    /// Возврат РП (Д10-Д12, 24.09, только test_k29 — номер К16 снят, дельта MEE-339): отдельный
+    /// тест, вынесенный из `test_k29_conferenceHeuristicMatchesKnownProviderAndAbsence`
+    /// (SwiftLint `function_body_length`, строка ≤ 50) — вход «совпали оба поля» (побеждает
+    /// `location`), доказательство, что `url` события не уходит в резолвер, и запись
+    /// фактических вызовов через `RecordingPlatformResolver`. Первый вход К29 (МЕЕ-383,
+    /// дельта МЕЕ-339): при совпадении по `location` резолвер вызван с `.location` ровно
+    /// один раз — не дважды на одно и то же поле одного события.
+    func test_k29_locationWinsOverBodyTextAndUrlIsIgnored() async throws {
         let zoomJoinInfo = JoinInfo(
             provider: "zoom", joinUrl: URL(string: "https://zoom.us/j/123456789")!,
             meetingId: "123456789", passcode: "042", clientBundleIds: [], source: .location
@@ -242,12 +245,42 @@ final class NormalizationTests: XCTestCase {
         XCTAssertTrue(resolver.calls.allSatisfy { $0.source != .conferenceField }, ".conferenceField не звучит никогда")
         let locationCall = resolver.calls.first { $0.text == "https://zoom.us/j/123456789" }
         XCTAssertEqual(locationCall?.source, .location, "location размечен верным source")
+        // Первый вход К29: совпадение по location — резолвер вызван с .location РОВНО один
+        // раз на это событие, не дважды (не звучит ни для валидации, ни повторно).
+        let locationCallsForZoomText = resolver.calls.filter {
+            $0.text == "https://zoom.us/j/123456789" && $0.source == .location
+        }
+        XCTAssertEqual(locationCallsForZoomText.count, 1, "резолвер вызван с .location ровно один раз")
         // Тот же текст notes несут ДВА события (`evt-bodytext` и `evt-both-match`), но у
         // `evt-both-match` location совпал первым — `??` не вычисляет правую часть вовсе,
         // резолвер обязан увидеть этот текст РОВНО один раз (от `evt-bodytext`).
         let bodyTextCallsForSharedText = resolver.calls.filter { $0.text == "заметки со ссылкой meet" }
         XCTAssertEqual(bodyTextCallsForSharedText.count, 1, "bodyText не запрошен для evt-both-match")
         XCTAssertEqual(bodyTextCallsForSharedText.first?.source, .bodyText, "bodyText размечен верным source")
+    }
+
+    /// Возврат РП (MEE-383, дельта MEE-339): C-009 v11 требует резолвер только для непустых
+    /// `location`/notes — EventKit отдаёт пустую строку (не `nil`), когда поле формально
+    /// присутствует, но не заполнено. `evt-empty-location` доказывает, что пустая `location`
+    /// не идёт в резолвер, но непустые notes того же события — идут; `evt-empty-both`
+    /// доказывает, что оба пустых поля не дают вовсе ни одного вызова.
+    func test_k29_emptyLocationAndBodyTextSkipResolver() async throws {
+        let resolver = RecordingPlatformResolver(answers: [:])
+        let harness = Harness(platformResolver: resolver)
+        try await harness.initialize()
+        harness.permissions.setStatus(.granted, for: .calendars)
+        harness.gateway.setEvents([
+            .fixture(externalId: "evt-empty-location", location: "", notes: "заметки"),
+            .fixture(externalId: "evt-empty-both", location: "", notes: "")
+        ])
+
+        let payloads = try await fetch(harness)
+
+        XCTAssertEqual(payloads.count, 2)
+        XCTAssertTrue(resolver.calls.allSatisfy { $0.source != .location }, "пустая location не идёт в резолвер")
+        let bodyTextCalls = resolver.calls.filter { $0.source == .bodyText }
+        XCTAssertEqual(bodyTextCalls.count, 1, "непустые notes у evt-empty-location всё же проверены")
+        XCTAssertEqual(bodyTextCalls.first?.text, "заметки")
     }
 
     func test_k17_dateRepresentabilityThreeFieldsGroup() async throws {
