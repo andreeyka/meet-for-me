@@ -73,23 +73,29 @@ extension SessionMachine {
         let fresh = relatedSignals(for: session, now: now)
             .filter { !$0.relation.isDisputeParty || !contested.keys.contains($0.signal.group?.appKey ?? "") }
             .map(\.signal)
+        // ТРИ ИСХОДА И ПОРЯДОК МЕЖДУ НИМИ НАЗВАНЫ §8.2 ИЗДАНИЕМ v8 (К100): (1) звучащей
+        // цели нет вовсе — `nothingToRecord`; (2) цель есть и занята идущей записью другой
+        // сессии (§7.1) — `alreadyRecording(sessionId:)`, ВНЕ ЗАВИСИМОСТИ ОТ СОСТОЯНИЯ; (3)
+        // цель есть, не занята, а состояние не несёт строки 6 или 8 — `nothingToRecord`.
+        // Клауза занятости стоит ВТОРОЙ, а клауза состояния — ТРЕТЬЕЙ, и порядок этот
+        // несущий: вход «`scheduled`, цель занята чужой записью» удовлетворяет клаузам (2)
+        // и (3) разом, и реализация, читающая состояние раньше занятости, отвечала бы
+        // `nothingToRecord` вместо `alreadyRecording` (К48, К100, различающий вектор). До
+        // издания v8 порядок между тремя исходами не был назван контрактом ни разу (часть B
+        // выбирала его сама, по конвенции §3 правил, — разбор в отчёте MEE-300); дерево ниже
+        // читает клаузы в порядке, который v8 теперь называет прямо, и правки не требует.
         guard let signal = SessionMachineRules.soundingTargetSignal(
             among: fresh,
             sessionProvider: session.event?.conference?.provider
         ), let group = signal.group else {
-            // СТРОКА: чем `startRecording(meetingId:)` отвечает сессии события без звучащей
-            // цели, издание v7 не называет (§«Ломающие изменения против v6»); владелец —
-            // архитектор C-018, срок «не позже выдачи части C». Исходов два законных —
-            // отказ и молчание; дерево выбрало ОТКАЗ частью B, и часть C его не меняет.
-            throw SessionError.nothingToRecord
+            throw SessionError.nothingToRecord   // исход (1)
         }
         if let occupant = sessionHolding(appKey: group.appKey, excluding: session.sessionId) {
-            throw SessionError.alreadyRecording(sessionId: occupant)
+            throw SessionError.alreadyRecording(sessionId: occupant)   // исход (2)
         }
         guard let row = SessionMachineRules.commandRow(from: session.state) else {
-            // СТРОКА: та же, что выше. Строк 6 и 8 нет ни одной из `scheduled` и из
-            // `processing`, и переход помимо таблицы запрещён инвариантом 2; отказ здесь
-            // есть тот же выбор реализатора, названный строкой архитектора.
+            // Исход (3): строк 6 и 8 нет ни одной из `scheduled` и из `processing`, и
+            // переход помимо таблицы запрещён инвариантом 2.
             throw SessionError.nothingToRecord
         }
         // Цель, выбранная В МОМЕНТ ВЫЗОВА, кладётся сессии прежде строки: строка 6 и
