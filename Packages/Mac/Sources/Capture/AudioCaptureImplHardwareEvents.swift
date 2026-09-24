@@ -78,6 +78,14 @@ extension AudioCaptureImpl {
         // `resolveRebuild` при пробуждении заменяет эту запись точной (см. там же), а не добавляет
         // вторую — иначе на диске остались бы два разрыва на один сон.
         //
+        // Возврат MEE-317 (п. 6, MEE-365): `beginRebuild` сам пишет манифест на диск изнутри
+        // `recordProcesses` (инв. 12(б)) — раньше это давало ВТОРУЮ, более раннюю запись между
+        // маркером `.sleep` выше и парой ниже, с `.sleep` уже на диске, но без пары. Критерий —
+        // ближайший К9 (парный маркер и запись разрыва), не отдельная цитата контракта: сама пара
+        // писалась правильно, просто существовало наблюдаемое окно с неполным её половиной.
+        // `persistManifestAfterCapturedProcesses: false` снимает эту раннюю запись — на диск
+        // манифест уходит один раз, ниже, когда пара уже дописана.
+        //
         // СТРОКА: возврат MEE-317 (третий круг) — прежде это было непомеченным решением, не
         // вилкой. Если сон пришёл поверх уже идущей пересборки другой причины
         // (`session.pendingRebuild` уже занят), `beginRebuild` ниже не заводит новый
@@ -92,7 +100,10 @@ extension AudioCaptureImpl {
         //     отдельный путь записи (не через `beginRebuild`), и один физический интервал мог бы
         //     нести два маркера `.discontinuity` разных причин одновременно. Решение — за РП.
         let hadPendingRebuild = session.pendingRebuild != nil
-        beginRebuild(session, reason: .sleep, newMicrophone: nil, atHostTime: atHostTime)
+        beginRebuild(
+            session, reason: .sleep, newMicrophone: nil, atHostTime: atHostTime,
+            persistManifestAfterCapturedProcesses: false
+        )
         if !hadPendingRebuild, let pending = session.pendingRebuild {
             let scaleErrorMs = ScaleError.compute(reason: .sleep, fileMinusHostMs: pending.fileMinusHostMs)
             if let discontinuity = try? RecordingManifest.Discontinuity(
@@ -124,8 +135,17 @@ extension AudioCaptureImpl {
     /// `containsUnrequested` сравнивает по правилу C-009 §4.1: шаг 1 — appKey процесса,
     /// `responsibleBundleId ?? bundleId` (родитель отвечает за помощника с другим bundle id, тот
     /// же приём, что в `Detector`), шаг 2 — `bundleKeyMatches` (домен, не своё сравнение строк).
+    ///
+    /// `persistManifest`: MEE-365 (возврат по MEE-317 п. 6) — `beginRebuild` зовёт этот метод
+    /// как часть пересборки (инв. 12(б)), и по умолчанию его собственная запись на диск здесь и
+    /// остаётся единственной для путей БЕЗ дальнейшего состояния после `beginRebuild`
+    /// (`.microphoneChanged`/`.tapInvalidated`/`.aggregateDied`). У `.sleep` (`handleSleep`) есть
+    /// код ПОСЛЕ `beginRebuild` (пара `.discontinuity`) — с записью здесь на диске побывало бы
+    /// промежуточное состояние: `.sleep`-маркер уже есть, пары ещё нет. `handleSleep` передаёт
+    /// `false` и пишет сам, один раз, когда пара уже дописана — К9 требует маркер и пару вместе.
     func recordProcesses(
-        _ session: CaptureSessionState, processes: [CaptureProcessDescriptor], atHostTime: UInt64
+        _ session: CaptureSessionState, processes: [CaptureProcessDescriptor], atHostTime: UInt64,
+        persistManifest: Bool = true
     ) {
         for process in processes { session.recordCapturedProcess(process) }
         let requestedAppKey = session.request.group?.appKey
@@ -148,7 +168,9 @@ extension AudioCaptureImpl {
             atMs: atMs, observedAt: Date(), requestedAppKey: requestedAppKey,
             resolvedBundleIds: resolvedBundleIds, processes: manifestProcesses, containsUnrequested: containsUnrequested
         )))
-        writeManifest(session, endedAt: nil, isFinalized: false)
+        if persistManifest {
+            writeManifest(session, endedAt: nil, isFinalized: false)
+        }
     }
 
     private func currentSessionPhase() -> CapturePhase {
