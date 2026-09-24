@@ -144,10 +144,37 @@ extension KeyedDecodingContainer {
         return try decodeBounded(Int64.self, forKey: key)
     }
 
+    public func decodeBounded(_ type: [Int32].Type, forKey key: Key) throws -> [Int32] {
+        var list = try nestedUnkeyedContainer(forKey: key)
+        var result: [Int32] = []
+        while !list.isAtEnd {
+            let raw: Double
+            do {
+                raw = try list.decode(Double.self)
+            } catch {
+                throw domainCorrupted(key, "элемент массива не представим Int32")
+            }
+            let bounded = try domainBounded(raw, key, lower: Double(Int32.min), upper: Double(Int32.max))
+            result.append(Int32(bounded))
+        }
+        return result
+    }
+
+    public func decodeBoundedIfPresent(_ type: [Int32].Type, forKey key: Key) throws -> [Int32]? {
+        guard try domainPresent(key) else { return nil }
+        return try decodeBounded([Int32].self, forKey: key)
+    }
+
     /// Четыре условия §0.4: конечность, целость, диапазон §0.2 п. 9, диапазон объявленного типа.
     /// Все четыре дают одну и ту же ошибку с одним и тем же ключом — различие видно только в тексте.
     private func domainBounded(_ key: Key, lower: Double, upper: Double) throws -> Double {
-        let raw = try decode(Double.self, forKey: key)
+        try domainBounded(try decode(Double.self, forKey: key), key, lower: lower, upper: upper)
+    }
+
+    /// Та же проверка на уже прочитанном `Double` — общая ступень скаляра и элемента массива
+    /// (`[Int32]`, MEE-391): значение массива читается через `nestedUnkeyedContainer`, не через
+    /// `decode(_:forKey:)`, поэтому не может пройти через перегрузку выше как есть.
+    private func domainBounded(_ raw: Double, _ key: Key, lower: Double, upper: Double) throws -> Double {
         guard raw.isFinite else {
             throw domainCorrupted(key, "значение не конечно")
         }
