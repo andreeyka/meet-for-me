@@ -29,7 +29,7 @@ public actor CalendarPortImpl: CalendarPort {
     private var logEntries: [CalendarSourceId: [(level: LogLevel, message: String)]] = [:]
     private var notifyEntries: [CalendarSourceId: [(kind: HostNotificationKind, detail: String?)]] = [:]
     private var inFlightSync: [CalendarSourceId: Task<CalendarSyncResult, Never>] = [:]
-    private var changeContinuations: [AsyncStream<CalendarChange>.Continuation] = []
+    private let changeHub = CalendarChangeHub()
     private var scheduleTask: Task<Void, Never>?
 
     /// - Parameter connectors: коннектор на источник, собранный composition root'ом заранее
@@ -100,16 +100,16 @@ public actor CalendarPortImpl: CalendarPort {
 
     // MARK: - CalendarPort — поток изменений (К62-К63)
 
-    public func changes() -> AsyncStream<CalendarChange> {
-        AsyncStream { continuation in
-            changeContinuations.append(continuation)
-        }
+    /// `nonisolated`: C-005 «Определение» объявляет `changes()` НЕ `async` — актор-изолированная
+    /// реализация этой подписи не удовлетворяет протокольное требование (см. `CalendarChangeHub.swift`
+    /// — тот же приём, что `SessionChangeHub`, DomainCore/C-018). Хаб живёт под своим замком,
+    /// снимка при подписке нет (К62 прямо это запрещает, в отличие от инв. 21 C-018).
+    public nonisolated func changes() -> AsyncStream<CalendarChange> {
+        changeHub.subscribe()
     }
 
     private func emit(_ change: CalendarChange) {
-        for continuation in changeContinuations {
-            continuation.yield(change)
-        }
+        changeHub.publish(change)
     }
 
     // MARK: - CalendarPort — синхронизация (К30-К39, К42-К43, К71-К72)
