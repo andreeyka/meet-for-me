@@ -7,9 +7,10 @@ import Foundation
 
 extension JobQueueEngine {
 
-    /// §7 целиком: `reclaimExpiredLeases` — сперва, как второй предохранитель (см. «Поведение»
-    /// C-013: лизинг «не ждёт перезапуска приложения»), затем перебор `claimNext` с растущим
-    /// `skipped`, пока не вернётся `nil` либо не кончатся свободные слоты (§7, шаги 1—5).
+    /// Внешний триггер (`start()`, `submit()`, `recordingDidStart/Stop`, таймер, событие
+    /// `PowerPort`): заводит обязательство «пересмотр предстоит» и сдаёт его
+    /// `performRevisitSweep()`. `beginExecuting` заводит то же обязательство иначе — см.
+    /// его довод в `JobQueueEngineExecution.swift`.
     func runRevisitPass() async {
         guard isRunning else { return }
         activeRevisitPasses += 1
@@ -17,6 +18,64 @@ extension JobQueueEngine {
             activeRevisitPasses -= 1
             notifyIdleIfNeeded()
         }
+        await performRevisitSweep()
+    }
+
+    /// MEE-370: настоящий заход (`reclaimExpiredLeases` + цикл `claimNext`) идёт не более
+    /// чем один одновременно (`isRevisitLoopRunning`). Вызов, пришедшийся на время, пока
+    /// заход уже идёт, не заводит СОБСТВЕННЫЙ параллельный заход — тот гонялся бы за тем же
+    /// `claimNext` одновременно с первым: оба видят одну и ту же строку то занятой другим,
+    /// то уже отпущенной, и годны оба взять её заново (найдено К67, PR #86 — заблокированный
+    /// по `noHandler` кандидат снова оказывался `running`, потому что пересмотр, заведённый
+    /// завершением соседней задачи, гонялся за тем же `claimNext` одновременно с ещё не
+    /// домотавшим свой `while` пересмотром, запущенным `start()`) — вместо параллельного
+    /// захода такой вызов лишь оставляет заявку `revisitPassRequested`.
+    ///
+    /// Заявка исполняется ОТДЕЛЬНОЙ `Task`, а не продолжением этого же вызова: этот вызов
+    /// обязан вернуться, домотав СВОЙ заход, — вызывающая сторона (`start()`, `submit()`)
+    /// ждёт ровно ОДИН заход, свой, а не цепочку из всех, что успели попроситься следом,
+    /// пока он шёл (иначе число и состав событий одного внешнего вызова перестало бы быть
+    /// предсказуемым — второй заход, если он понадобится, наблюдаем через `waitUntilIdle()`,
+    /// который эту заявку и её `Task` дожидается через `activeRevisitPasses`, см. довод
+    /// там же).
+    func performRevisitSweep() async {
+        guard !isRevisitLoopRunning else {
+            revisitPassRequested = true
+            return
+        }
+        isRevisitLoopRunning = true
+        await runOneRevisitSweep()
+        isRevisitLoopRunning = false
+
+        guard revisitPassRequested, isRunning else { return }
+        revisitPassRequested = false
+        activeRevisitPasses += 1
+        Task { [weak self] in
+            guard let self else { return }
+            await self.fulfillRequestedRevisitSweep()
+        }
+    }
+
+    /// Обязательство, заведённое `performRevisitSweep()` для заявки `revisitPassRequested`,
+    /// оставленной ДРУГИМ вызовом, пока этот заход уже шёл, — исполняется здесь, отдельной
+    /// `Task`, которую вызывающая сторона того другого вызова не ждёт (тем же приёмом, что
+    /// `beginExecuting` не ждёт исполнение обработчика).
+    private func fulfillRequestedRevisitSweep() async {
+        defer {
+            activeRevisitPasses -= 1
+            notifyIdleIfNeeded()
+        }
+        guard isRunning else { return }
+        await performRevisitSweep()
+    }
+
+    /// Один заход §7: `reclaimExpiredLeases` — сперва, как второй предохранитель (см.
+    /// «Поведение» C-013: лизинг «не ждёт перезапуска приложения»), затем перебор
+    /// `claimNext` с растущим `skipped`, пока не вернётся `nil` либо не кончатся свободные
+    /// слоты (§7, шаги 1—5). Свежие `skipped`/`profileReadyCache` на каждый заход — заявка
+    /// на повторный заход (`performRevisitSweep()`) означает новую оценку готовности с нуля,
+    /// не продолжение прежней.
+    private func runOneRevisitSweep() async {
         await reclaimExpiredLeases()
         guard isRunning else { return }
 
