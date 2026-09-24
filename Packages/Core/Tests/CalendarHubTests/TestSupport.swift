@@ -110,6 +110,36 @@ func nextOrTimeout<Element: Sendable>(
     }
 }
 
+/// Обратное `nextOrTimeout` (возврат РП, приёмка #128, «мелочь К37»): доказывает ОТСУТСТВИЕ
+/// элемента за окно `timeout`, а не его наличие — падает, если поток всё-таки что-то
+/// опубликовал (в отличие от `nextOrTimeout`, который падает, если НЕ опубликовал). `timeout`
+/// короче намеренно (по умолчанию доли секунды, не 10с) — тест не обязан ждать полный таймаут
+/// `nextOrTimeout`, чтобы доказать отрицательное утверждение; риск ложного прохождения
+/// (событие пришло бы чуть позже) тот же, что у любой негативной проверки на конечном окне,
+/// и не хуже, чем был бы у эквивалентного `pollUntil`.
+func assertNoChangeArrives<Element: Sendable>(
+    _ box: StreamIteratorBox<Element>, _ message: String = "", timeout: Duration = .milliseconds(300),
+    file: StaticString = #filePath, line: UInt = #line
+) async {
+    let outcome = await withTaskGroup(of: RaceOutcome<Element>.self) { group -> RaceOutcome<Element> in
+        group.addTask { .value(await box.next()) }
+        group.addTask {
+            try? await Task.sleep(for: timeout)
+            return .timedOut
+        }
+        let first = await group.next() ?? .timedOut
+        group.cancelAll()
+        return first
+    }
+    if case .value(let element) = outcome {
+        let prefix = message.isEmpty ? "" : "\(message) — "
+        XCTFail(
+            "\(prefix)неожиданный элемент потока за окно \(timeout): \(String(describing: element))",
+            file: file, line: line
+        )
+    }
+}
+
 final class FakeWaitSeam: WaitSeam, @unchecked Sendable {
     private let lock = NSLock()
     private var recordedDurations: [Duration] = []

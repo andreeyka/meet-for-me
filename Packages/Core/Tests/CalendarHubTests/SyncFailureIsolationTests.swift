@@ -83,15 +83,25 @@ final class SyncFailureIsolationTests: XCTestCase {
             )
         ])
         _ = await harness.hub.sync(trigger: .manual)
-        XCTAssertEqual(harness.meetingRepository.storedRecords.count, 3)
+        let beforeFailure = harness.meetingRepository.storedRecords
+        XCTAssertEqual(beforeFailure.count, 3)
+        let iterator = StreamIteratorBox(harness.hub.changes())
 
         connector.fail(.fetchEvents, with: .upstreamUnavailable(message: "недоступен"))
         let results = await harness.hub.sync(trigger: .manual)
 
         XCTAssertNotNil(results.first?.failure)
         XCTAssertEqual(results.first?.deletedCount, 0)
+        let afterFailure = harness.meetingRepository.storedRecords
+        XCTAssertEqual(afterFailure.count, 3, "отказ источника не стирает ранее сохранённые встречи")
         XCTAssertEqual(
-            harness.meetingRepository.storedRecords.count, 3, "отказ источника не стирает ранее сохранённые встречи"
+            Set(afterFailure.map(\.event.id)), Set(beforeFailure.map(\.event.id)),
+            "тот же набор id — не только счёт совпал"
         )
+        for before in beforeFailure {
+            let after = afterFailure.first { $0.event.id == before.event.id }
+            XCTAssertEqual(after, before, "запись не изменилась ни в одном поле")
+        }
+        await assertNoChangeArrives(iterator, "отказ не публикует .deleted ни для одной из трёх встреч")
     }
 }
