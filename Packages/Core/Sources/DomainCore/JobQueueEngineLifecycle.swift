@@ -27,10 +27,23 @@ extension JobQueueEngine {
         await runRevisitPass()
     }
 
+    // СТРОКА: находка по возврату РП на MEE-350 (не тестовая — производственная): здесь не
+    // было `where runningTasks[job.id] == nil`, которым `reclaimExpiredLeases` (тот же
+    // файл, соседний предохранитель) уже отличает строку, оставленную МЁРТВЫМ процессом
+    // (инвариант 10 — ровно про это), от строки, которую эта же живая очередь исполняет
+    // прямо сейчас. Без фильтра повторный `start()` без промежуточного `stop()` (сам
+    // контракт разрешает — см. заголовок `start()`) находил чужую же, ещё бегущую задачу,
+    // «интерпретировал» её как прерванную, увеличивал `attempts` и публиковал поддельный
+    // `failed(error: "interrupted")` — гоняясь с настоящим исходом той же строки, который
+    // вот-вот напишет её же собственная исполняющая `Task`. Обнаружено К68 (способ И,
+    // MEE-311): три сценария подряд без `stop()` между ними — второй `submit()` уже видит
+    // `isRunning == true` и сам заводит пересмотр, так что последующий `start()` в тесте
+    // избыточен, но не безобиден — он и попал на эту гонку. Фикс — тот же фильтр, что у
+    // `reclaimExpiredLeases`.
     private func recoverInterruptedJobs() async {
         guard let running = try? await jobs(status: .running) else { return }
         let now = clock()
-        for job in running {
+        for job in running where runningTasks[job.id] == nil {
             let restored: Job
             if job.attemptStartedAt != nil {
                 restored = job.afterConsumedAttempt(
