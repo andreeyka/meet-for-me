@@ -47,3 +47,105 @@
 //  `message` — `SecCopyErrorMessageString(status, nil)` (системное описание `OSStatus`), а без
 //  него — сам числовой `OSStatus`.
 //
+
+import CalendarHub
+import Foundation
+import Security
+
+public struct SecretStoreKeychain: SecretStore {
+
+    private let keychain: SecKeychain?
+
+    public init() {
+        self.init(keychain: nil)
+    }
+
+    init(keychain: SecKeychain?) {
+        self.keychain = keychain
+    }
+
+    public func get(key: String, namespace: String) async throws -> String? {
+        var query = searchQuery(key: key, namespace: namespace)
+        query[kSecReturnData as String] = true
+        query[kSecMatchLimit as String] = kSecMatchLimitOne
+
+        var result: CFTypeRef?
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        if status == errSecItemNotFound { return nil }
+        guard status == errSecSuccess, let data = result as? Data,
+              let value = String(data: data, encoding: .utf8) else {
+            throw SecretStoreKeychainError(status: status)
+        }
+        return value
+    }
+
+    public func set(key: String, value: String?, namespace: String) async throws {
+        guard let value else {
+            let status = SecItemDelete(searchQuery(key: key, namespace: namespace) as CFDictionary)
+            guard status == errSecSuccess || status == errSecItemNotFound else {
+                throw SecretStoreKeychainError(status: status)
+            }
+            return
+        }
+        let data = Data(value.utf8)
+        let updateStatus = SecItemUpdate(
+            searchQuery(key: key, namespace: namespace) as CFDictionary,
+            [kSecValueData as String: data] as CFDictionary
+        )
+        if updateStatus == errSecItemNotFound {
+            let addStatus = SecItemAdd(addQuery(key: key, namespace: namespace, data: data) as CFDictionary, nil)
+            guard addStatus == errSecSuccess else {
+                throw SecretStoreKeychainError(status: addStatus)
+            }
+            return
+        }
+        guard updateStatus == errSecSuccess else {
+            throw SecretStoreKeychainError(status: updateStatus)
+        }
+    }
+
+    private func baseAttributes(key: String, namespace: String) -> [String: Any] {
+        [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: "meet-for-me.calendar-hub.\(namespace)",
+            kSecAttrAccount as String: key,
+        ]
+    }
+
+    /// Поиск (`SecItemCopyMatching`/`SecItemUpdate`/`SecItemDelete`) — список поиска
+    /// сужается явно на переданный keychain (тестовый шов, IR-125): без этого поиск шёл бы
+    /// по списку поиска процесса, где временного keychain теста нет.
+    private func searchQuery(key: String, namespace: String) -> [String: Any] {
+        var query = baseAttributes(key: key, namespace: namespace)
+        if let keychain {
+            query[kSecMatchSearchList as String] = [keychain]
+        }
+        return query
+    }
+
+    /// Запись (`SecItemAdd`) — куда ПИШЕТ решает `kSecUseKeychain`, не список поиска
+    /// (`SecItemAdd` без него пишет в keychain по умолчанию независимо от списка поиска,
+    /// находка самой постановки IR-125).
+    private func addQuery(key: String, namespace: String, data: Data) -> [String: Any] {
+        var query = baseAttributes(key: key, namespace: namespace)
+        query[kSecValueData as String] = data
+        if let keychain {
+            query[kSecUseKeychain as String] = keychain
+        }
+        return query
+    }
+}
+
+enum SecretStoreKeychainError: Error, Sendable {
+    case denied(status: OSStatus)
+    case unexpected(status: OSStatus)
+
+    init(status: OSStatus) {
+        switch status {
+        case errSecInteractionNotAllowed, errSecAuthFailed:
+            self = .denied(status: status)
+        default:
+            self = .unexpected(status: status)
+        }
+    }
+}
