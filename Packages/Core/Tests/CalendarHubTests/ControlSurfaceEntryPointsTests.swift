@@ -79,6 +79,77 @@ final class ControlSurfaceEntryPointsTests: XCTestCase {
         XCTAssertEqual(results.first?.failure, .cancelled, "не .transport, которым завершилось бы исчерпание повторов")
     }
 
+    // MARK: - Два вызывающих на общей задаче (К35) — возврат РП, приёмка #94, п. 1
+
+    /// (а) Второй вызывающий присоединяется к уже идущей `syncOne` (тот же источник, тот
+    /// же `fetchEvents`, до этого не позванный вторично) и отменяется сам — первоначальная
+    /// форма дефекта 8 (первый заход фикса п.1 отменял ОБЩУЮ задачу по отмене ОДНОГО
+    /// вызывающего). Первый обязан дойти до настоящего результата как ни в чём не бывало.
+    func test_syncOne_secondCallerCancellationDoesNotAffectFirst() async throws {
+        let harness = Harness(sourceIds: ["src-1"])
+        harness.connectorRepository.seed([Harness.record(id: "src-1")])
+        let connector = harness.connector("src-1")
+        connector.setInitializeResult(capabilities: ConnectorCapabilities(
+            deltaSync: false, push: false, attendees: true, conference: true, auth: .none
+        ))
+        connector.setFetchEvents([])
+        connector.hang(.fetchEvents)
+
+        let firstTask = Task { await harness.hub.sync(trigger: .manual) }
+        await pollUntil { connector.callCount(.fetchEvents) > 0 }
+
+        let secondTask = Task { await harness.hub.sync(trigger: .manual) }
+        // Даём второму вызывающему шанс реально дойти до регистрации своего ожидания
+        // (`syncWaiters`) до отмены — иначе отмена могла бы застать его ДО входа в
+        // continuation и обойти как раз ту ветку, которую тест целится проверить (К35
+        // не даёт внешнего наблюдаемого сигнала на сам факт регистрации).
+        for _ in 0..<5 { await Task.yield() }
+        secondTask.cancel()
+
+        let secondResults = await secondTask.value
+        XCTAssertEqual(secondResults.first?.failure, .cancelled, "второй вызывающий отменился — свой continuation")
+        XCTAssertEqual(connector.callCount(.fetchEvents), 1, "второй присоединился к идущей задаче, не начал вторую")
+
+        connector.release(.fetchEvents)
+        let firstResults = await firstTask.value
+        XCTAssertNil(firstResults.first?.failure, "отмена второго вызывающего не отменяет общую задачу за первого")
+        XCTAssertEqual(connector.callCount(.fetchEvents), 1, "fetchEvents вызван ровно один раз на двоих вызывающих")
+    }
+
+    /// (б) Отменены ОБА вызывающих — последний уходящий обязан по-настоящему отменить общую
+    /// задачу (тот же довод К67: отмена единственного оставшегося обязана прервать §5.2).
+    func test_syncOne_cancellingBothCallersCancelsSharedTask() async throws {
+        let harness = Harness(sourceIds: ["src-1"])
+        harness.connectorRepository.seed([Harness.record(id: "src-1")])
+        let connector = harness.connector("src-1")
+        connector.setInitializeResult(capabilities: ConnectorCapabilities(
+            deltaSync: false, push: false, attendees: true, conference: true, auth: .none
+        ))
+        connector.hang(.fetchEvents)
+
+        let firstTask = Task { await harness.hub.sync(trigger: .manual) }
+        await pollUntil { connector.callCount(.fetchEvents) > 0 }
+
+        let secondTask = Task { await harness.hub.sync(trigger: .manual) }
+        for _ in 0..<5 { await Task.yield() }
+
+        firstTask.cancel()
+        secondTask.cancel()
+
+        let firstResults = await firstTask.value
+        let secondResults = await secondTask.value
+        XCTAssertEqual(firstResults.first?.failure, .cancelled)
+        XCTAssertEqual(secondResults.first?.failure, .cancelled)
+
+        // Общая задача действительно отменена — не осталась висеть на воротах fetchEvents
+        // навсегда (`release(.fetchEvents)` тут ни разу не зовётся): отмена обязана дойти
+        // до `hangOrGate` изнутри, тот отказывает через CancellationError, обобщённый catch
+        // (дефект 4) пишет отказ через setSyncOutcome. Если бы общая задача не отменилась —
+        // fetchEvents остался бы висеть вечно, и pollUntil упал бы явным таймаутом, не тихим
+        // зависанием (тот же довод, что у resolveTimeoutAfterHang).
+        await pollUntil { harness.connectorRepository.storedRecords.first?.lastError != nil }
+    }
+
     // MARK: - К68 (settingsSchema/configure — 1:1 проброс)
 
     func test_k68_settingsSchemaAndConfigureProxy1to1() async throws {
