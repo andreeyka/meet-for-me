@@ -255,8 +255,10 @@ final class SecretStoreKeychainTests: XCTestCase {
     /// `SecKeychainSetUserInteractionAllowed(false)` (глобально для процесса, восстанавливается
     /// `defer` до конца этого метода — файл гоняется строго последовательно, CI без
     /// `--parallel`, гонки с соседним тестом нет) — без диалога системы, детерминированно даёт
-    /// `errSecInteractionNotAllowed`. Автоматизирует то, что раньше требовало рук; собственный
-    /// вектор К12/К13(ii) (`errSecNoSuchKeychain`) остаётся неавтоматизированным — см. отчёт.
+    /// `.denied` (фактический код на CI — `errSecAuthFailed`, не `errSecInteractionNotAllowed`,
+    /// оба входят в один случай `.denied`). Автоматизирует то, что раньше требовало рук;
+    /// собственный вектор К12/К13(ii) (`errSecNoSuchKeychain`) остаётся неавтоматизированным —
+    /// см. отчёт.
     func test_ss12_13_unexpectedOnDeletedKeychain() async throws {
         let keychainToLock = try XCTUnwrap(keychain)
         XCTAssertEqual(SecKeychainSetUserInteractionAllowed(false), errSecSuccess)
@@ -273,7 +275,10 @@ final class SecretStoreKeychainTests: XCTestCase {
         } catch let error as SecretStoreKeychainError {
             switch error {
             case .denied(let status):
-                XCTAssertEqual(status, errSecInteractionNotAllowed)
+                // CI (macos-14, run 36035031759): фактический код — errSecAuthFailed
+                // (-25293), не errSecInteractionNotAllowed (-25308) — оба случая мапятся в
+                // .denied (SecretStoreKeychainError.init(status:)), находка при реализации.
+                XCTAssertEqual(status, errSecAuthFailed)
             case .unexpected:
                 XCTFail("ожидался .denied, получен .unexpected")
             }
