@@ -58,21 +58,25 @@ extension GRDBJobRepository {
     /// `excluding` не участвует в SQL (К37: множество из тысячи `id` не должно
     /// упираться в `SQLITE_MAX_VARIABLE_NUMBER`) — кандидаты отбираются запросом,
     /// исключение делает Swift по уже прочитанным строкам.
+    ///
+    /// MEE-357 (IR-121, C-010 v13, инвариант 25): `WHERE` фильтрует только `status` и
+    /// `type` — `run_after` больше не в фильтре, только в `ORDER BY` (ступень порядка,
+    /// та же, что уже проверяет К39). Строка с `run_after` в будущем — полноправный
+    /// кандидат; готовность по времени (`run_after <= now`) проверяет очередь над уже
+    /// взятым кандидатом (`JobBlockReason.notYetDue`, C-013 инв. 4), не этот метод.
     func claimNext(
         types: [JobType], excluding: Set<UUID>, now: Date, leaseSeconds: Int
     ) async throws -> Job? {
         guard !types.isEmpty else { return nil }
         let typeTexts = types.map(\.rawValue)
         let placeholders = typeTexts.map { _ in "?" }.joined(separator: ", ")
-        let selectValues: [DatabaseValueConvertible?] =
-            [EpochTime.seconds(now) as DatabaseValueConvertible?] + typeTexts.map { $0 as DatabaseValueConvertible? }
-        let selectArguments = StatementArguments(selectValues)
+        let selectArguments = StatementArguments(typeTexts)
         do {
             return try await dbPool.write { db in
                 let rows = try Row.fetchAll(
                     db,
                     sql: """
-                    SELECT * FROM jobs WHERE status = 'pending' AND run_after <= ? AND type IN (\(placeholders))
+                    SELECT * FROM jobs WHERE status = 'pending' AND type IN (\(placeholders))
                     ORDER BY priority DESC, run_after ASC, created_at ASC, id ASC
                     """,
                     arguments: selectArguments
