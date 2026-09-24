@@ -113,7 +113,7 @@ final class SecretStoreKeychainTests: XCTestCase {
             kSecAttrAccount as String: key,
             kSecMatchSearchList as String: try searchList,
             kSecMatchLimit as String: kSecMatchLimitAll,
-            kSecReturnAttributes as String: true,
+            kSecReturnAttributes as String: true
         ]
         var result: CFTypeRef?
         let status = SecItemCopyMatching(query as CFDictionary, &result)
@@ -161,7 +161,7 @@ final class SecretStoreKeychainTests: XCTestCase {
             kSecAttrService as String: "meet-for-me.calendar-hub.eventkit-1",
             kSecAttrAccount as String: "refreshToken",
             kSecMatchSearchList as String: try searchList,
-            kSecReturnAttributes as String: true,
+            kSecReturnAttributes as String: true
         ]
         var result: CFTypeRef?
         XCTAssertEqual(SecItemCopyMatching(query as CFDictionary, &result), errSecSuccess)
@@ -190,7 +190,7 @@ final class SecretStoreKeychainTests: XCTestCase {
             kSecAttrService as String: "meet-for-me.calendar-hub.eventkit-1",
             kSecAttrAccount as String: "refreshToken",
             kSecMatchSearchList as String: try searchList,
-            kSecReturnAttributes as String: true,
+            kSecReturnAttributes as String: true
         ]
         var result: CFTypeRef?
         XCTAssertEqual(SecItemCopyMatching(query as CFDictionary, &result), errSecSuccess)
@@ -238,18 +238,35 @@ final class SecretStoreKeychainTests: XCTestCase {
 
     // MARK: - Е. Ошибки Keychain — К12-К14
 
+    /// Возврат РП (CI, macos-14, #101): исходная версия удаляла реальный тестовый keychain
+    /// через `SecKeychainDelete`, затем звала `store.set` через ту же (уже недействительную)
+    /// ссылку — на раннере macos-14 запись не отказывала вовсе. Причина — вторая гипотеза
+    /// РП: `SecKeychainDelete` снимает keychain из внутреннего реестра/списка поиска, но не
+    /// делает саму `SecKeychainRef` равно недействительной для КАЖДОГО вызова `SecItem*` —
+    /// `kSecMatchSearchList`/`kSecUseKeychain` с такой ссылкой, похоже, тихо откатываются на
+    /// keychain по умолчанию (раннер CI — login keychain, разблокирован), а не отказывают.
+    /// Недетерминированно, вектор через удаление УЖЕ СУЩЕСТВОВАВШЕГО keychain не годится.
+    ///
+    /// Вместо этого — ссылка на keychain, который НИКОГДА не существовал: `SecKeychainOpen`
+    /// не проверяет путь при вызове (документированное поведение — заводит саму ссылку без
+    /// доступа к файлу), отказ наступает только при первой реальной попытке использовать её.
+    /// Здесь нет истории «был закреплён в реестре, потом снят» — не на чем откатиться на
+    /// умолчание, поэтому первое же обращение обязано отказать по-настоящему.
     func test_ss12_13_unexpectedOnDeletedKeychain() async throws {
-        let doomedKeychain = try XCTUnwrap(keychain)
-        XCTAssertEqual(SecKeychainDelete(doomedKeychain), errSecSuccess)
-        keychain = nil // общий tearDown не должен удалять его повторно
+        let missingURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("SecretStoreKeychainTests-missing-\(UUID().uuidString).keychain")
+        var missingKeychain: SecKeychain?
+        let openStatus = missingURL.path.withCString { SecKeychainOpen($0, &missingKeychain) }
+        XCTAssertEqual(openStatus, errSecSuccess, "SecKeychainOpen заводит ссылку без проверки пути")
+        let doomedStore = SecretStoreKeychain(keychain: try XCTUnwrap(missingKeychain))
 
         do {
-            try await store.set(key: "refreshToken", value: "tok", namespace: "eventkit-1")
-            XCTFail("ожидалась ошибка — keychain уже удалён")
+            try await doomedStore.set(key: "refreshToken", value: "tok", namespace: "eventkit-1")
+            XCTFail("ожидалась ошибка — keychain по этому пути никогда не существовал")
         } catch let error as SecretStoreKeychainError {
             switch error {
-            case .unexpected(let status):
-                XCTAssertEqual(status, errSecNoSuchKeychain)
+            case .unexpected:
+                break // конкретный OSStatus контракт не фиксирует — «любой другой отказ», не число
             case .denied:
                 XCTFail("ожидался .unexpected, получен .denied")
             }

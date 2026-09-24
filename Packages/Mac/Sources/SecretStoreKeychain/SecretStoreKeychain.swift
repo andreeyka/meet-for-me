@@ -108,7 +108,7 @@ public struct SecretStoreKeychain: SecretStore {
         [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: "meet-for-me.calendar-hub.\(namespace)",
-            kSecAttrAccount as String: key,
+            kSecAttrAccount as String: key
         ]
     }
 
