@@ -62,15 +62,20 @@ final class JobRepositoryAttemptStartedAtTests: StorageAsyncTestCase {
         let jobs = temp.database.jobRepository()
 
         // Десять строк: одна выигрышная по priority, остальные девять — с
-        // разными значениями attempt_started_at (включая nil), но заведомо
-        // ниже приоритетом, чтобы порядок выбора решал только priority.
+        // ПОПАРНО РАЗЛИЧИМЫМИ значениями attempt_started_at (ни одного
+        // повтора, ни одного лишнего nil сверх победителя) и заведомо ниже
+        // приоритетом, чтобы решение claimNext зависело только от priority.
+        // Различимость нужна для второй половины теста: одинаковые значения
+        // не выявили бы случайную сортировку jobs(status:) по этой колонке
+        // сравнением списков — а `Set` в прежней версии не выявил бы её и
+        // подавно, даже с различимыми значениями, потому что стирает порядок.
         let winner = TestFixtures.job(type: .transcode, options: .init(priority: 99, attemptStartedAt: nil))
         try await jobs.insert(winner)
         var others: [UUID] = []
         for offset in 0..<9 {
-            let attemptStartedAt: Date? = offset % 2 == 0 ? nil : TestFixtures.epoch.addingTimeInterval(Double(offset))
             let job = TestFixtures.job(
-                type: .transcode, options: .init(priority: 1, attemptStartedAt: attemptStartedAt)
+                type: .transcode,
+                options: .init(priority: 1, attemptStartedAt: TestFixtures.epoch.addingTimeInterval(Double(offset)))
             )
             try await jobs.insert(job)
             others.append(job.id)
@@ -81,9 +86,15 @@ final class JobRepositoryAttemptStartedAtTests: StorageAsyncTestCase {
         )
         XCTAssertEqual(picked?.id, winner.id, "выбор не зависит от attempt_started_at — решает priority")
 
+        // Списком, не множеством: jobs(status:) не объявляет ORDER BY по
+        // attempt_started_at, и порядок вставки (ROWID) обязан остаться виден
+        // как последовательность — сравнение через Set стёрло бы случайную
+        // сортировку по этой колонке так же незаметно, как её отсутствие.
         let listing = try await jobs.jobs(status: .pending)
-        let listedIds = Set(listing.jobs.map(\.id))
-        XCTAssertEqual(listedIds, Set(others), "состав jobs(status:) не зависит от attempt_started_at")
+        XCTAssertEqual(
+            listing.jobs.map(\.id), others,
+            "состав И порядок jobs(status:) не зависят от attempt_started_at"
+        )
         XCTAssertTrue(listing.unreadable.isEmpty)
     }
 }

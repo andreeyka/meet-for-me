@@ -88,10 +88,10 @@ final class TranscriptRepositoryFileTests: StorageAsyncTestCase {
         XCTAssertEqual(afterBytes, fixtureBytes, "transcript.v<N>.json не тронут")
 
         let updatedRows = try await transcripts.segments(transcriptId: header.id)
-        for row in rows where row.id != rows[1].id {
+        for row in rows {
             XCTAssertEqual(
                 updatedRows.first { $0.id == row.id }?.attributionSource, .voiceProfile,
-                "атрибуция применена на всех трёх сегментах"
+                "атрибуция применена на всех трёх сегментах, включая тот, чей текст правится следом"
             )
         }
         XCTAssertEqual(updatedRows.first { $0.id == rows[1].id }?.segment.text, "edited")
