@@ -20,6 +20,7 @@ let package = Package(
         .library(name: "Detector", targets: ["Detector"]),
         .library(name: "CalendarEventKit", targets: ["CalendarEventKit"]),
         .library(name: "EngineXPCClient", targets: ["EngineXPCClient"]),
+        .library(name: "SecretStoreKeychain", targets: ["SecretStoreKeychain"]),
     ],
     dependencies: [
         .package(path: "../Core"),
@@ -57,6 +58,13 @@ let package = Package(
                 .product(name: "EngineKit", package: "Core"),
             ]
         ),
+        // IR-122 (MEE-358): реализация протокола `SecretStore`, объявленного `CalendarHub`
+        // (не `DomainCore`) — хранилище секретов коннекторов поверх Keychain (`Security`).
+        // Каркас без кода — реализация задачей DEV-1, docs/module-map.md.
+        .target(
+            name: "SecretStoreKeychain",
+            dependencies: [.product(name: "CalendarHub", package: "Core")]
+        ),
 
         .testTarget(
             name: "CaptureTests",
@@ -77,6 +85,10 @@ let package = Package(
         .testTarget(
             name: "EngineXPCClientTests",
             dependencies: ["EngineXPCClient", .product(name: "DomainTestKit", package: "Core")]
+        ),
+        .testTarget(
+            name: "SecretStoreKeychainTests",
+            dependencies: ["SecretStoreKeychain", .product(name: "CalendarHub", package: "Core")]
         ),
     ]
 )
