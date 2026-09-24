@@ -28,21 +28,45 @@ extension JobQueueEngine {
     /// то уже отпущенной, и годны оба взять её заново (найдено К67, PR #86 — заблокированный
     /// по `noHandler` кандидат снова оказывался `running`, потому что пересмотр, заведённый
     /// завершением соседней задачи, гонялся за тем же `claimNext` одновременно с ещё не
-    /// домотавшим свой `while` пересмотром, запущенным `start()`). Вместо параллельного
-    /// захода — заявка `revisitPassRequested`: уже идущий заход, домотав свой `while`,
-    /// сделает ЕЩЁ ОДИН заход, прежде чем закончить.
+    /// домотавшим свой `while` пересмотром, запущенным `start()`) — вместо параллельного
+    /// захода такой вызов лишь оставляет заявку `revisitPassRequested`.
+    ///
+    /// Заявка исполняется ОТДЕЛЬНОЙ `Task`, а не продолжением этого же вызова: этот вызов
+    /// обязан вернуться, домотав СВОЙ заход, — вызывающая сторона (`start()`, `submit()`)
+    /// ждёт ровно ОДИН заход, свой, а не цепочку из всех, что успели попроситься следом,
+    /// пока он шёл (иначе число и состав событий одного внешнего вызова перестало бы быть
+    /// предсказуемым — второй заход, если он понадобится, наблюдаем через `waitUntilIdle()`,
+    /// который эту заявку и её `Task` дожидается через `activeRevisitPasses`, см. довод
+    /// там же).
     func performRevisitSweep() async {
         guard !isRevisitLoopRunning else {
             revisitPassRequested = true
             return
         }
         isRevisitLoopRunning = true
-        defer { isRevisitLoopRunning = false }
+        await runOneRevisitSweep()
+        isRevisitLoopRunning = false
 
-        repeat {
-            revisitPassRequested = false
-            await runOneRevisitSweep()
-        } while revisitPassRequested && isRunning
+        guard revisitPassRequested, isRunning else { return }
+        revisitPassRequested = false
+        activeRevisitPasses += 1
+        Task { [weak self] in
+            guard let self else { return }
+            await self.fulfillRequestedRevisitSweep()
+        }
+    }
+
+    /// Обязательство, заведённое `performRevisitSweep()` для заявки `revisitPassRequested`,
+    /// оставленной ДРУГИМ вызовом, пока этот заход уже шёл, — исполняется здесь, отдельной
+    /// `Task`, которую вызывающая сторона того другого вызова не ждёт (тем же приёмом, что
+    /// `beginExecuting` не ждёт исполнение обработчика).
+    private func fulfillRequestedRevisitSweep() async {
+        defer {
+            activeRevisitPasses -= 1
+            notifyIdleIfNeeded()
+        }
+        guard isRunning else { return }
+        await performRevisitSweep()
     }
 
     /// Один заход §7: `reclaimExpiredLeases` — сперва, как второй предохранитель (см.
