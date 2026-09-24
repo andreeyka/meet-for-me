@@ -12,15 +12,13 @@ final class SleepWakeTests: CaptureAsyncTestCase {
         let harness = Harness()
         let directory = try Harness.makeDirectory()
         try await harness.start(directory: directory)
+        await harness.port.awaitPowerEventsSubscribed()
         harness.gateway.feed(.samples(.mic, frameCount: 480, channelCount: 1, hostTime: 1_000))
-        try await Task.sleep(nanoseconds: 10_000_000)
 
         XCTAssertEqual(harness.power.beginActivityCallCount, 1)
 
-        harness.power.emit(.willSleep)
-        try await Task.sleep(nanoseconds: 10_000_000)
-        harness.power.emit(.didWake)
-        try await Task.sleep(nanoseconds: 10_000_000)
+        await harness.port.performAndAwaitNextPowerEvent { harness.power.emit(.willSleep) }
+        await harness.port.performAndAwaitNextPowerEvent { harness.power.emit(.didWake) }
 
         // «После .didWake порт берёт новый токен удержания» — дословно контракт: старый
         // закрыт (недействителен вместе со сном), взят новый — два вызова beginActivity на сеанс.
@@ -44,11 +42,10 @@ final class SleepWakeTests: CaptureAsyncTestCase {
         let harness = Harness()
         let directory = try Harness.makeDirectory()
         try await harness.start(directory: directory)
+        await harness.port.awaitPowerEventsSubscribed()
         harness.gateway.feed(.samples(.mic, frameCount: 480, channelCount: 1, hostTime: 1_000))
-        try await Task.sleep(nanoseconds: 10_000_000)
 
-        harness.power.emit(.willSleep)
-        try await Task.sleep(nanoseconds: 10_000_000)
+        await harness.port.performAndAwaitNextPowerEvent { harness.power.emit(.willSleep) }
 
         let manifest = try await harness.port.stop()
         XCTAssertTrue(manifest.markers.contains { $0.kind == .sleep })
@@ -77,12 +74,20 @@ final class SleepWakeTests: CaptureAsyncTestCase {
     /// `power.emit(...)`, резюмируется циклом обработки сразу после того, как `.willSleep`
     /// обработан целиком (`handleSleep` вернулся) — чтение с диска идёт по факту обработки, не
     /// по угаданному времени.
+    ///
+    /// MEE-371: оставалась ещё одна угаданная задержка — фиксированная пауза ПЕРЕД первым
+    /// `power.emit(...)`, которая на деле ждала не обработки события, а самой РЕГИСТРАЦИИ
+    /// подписки `installPowerEventsIfNeeded` на `power.events()` (тело `Task { ... }` выполняется
+    /// не синхронно с её созданием). `FakePowerPort.emit` не буферизует события без подписчика —
+    /// на медленном раннере событие терялось бы, и `performAndAwaitNextPowerEvent` висел бы до
+    /// таймаута теста. `awaitPowerEventsSubscribed()` — тот же приём, что выше, но для момента
+    /// подписки, а не обработки: ждёт сигнала о завершённой регистрации перед любым `emit`.
     func test_sleepWritesValidManifestToDiskImmediately() async throws {
         let harness = Harness()
         let directory = try Harness.makeDirectory()
         try await harness.start(directory: directory)
+        await harness.port.awaitPowerEventsSubscribed()
         harness.gateway.feed(.samples(.mic, frameCount: 480, channelCount: 1, hostTime: 1_000))
-        try await Task.sleep(nanoseconds: 10_000_000)
 
         await harness.port.performAndAwaitNextPowerEvent { harness.power.emit(.willSleep) }
 
@@ -92,8 +97,7 @@ final class SleepWakeTests: CaptureAsyncTestCase {
         XCTAssertTrue(onDisk.discontinuities.contains { $0.reason == .sleep })
 
         harness.gateway.feed(.samples(.mic, frameCount: 480, channelCount: 1, hostTime: 2_000))
-        harness.power.emit(.didWake)
-        try await Task.sleep(nanoseconds: 10_000_000)
+        await harness.port.performAndAwaitNextPowerEvent { harness.power.emit(.didWake) }
         _ = try await harness.port.stop()
     }
 
@@ -106,21 +110,18 @@ final class SleepWakeTests: CaptureAsyncTestCase {
         let harness = Harness()
         let directory = try Harness.makeDirectory()
         try await harness.start(directory: directory)
+        await harness.port.awaitPowerEventsSubscribed()
         harness.gateway.feed(.samples(.mic, frameCount: 480, channelCount: 1, hostTime: 1_000))
-        try await Task.sleep(nanoseconds: 10_000_000)
 
         // Пересборка началась (смена микрофона), но не разрешена — pendingRebuild открыт до
         // первого буфера новой сборки.
         harness.gateway.emit(.microphoneChanged(
             MicrophoneHandle(uid: "airpods", name: "AirPods", channelCount: 1), atHostTime: 2_000
         ))
-        try await Task.sleep(nanoseconds: 10_000_000)
 
-        harness.power.emit(.willSleep)
-        try await Task.sleep(nanoseconds: 10_000_000)
+        await harness.port.performAndAwaitNextPowerEvent { harness.power.emit(.willSleep) }
 
         harness.gateway.feed(.samples(.mic, frameCount: 480, channelCount: 1, hostTime: 2_100))
-        try await Task.sleep(nanoseconds: 10_000_000)
 
         let manifest = try await harness.port.stop()
         XCTAssertTrue(manifest.markers.contains { $0.kind == .sleep }, "маркер .sleep безусловен")
