@@ -204,16 +204,26 @@ public actor EventKitConnector: CalendarConnector {
         )
     }
 
-    /// IR-118/К16, C-009 v11: порядок разбора события — `conference → location → bodyText`,
+    /// IR-118/К29, C-009 v11: порядок разбора события — `conference → location → bodyText`,
     /// первое совпадение побеждает (C-009 §2, инв. 3). У EventKit-источника структурного поля
     /// `conference` нет (сама причина, по которой Р4 вообще была нужна) — коннектор проверяет
     /// оставшиеся два поля в том же относительном порядке: `location`, затем `bodyText`.
+    ///
+    /// Возврат РП (MEE-383, дельта MEE-339): C-009 v11 требует резолвер только для НЕПУСТЫХ
+    /// `location`/`bodyText` — EventKit отдаёт пустую строку (не `nil`), когда поле формально
+    /// присутствует, но не заполнено; `nonEmpty` не пропускает такую строку в
+    /// `platformResolver.resolve`.
     private func resolveConference(location: String?, bodyText: String?) -> MeetingEvent.Conference? {
-        let joinInfo = location.flatMap { platformResolver.resolve(text: $0, source: .location) }
-            ?? bodyText.flatMap { platformResolver.resolve(text: $0, source: .bodyText) }
+        let joinInfo = Self.nonEmpty(location).flatMap { platformResolver.resolve(text: $0, source: .location) }
+            ?? Self.nonEmpty(bodyText).flatMap { platformResolver.resolve(text: $0, source: .bodyText) }
         return joinInfo.flatMap { try? MeetingEvent.Conference(
             provider: $0.provider, joinUrl: $0.joinUrl, meetingId: $0.meetingId, passcode: $0.passcode
         ) }
+    }
+
+    private static func nonEmpty(_ value: String?) -> String? {
+        guard let value, !value.isEmpty else { return nil }
+        return value
     }
 
     private func buildPerson(from raw: RawPerson) throws -> MeetingEvent.Person {

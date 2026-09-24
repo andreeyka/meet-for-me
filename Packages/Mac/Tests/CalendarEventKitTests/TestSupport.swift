@@ -62,7 +62,7 @@ struct Harness {
     let platformResolver: PlatformResolver
     let connector: EventKitConnector
 
-    /// - Parameter platformResolver: резолвер для К16 (IR-118, C-009 v11) — `FixedPlatformResolver`
+    /// - Parameter platformResolver: резолвер для К29 (IR-118, C-009 v11) — `FixedPlatformResolver`
     ///   с пустым словарём для тестов, не касающихся `conference`; возврат РП (Д12, 24.09) — тип
     ///   параметра сужен до протокола `PlatformResolver`, чтобы принимать и локальные
     ///   записывающие фейки теста (тот фиксирует не только ответ, но и `source` вызова).
