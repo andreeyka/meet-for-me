@@ -60,7 +60,15 @@ enum EventNormalizer {
         calendar.timeZone = zone
         let start = calendar.startOfDay(for: rawStart)
         let lastDayStart = calendar.startOfDay(for: rawEnd)
-        let end = calendar.date(byAdding: .day, value: 1, to: lastDayStart) ?? lastDayStart
+        // НЕ `calendar.date(byAdding: .day, value: 1, to: lastDayStart)`: в сутки, где
+        // локальной полуночи не существует (К14, Beirut), `lastDayStart` сам читается по
+        // местным часам как 01:00, не 00:00 — сложение «+1 сутки» стремится сохранить ЭТО
+        // же часовое чтение на следующих сутках, а не их настоящую полночь, и «конец» съезжает
+        // на час. Вместо этого — сдвиг заведомо ВНУТРЬ следующих суток (36 часов хватает при
+        // любом реальном сдвиге DST) и `startOfDay` уже ОТ него: так результат — канонический
+        // старт следующих суток по часам Calendar, не унаследованное от `lastDayStart` чтение.
+        let wellInsideNextDay = lastDayStart.addingTimeInterval(36 * 3600)
+        let end = calendar.startOfDay(for: wellInsideNextDay)
         return (start, end)
     }
 
