@@ -56,6 +56,45 @@ final class ControlSurfaceEntryPointsTests: XCTestCase {
         }
     }
 
+    /// Дефект 3 (MEE-362 ч.3/MEE-386, `stop()`): раньше `shutdown()` без таймаута могло
+    /// повесить `stop()` НАВСЕГДА на зависшем коннекторе — единственным способом снять его
+    /// был `release(.shutdown)` теста, будто ждать реальный процесс было некому. Здесь
+    /// `connector.shutdown()` НИКОГДА не отпускается (без `release`, в отличие от теста
+    /// выше) — единственный способ, которым `stop()` может вернуться, — таймаут `waitSeam`
+    /// (`shutdownWithTimeout`, К9 `.other`/30с). `pollUntil { waitSeam.resolveNext() }` —
+    /// тот же приём, что `resolveTimeoutAfterHang` (`InitializationTests.swift`): не отпускает
+    /// ворота раньше, чем гонка реально в них встала.
+    func test_defect3_stopReturnsOnShutdownTimeoutEvenIfConnectorNeverReturns() async throws {
+        let harness = Harness(sourceIds: ["src-1"])
+        let connectors = try await harness.seedAndInitialize(["src-1"])
+        let connector = connectors[0]
+        connector.hang(.shutdown)
+
+        let flag = DoneFlag()
+        let stopTask = Task {
+            await harness.hub.stop()
+            await flag.markDone()
+        }
+
+        await pollUntil { connector.callCount(.shutdown) > 0 }
+        let doneBeforeTimeout = await flag.isDone()
+        XCTAssertFalse(
+            doneBeforeTimeout, "stop() не должен вернуться раньше — ни shutdown, ни таймаут ещё не отработали"
+        )
+
+        await pollUntil { harness.waitSeam.resolveNext() }
+        await stopTask.value
+
+        let done = await flag.isDone()
+        XCTAssertTrue(
+            done, "stop() обязан вернуться по таймауту, даже если connector.shutdown() никогда не возвращается"
+        )
+        XCTAssertEqual(connector.shutdownCallCount, 1)
+        XCTAssertTrue(
+            harness.waitSeam.durations.contains(.seconds(30)), "гонка идёт с тем же пределом .other, что К68/К73"
+        )
+    }
+
     // MARK: - К67 (отмена во время ожидания повтора — cancelled, не transport)
 
     func test_k67_cancellationDuringRetryWaitGivesCancelledNotTransport() async throws {
