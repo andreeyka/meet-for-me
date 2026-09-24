@@ -1,4 +1,4 @@
-//  InMemoryJobRepository — реализация `JobRepository` поверх словаря, C-013
+//  InMemoryJobRepository — реализация `JobRepository` поверх словаря, C-013 v7
 //  §«Фейк для тестов»: «с теми же правилами `claimNext` и `reclaimExpiredLeases`, что у
 //  настоящей таблицы. Позволяет протестировать саму очередь без GRDB и на Linux».
 //
@@ -29,21 +29,16 @@
 //  меньше `runAfter`; при равенстве обоих — меньше `createdAt`; при равенстве всех трёх —
 //  меньше `id` в лексикографическом сравнении `UUID.uuidString`.
 //
-//  СТРОКА: `reclaimExpiredLeases` — кто решает развилку инвариантов 10/11 (`attempts + 1`
-//  при начатой попытке, формула отката §5, переход в `failed` при исчерпании), а КОНТРАКТЫ
-//  ЗДЕСЬ СПОРЯТ САМИ С СОБОЙ, не я развожу их произвольно. (а) РЕШАЕТ ОЧЕРЕДЬ: C-010
-//  инвариант 26 говорит про `attempt_started_at` дословно — «ни один метод по этой колонке
-//  решений не принимает… что из этого следует, решает очередь (C-013, инварианты 10, 11,
-//  34)» — то есть `JobRepository` обязан отдавать сырые данные, а `attempts`/`status`/
-//  `runAfter` после лизинга пересчитывает вызывающая сторона перед `update`. (б) РЕШАЕТ
-//  РЕПОЗИТОРИЙ: раздел «Чем проверяется» C-013 сам испытывает МЕТОД `reclaimExpiredLeases`
-//  входами «с отметкой — `attempts + 1`, без отметки — прежний» — то есть ждёт готовый
-//  ответ от порта, а не сырую строку. Обе цитаты — из контрактов этой же пары, и они не
-//  совпадают на одном вопросе «кто пересчитывает». Решать за контракт (какой из двух текстов
-//  главнее) не мне — заведён `interface-request` **IR-111** ([MEE-323]) архитектору. **Беру
-//  (б)** временно, тем же способом, что и раньше, — держит зелёным раздел «Чем проверяется»,
-//  на который прямо ссылается К84, — и это ПОМЕТКА, а не решённый вопрос: когда придёт
-//  IR-111, фейк переписывается по его исходу, а не переприбивается молча.
+//  IR-111 ([MEE-323]) закрыт изданием C-013 v7 ([MEE-21]): `reclaimExpiredLeases`
+//  ОТДАЁТ строки как есть — не ветвится по `attemptStartedAt`, не пересчитывает
+//  `attempts`, не трогает `status` и лизинг. Решение по инвариантам 10/11 (что
+//  делать с истёкшим лизингом — `attempts + 1`, формула отката §5, переход в
+//  `failed` при исчерпании) принимает очередь, которая читает возврат метода и
+//  пишет решение через `update(_ job:)` — «Чем проверяется» C-013 v7, строки
+//  585/586 (`reclaimExpiredLeases` отдаёт строки как есть / истёкший лизинг
+//  ветвится в тесте очереди, а не репозитория). Прежняя пометка `СТРОКА:
+//  IR-111` брала временное чтение (б) — ветвление внутри репозитория; снята
+//  вместе с рассуждением, вопрос закрыт архитектором не в мою пользу.
 //
 //  СТРОКА (мелкое, приёмка MEE-320): `jobs.dedup_key` уникален среди `pending`/`running`
 //  (C-010 инвариант 6, половина `jobs`) — этот фейк её НЕ ДЕРЖИТ: `insert`/`update` не
@@ -216,10 +211,14 @@ extension InMemoryJobRepository {
         )
         locked { claimNextCalls += 1 }
         let outcome = locked { () -> ClaimOutcome in
+            // C-010 v11, инвариант 25: `claimNext` УПОРЯДОЧИВАЕТ по `run_after` (через
+            // `claimOrder` ниже), но не фильтрует по нему — решение о «слишком рано»
+            // (`JobBlockReason.notYetDue`) остаётся за очередью, читающей `runAfter` сама
+            // (`firstBlockingReason`, JobQueueEngineReview.swift). IR-121 (MEE-356) закрыт
+            // архитектором этой правкой C-010/C-013 (v11/v9) — прежняя развилка снята.
             let candidates = order.compactMap { jobsById[$0] }
                 .filter {
-                    $0.status == .pending && types.contains($0.type)
-                        && !excluding.contains($0.id) && $0.runAfter <= now
+                    $0.status == .pending && types.contains($0.type) && !excluding.contains($0.id)
                 }
                 .sorted(by: Self.claimOrder)
             guard let picked = candidates.first else { return .empty }
@@ -243,6 +242,9 @@ extension InMemoryJobRepository {
         }
     }
 
+    /// C-013 v7: отдаёт строки с истёкшим лизингом как есть — не пересчитывает
+    /// `attempts`, не трогает `status` и лизинг. Решение по инвариантам 10/11
+    /// принимает очередь и пишет его через `update(_ job:)`.
     public func reclaimExpiredLeases(now: Date) async throws -> [Job] {
         log.record(
             port: Self.portName, method: "reclaimExpiredLeases(now:)",
@@ -256,11 +258,7 @@ extension InMemoryJobRepository {
                     return .unreadable(error)
                 }
             }
-            let reclaimed = stale.map { Self.reclaim($0, now: now) }
-            for job in reclaimed {
-                jobsById[job.id] = job
-            }
-            return .reclaimed(reclaimed)
+            return .reclaimed(stale)
         }
         switch outcome {
         case .reclaimed(let jobs): return jobs
@@ -309,43 +307,5 @@ extension InMemoryJobRepository {
         if lhs.runAfter != rhs.runAfter { return lhs.runAfter < rhs.runAfter }
         if lhs.createdAt != rhs.createdAt { return lhs.createdAt < rhs.createdAt }
         return lhs.id.uuidString < rhs.id.uuidString
-    }
-
-    /// Инварианты 10/11 C-013: попытка засчитывается только если она начиналась
-    /// (`attemptStartedAt != nil`) — тогда `attempts + 1`, `lastError == "interrupted"`, и
-    /// либо `failed` (исчерпаны попытки), либо `pending` с задержкой §5. Не начиналась —
-    /// строка возвращается в `pending` нетронутой: «работы не было ни секунды».
-    fileprivate static func reclaim(_ job: Job, now: Date) -> Job {
-        guard job.attemptStartedAt != nil else {
-            return Job(
-                id: job.id, type: job.type, payload: job.payload, status: .pending,
-                priority: job.priority, attempts: job.attempts, maxAttempts: job.maxAttempts,
-                runAfter: job.runAfter, conditions: job.conditions, dedupKey: job.dedupKey,
-                leaseExpiresAt: nil, attemptStartedAt: nil, lastError: job.lastError,
-                createdAt: job.createdAt, updatedAt: job.updatedAt
-            )
-        }
-        let attemptsNew = job.attempts + 1
-        if attemptsNew >= job.maxAttempts {
-            return Job(
-                id: job.id, type: job.type, payload: job.payload, status: .failed,
-                priority: job.priority, attempts: attemptsNew, maxAttempts: job.maxAttempts,
-                runAfter: job.runAfter, conditions: job.conditions, dedupKey: job.dedupKey,
-                leaseExpiresAt: nil, attemptStartedAt: nil, lastError: "interrupted",
-                createdAt: job.createdAt, updatedAt: job.updatedAt
-            )
-        }
-        return Job(
-            id: job.id, type: job.type, payload: job.payload, status: .pending,
-            priority: job.priority, attempts: attemptsNew, maxAttempts: job.maxAttempts,
-            runAfter: now.addingTimeInterval(Self.retryDelay(attemptsNew)), conditions: job.conditions,
-            dedupKey: job.dedupKey, leaseExpiresAt: nil, attemptStartedAt: nil, lastError: "interrupted",
-            createdAt: job.createdAt, updatedAt: job.updatedAt
-        )
-    }
-
-    /// Формула §5 C-013: `min(30 * 2^(attempts_new - 1), 1800)` секунд.
-    fileprivate static func retryDelay(_ attemptsNew: Int) -> TimeInterval {
-        min(30 * pow(2.0, Double(attemptsNew - 1)), 1800)
     }
 }

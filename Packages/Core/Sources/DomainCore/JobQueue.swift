@@ -1,4 +1,6 @@
-//  JobQueue и её типы — контракт C-013 (MEE-21) v6, «Определение», §§1—3
+//  JobQueue и её типы — контракт C-013 (MEE-21) v6, «Определение», §§1—3.
+//  `recordingDidStart`/`recordingDidStop` в `JobQueue` — C-013 v9, возврат РП на MEE-350:
+//  прежде взяты по конвенции у конкретного типа (`JobQueueEngine`), IR закрыт архитектором.
 //
 //  Модуль: domain-core · Владелец: DEV-2 · Слой: домен
 //
@@ -221,6 +223,12 @@ public protocol JobQueue: Sendable {
     func start() async
     func stop() async
     func events() -> AsyncStream<JobEvent>
+
+    /// C-013 v9: сигнал факта идущей записи для `JobBlockReason.recordingInProgress`
+    /// (инвариант 4) — прежде принят по конвенции у конкретного типа `JobQueueEngine`
+    /// (MEE-350, // СТРОКА, снята этим изданием); теперь часть протокола дословно.
+    func recordingDidStart() async
+    func recordingDidStop() async
 }
 
 // MARK: - §3. Хранилище задач

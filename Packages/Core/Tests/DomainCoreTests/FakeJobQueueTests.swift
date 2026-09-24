@@ -179,6 +179,19 @@ final class FakeJobQueueTests: XCTestCase {
         XCTAssertEqual(queue.stopCallCount, 1)
     }
 
+    /// C-013 v9: `recordingDidStart`/`recordingDidStop` — часть протокола `JobQueue`
+    /// (возврат РП, MEE-350) — фейк лишь считает вызовы, ничего не пересматривает.
+    func test_mee350_fakeJobQueue_countsRecordingSignals() async {
+        let queue = FakeJobQueue()
+        XCTAssertEqual(queue.recordingDidStartCallCount, 0, "вектор непустоты: до вызовов ноль")
+        XCTAssertEqual(queue.recordingDidStopCallCount, 0)
+        await queue.recordingDidStart()
+        await queue.recordingDidStart()
+        await queue.recordingDidStop()
+        XCTAssertEqual(queue.recordingDidStartCallCount, 2)
+        XCTAssertEqual(queue.recordingDidStopCallCount, 1)
+    }
+
     // MARK: - `FakeJobHandler`
 
     func test_mee290_fakeJobHandler_returnsGivenOutcomeAndCountsRuns() async {

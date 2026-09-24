@@ -249,9 +249,12 @@ extension InMemoryJobRepositoryTests {
         XCTAssertEqual(repo.failUnreadableCallCount, 1, "посчитан и вызов без эффекта")
     }
 
-    /// Инварианты 10/11 C-013: истёкший лизинг — та же развилка, что у `start()`: с
-    /// отметкой — `attempts + 1`, без отметки — прежний.
-    func test_mee320_reclaimExpiredLeases_branchesOnAttemptStartedAt() async throws {
+    /// C-013 v7, «Чем проверяется», строка 585 (IR-111): `reclaimExpiredLeases` отдаёт
+    /// строки с истёкшим лизингом КАК ЕСТЬ — два входа, с отметкой и без, возвращаются оба
+    /// без изменения `attempts`, `status` и самой отметки. Решение по инвариантам 10/11
+    /// (что делать с истёкшим лизингом) принимает очередь, а не этот метод — строка 586
+    /// того же раздела испытывает это отдельным тестом очереди, вне зоны этого фейка.
+    func test_mee320_reclaimExpiredLeases_returnsRowsUnchanged() async throws {
         let repo = InMemoryJobRepository()
         let started = job(
             status: .running, attempts: 0, maxAttempts: 5,
@@ -267,36 +270,8 @@ extension InMemoryJobRepositoryTests {
         let reclaimed = try await repo.reclaimExpiredLeases(now: epoch)
         let byId = Dictionary(uniqueKeysWithValues: reclaimed.map { ($0.id, $0) })
 
-        XCTAssertEqual(byId[started.id]?.attempts, 1, "с отметкой — attempts + 1")
-        XCTAssertEqual(byId[started.id]?.lastError, "interrupted")
-        XCTAssertEqual(byId[started.id]?.status, .pending)
-        // Формула §5 C-013 (возврат по приёмке MEE-320 — runAfter не проверялся числом):
-        // min(30 * 2^(attempts_new - 1), 1800) = min(30 * 2^0, 1800) = 30 секунд от `now`.
-        XCTAssertEqual(byId[started.id]?.runAfter, epoch.addingTimeInterval(30), "задержка §5: 30 * 2^(1-1)")
-
-        XCTAssertEqual(byId[notStarted.id]?.attempts, 1, "без отметки — прежний")
-        XCTAssertEqual(byId[notStarted.id]?.status, .pending)
-        XCTAssertEqual(byId[notStarted.id]?.runAfter, notStarted.runAfter, "runAfter не тронут — работы не было")
-    }
-
-    /// Инвариант 10 C-013 (через инвариант 11): исчерпаны попытки — переход в `failed`,
-    /// а не в `pending` (возврат по приёмке MEE-320 — эта ветка не проверялась).
-    func test_mee320_reclaimExpiredLeases_transitionsToFailedWhenAttemptsExhausted() async throws {
-        let repo = InMemoryJobRepository()
-        let exhausted = job(
-            status: .running, attempts: 2, maxAttempts: 3,
-            leaseExpiresAt: epoch.addingTimeInterval(-1), attemptStartedAt: epoch.addingTimeInterval(-10)
-        )
-        try await repo.insert(exhausted)
-
-        let reclaimed = try await repo.reclaimExpiredLeases(now: epoch)
-
-        let after = try XCTUnwrap(reclaimed.first)
-        XCTAssertEqual(after.attempts, 3, "attempts_new = 2 + 1 = 3 = maxAttempts")
-        XCTAssertEqual(after.status, .failed, "attempts_new >= maxAttempts — failed, не pending")
-        XCTAssertEqual(after.lastError, "interrupted")
-        XCTAssertNil(after.leaseExpiresAt)
-        XCTAssertNil(after.attemptStartedAt)
+        XCTAssertEqual(byId[started.id], started, "с отметкой — строка не изменена")
+        XCTAssertEqual(byId[notStarted.id], notStarted, "без отметки — строка не изменена")
     }
 
     /// К84: `reclaimExpiredLeases` на нечитаемой строке бросает заданную ошибку — ровно как

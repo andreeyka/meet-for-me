@@ -21,6 +21,17 @@ jobs:
     name: Core (Linux)
     runs-on: ubuntu-latest
     container: swift:5.10-jammy
+    # MEE-329. Без этого предела зависший шаг живёт до потолка GitHub — 360 минут
+    # (DEV-1, приёмка MEE-317, п. 11: искусственно зависший тест под `swift test`
+    # провисел 3 мин 22 с без вердикта, прогон 35921579703, шаг «Тесты ·
+    # Packages/Mac», отменён вручную; `executionTimeAllowance`
+    # XCTest при таком способе запуска не действует). Предел — по факту: вся работа
+    # целиком (checkout, сборка, граф, тест) укладывается в 74–75 с на зелёном
+    # прогоне (run 35919402086, 35919377429, main). 12 минут — это занятая шагом
+    # `swift test` часть предела ниже (7, см. её же комментарий) плюс сама работа
+    # без него (≈45 с) и запас на холодный контейнер (`Initialize containers` уже
+    # брал до 30 с) — с большим отрывом от факта, но далеко от прежних 360.
+    timeout-minutes: 12
     steps:
       - uses: actions/checkout@v5
       - run: swift --version
@@ -76,6 +87,7 @@ jobs:
             python3 --version
             ls -l .github/scripts
             python3 .github/scripts/symbol-graph-surface.py --self-test
+            python3 .github/scripts/undefined-symbols.py --self-test
             graph_dir="$RUNNER_TEMP/symbol-graph-core"
             rm -rf "$graph_dir"
             mkdir -p "$graph_dir"
@@ -91,6 +103,7 @@ jobs:
             python3 .github/scripts/symbol-graph-surface.py \
               --graph-dir "$graph_dir" \
               --sources Packages/Core/Sources \
+              --allowed-types-dir .github/scripts/allowed-types \
               --job "Core (Linux)"
           ) 2>&1 | tee "$log" || status=$?
           # Свой вердикт — число таргетов и число нарушений — разбор графа
@@ -128,18 +141,131 @@ jobs:
         # заведомо несобранному дереву значит платить минутами за нулевой исход.
         if: ${{ !cancelled() && steps.build-core.outcome == 'success' }}
         shell: bash
-        run: |
+        env:
+          TEST_TARGET: Core
+          TEST_PACKAGE_PATH: Packages/Core
+          # MEE-329. Собственный предел — не GitHub-овый `timeout-minutes` шага
+          # ниже, потому что этот шаг обязан САМ сказать «таймаут», а не только
+          # быть остановленным снаружи: `timeout-minutes` рубит процесс до того,
+          # как скрипт успеет написать хоть одну аннотацию, и сессия без сырых
+          # логов увидела бы только красный шаг без слова о причине — тот же
+          # класс потери, который уже решён для «упал тест» (MEE-263) и здесь
+          # решается тем же способом, аннотацией. Величина — на зелёном прогоне
+          # (run 35919402086, тот же коммит) шаг занимает 22–29 с; 300 с — это
+          # более чем десятикратный запас: тесно было бы наоборот, ложным красным
+          # на закономерном росте числа тестов, а не на реальном зависании.
+          TEST_TIMEOUT_SECONDS: "300"
+        # Подстраховка снаружи скрипта — на случай, если сам watchdog не
+        # запустится (например, `mkfifo` недоступен): 7 минут даёт собственному
+        # пределу выше время сработать первым (300 с = 5 минут) и оставляет
+        # запас на её же кириллическую аннотацию и выход.
+        timeout-minutes: 7
+        run: &run-swift-test-with-timeout |
           set -o pipefail
-          log="$RUNNER_TEMP/tests-Core.log"
-          status=0
-          swift test --package-path Packages/Core 2>&1 | tee "$log" || status=$?
+          target="$TEST_TARGET"
+          package_path="$TEST_PACKAGE_PATH"
+          limit_seconds="$TEST_TIMEOUT_SECONDS"
+
+          log="$RUNNER_TEMP/tests-$target.log"
+          exit_file="$RUNNER_TEMP/tests-$target.exit"
+          timeout_marker="$RUNNER_TEMP/tests-$target.timeout"
+          fifo="$RUNNER_TEMP/tests-$target.fifo"
+          rm -f "$exit_file" "$timeout_marker" "$fifo"
+          mkfifo "$fifo"
+
+          # Свой watchdog вместо `timeout`/`gtimeout`: первого нет в образе
+          # macos-14 без отдельной установки, второго — в контейнере
+          # swift:5.10-jammy без пакета coreutils, а платить установкой пакета
+          # ради одной команды дороже, чем двадцать строк голого bash, который
+          # есть одинаково в обоих местах. `tee` читает готовый канал отдельным
+          # процессом, а PID самого `swift test` ловится напрямую через `$!` —
+          # без `ps`, которого в контейнере тоже может не быть. Убить нужно
+          # именно этот процесс (точнее, его группу — `-$swift_pid`, куда
+          # `set -m` кладёт его дочерние процессы): убить только `tee` бесполезно,
+          # если тест вообще ничего не пишет, а зависание DEV-1 (MEE-317, п. 11)
+          # было ровно таким.
+          set -m
+          tee "$log" < "$fifo" &
+          tee_pid=$!
+
+          ( swift test --package-path "$package_path" > "$fifo" 2>&1; echo $? > "$exit_file" ) &
+          swift_pid=$!
+
+          # Проверка — по ГРУППЕ (`-$swift_pid`), не по одному "$swift_pid":
+          # `$swift_pid` — PID обёртывающей подоболочки, а не самого swift test,
+          # и голый SIGTERM убивает её мгновенно (ловушки на него у неё нет),
+          # тогда как реальный процесс — её потомок — может его игнорировать
+          # (ловушка внутри него самого) и остаться жить осиротевшим в той же
+          # группе. Проверка `kill -0 "$swift_pid"` этого бы не заметила: она
+          # видит только подоболочку, которая к тому моменту уже мертва, и
+          # эскалация до SIGKILL никогда бы не наступила. Опрос вместо
+          # фиксированной паузы — чтобы не ждать полных 10 с, когда TERM и так
+          # сработал за первую секунду (обычный случай).
+          (
+            sleep "$limit_seconds"
+            if kill -0 -- -"$swift_pid" 2>/dev/null; then
+              : > "$timeout_marker"
+              kill -TERM -- -"$swift_pid" 2>/dev/null || true
+              for _ in $(seq 1 10); do
+                sleep 1
+                kill -0 -- -"$swift_pid" 2>/dev/null || break
+              done
+              kill -KILL -- -"$swift_pid" 2>/dev/null || true
+            fi
+          ) &
+          watchdog_pid=$!
+
+          wait "$swift_pid" 2>/dev/null || true
+          if [ -e "$timeout_marker" ]; then
+            # Таймаут уже наступил — watchdog идёт по своей эскалации сам, и
+            # обрывать его досрочно нельзя: подоболочка ("$swift_pid") гибнет
+            # от TERM почти сразу, а сам зависший процесс в её группе может
+            # пережить TERM и ждать своей очереди на SIGKILL. Ждём watchdog до
+            # конца — он сам не длиннее предела эскалации выше.
+            wait "$watchdog_pid" 2>/dev/null || true
+          else
+            # Тест уложился сам — таймер watchdog больше не нужен, снимаем.
+            kill "$watchdog_pid" 2>/dev/null || true
+            wait "$watchdog_pid" 2>/dev/null || true
+          fi
+          wait "$tee_pid" 2>/dev/null || true
+          rm -f "$fifo"
+
+          if [ -e "$timeout_marker" ]; then
+            # Перевод строки первой же строкой — не украшение. Прогон
+            # 35928704905 показал: последняя, оборванная убийством строка
+            # `swift test` в общем логе шага не кончается своим `\n` (процесс
+            # умер посреди записи), и без этой строки аннотация ниже
+            # склеивается с её хвостом в одну физическую строку журнала —
+            # GitHub Actions разбирает `::error …` только с начала строки и
+            # такую пропускает молча (проверено тем же прогоном: `::notice`
+            # без такого столкновения дошёл, `::error` — нет).
+            printf '\n'
+            # Секунды — основная величина, минуты — только для читаемости:
+            # при целочисленном делении предел короче минуты печатал бы
+            # «0 минут», а секунды верны при любом значении предела.
+            minutes=$(( limit_seconds / 60 ))
+            # Формулировка ниже — намеренно не «шаг завершился с кодом», а
+            # «ТАЙМАУТ» отдельным словом в заголовке и в теле: постановка
+            # MEE-329 требует, чтобы исход не выглядел обычным падением, и
+            # чтобы слово попадало в ту же сводку, что и обычный вердикт
+            # (`::notice title=Тесты · …`) — она здесь та же самая, просто с
+            # другим текстом, а не новый, легко теряемый канал.
+            printf '::error title=Таймаут · Packages/%s::swift test не уложился в %s с (%s мин) — процесс остановлен принудительно\n' \
+              "$target" "$limit_seconds" "$minutes"
+            printf '::notice title=Тесты · Packages/%s::ТАЙМАУТ — не завершился за %s с (%s мин, лимит MEE-329), а не обычное падение\n' \
+              "$target" "$limit_seconds" "$minutes"
+            exit 124
+          fi
+
+          status=$(cat "$exit_file" 2>/dev/null || echo 1)
           # `|| true` здесь несущий, а не украшение: шаг идёт под `bash -eo
           # pipefail`, а grep без совпадений возвращает 1 — без guard зелёный
           # прогон умирал бы на собственной аннотации.
           failed=$(grep -hoE "Test Case '[^']+' failed" "$log" | cut -d"'" -f2 | sort -u || true)
           if [ -n "$failed" ]; then
             while IFS= read -r name; do
-              printf '::error title=Упал тест · Packages/Core::%s\n' "$name"
+              printf '::error title=Упал тест · Packages/%s::%s\n' "$target" "$name"
             done <<< "$failed"
             # Издание 12. Уведомление и строка XCTest считают РАЗНОЕ, и до этой
             # правки обе величины стояли в одном журнале, не назвав своего
@@ -162,11 +288,11 @@ jobs:
             asserts=$(grep -hoE 'Executed [0-9]+ tests, with [0-9]+ failure' "$log" \
               | tail -1 | sed -E 's/.*with ([0-9]+) failure.*/\1/' || true)
             if [ -n "$asserts" ]; then
-              printf '::notice title=Тесты · Packages/Core::упало тестов: %s (различных имён); провалившихся утверждений XCTest: %s\n' \
-                "$names" "$asserts"
+              printf '::notice title=Тесты · Packages/%s::упало тестов: %s (различных имён); провалившихся утверждений XCTest: %s\n' \
+                "$target" "$names" "$asserts"
             else
-              printf '::notice title=Тесты · Packages/Core::упало тестов: %s (различных имён); строки XCTest «Executed …» в журнале нет\n' \
-                "$names"
+              printf '::notice title=Тесты · Packages/%s::упало тестов: %s (различных имён); строки XCTest «Executed …» в журнале нет\n' \
+                "$target" "$names"
             fi
           fi
           # Шаг мог умереть до того, как XCTest сказал хоть слово: сборка,
@@ -174,13 +300,24 @@ jobs:
           # вовсе, и в аннотацию уходит хвост журнала — тот же приём и тот же
           # довод, что у разбора символьного графа выше.
           if [ "$status" -ne 0 ] && [ -z "$failed" ]; then
-            bash .github/scripts/annotate.sh "Тесты · Packages/Core" "$status" "$log" || true
+            bash .github/scripts/annotate.sh "Тесты · Packages/$target" "$status" "$log" || true
           fi
-          exit $status
+          exit "$status"
 
   macos:
     name: Core + Mac (macos-14)
     runs-on: macos-14
+    # MEE-329, тот же довод, что у Core (Linux) выше. Предел просторнее той работы
+    # по двум причинам, обе именованы: здесь два шага `swift test`, а не один
+    # (Packages/Core и Packages/Mac — оба со своим пределом в 7 минут ниже, и
+    # оба гейтятся только на сборку графа, а не друг на друга, — значит в
+    # худшем случае, если зависнут оба разом, работа ждёт оба предела подряд,
+    # 7+7); и `brew install swiftlint` — сеть, а не CPU, и на холодном кеше
+    # раннера ходит дольше секунд, которые он занимает на зелёном прогоне
+    # сегодня (run 35919402086, 35919377429: вся работа целиком — 95–113 с).
+    # 20 минут — это 14 минут на оба возможных зависания подряд плюс запас
+    # почти на порядок сверх измеренного факта на всё остальное.
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v5
 
@@ -254,6 +391,7 @@ jobs:
             command -v python3
             python3 --version
             python3 .github/scripts/symbol-graph-surface.py --self-test
+            python3 .github/scripts/undefined-symbols.py --self-test
             # `|| inner=$?` несущий, как и у SwiftLint выше: вердикт по второму
             # пакету не должен пропадать из-за отказа по первому.
             inner=0
@@ -295,6 +433,7 @@ jobs:
               python3 .github/scripts/symbol-graph-surface.py \
                 --graph-dir "$graph_dir" \
                 --sources "Packages/$pkg/Sources" \
+                --allowed-types-dir .github/scripts/allowed-types \
                 --job "Core + Mac (macos-14) · Packages/$pkg" || inner=$?
             done
             exit $inner
@@ -307,6 +446,28 @@ jobs:
             echo "build_ok=true" >> "$GITHUB_OUTPUT"
           fi
           bash .github/scripts/annotate.sh "Символьный граф · Core + Mac" "$status" "$log" || true
+          exit $status
+
+      # MEE-191, «второй дефект»: способ, который называет инвариант 27 C-010
+      # (К44 перечня MEE-189), — разбор таблицы неопределённых символов
+      # таргета `Storage` — не стоял в ci.yml ни одним шагом. Это ДРУГАЯ
+      # таблица, чем публичная поверхность (шаг выше): та смотрит, что модуль
+      # ПОКАЗЫВАЕТ наружу, эта — что он ВЫЗЫВАЕТ у чужого кода (см. шапку
+      # .github/scripts/undefined-symbols.py). Только на macOS: `Storage`
+      # объявляется в манифесте только не на Linux (MEE-321), на `Core (Linux)`
+      # этого таргета в графе SwiftPM нет вовсе.
+      - name: Таблица неопределённых символов (Storage)
+        if: ${{ !cancelled() && steps.graph.outputs.build_ok == 'true' }}
+        shell: bash
+        run: |
+          set -o pipefail
+          log="$RUNNER_TEMP/undefined-symbols-storage.log"
+          status=0
+          python3 .github/scripts/undefined-symbols.py \
+            --build-dir Packages/Core/.build \
+            --target Storage \
+            --job "Core + Mac (macos-14)" 2>&1 | tee "$log" || status=$?
+          bash .github/scripts/annotate.sh "Неопределённые символы · Storage" "$status" "$log" || true
           exit $status
 
       # Исход шага называл таргет, а не вектор: в сессии без сырых логов
@@ -327,55 +488,16 @@ jobs:
         # не тратятся — это довод QA против `always()`, и он здесь исполнен.
         if: ${{ !cancelled() && steps.graph.outputs.build_ok == 'true' }}
         shell: bash
-        run: |
-          set -o pipefail
-          log="$RUNNER_TEMP/tests-Core.log"
-          status=0
-          swift test --package-path Packages/Core 2>&1 | tee "$log" || status=$?
-          # `|| true` здесь несущий, а не украшение: шаг идёт под `bash -eo
-          # pipefail`, а grep без совпадений возвращает 1 — без guard зелёный
-          # прогон умирал бы на собственной аннотации.
-          failed=$(grep -hoE "Test Case '[^']+' failed" "$log" | cut -d"'" -f2 | sort -u || true)
-          if [ -n "$failed" ]; then
-            while IFS= read -r name; do
-              printf '::error title=Упал тест · Packages/Core::%s\n' "$name"
-            done <<< "$failed"
-            # Издание 12. Уведомление и строка XCTest считают РАЗНОЕ, и до этой
-            # правки обе величины стояли в одном журнале, не назвав своего
-            # предмета ни одна: `sort -u` выше считает РАЗЛИЧНЫЕ ИМЕНА упавших
-            # тестов, а `Executed N tests, with M failures` — ПРОВАЛИВШИЕСЯ
-            # УТВЕРЖДЕНИЯ, которых у одного имени бывает несколько. Прогон 128
-            # (работа 104943671531): 11 утверждений в 7 именах; прогон 136
-            # (работа 104957082353): 17 и 10. Противоречия между ними нет —
-            # читатель получал два ответа на один вопрос, и чаще всего ровно
-            # ОДИН из них: уведомление печатается последними строками шага и
-            # попадает в хвост журнала, а строка `Executed …` лежит за
-            # полусотней строк дампа символов выше и хвостом в 44 строки уже
-            # не ловится (замер издания 12, тот же журнал). Поэтому обе
-            # величины печатаются рядом и каждая со своим именем.
-            names=$(printf '%s\n' "$failed" | wc -l | tr -d ' ')
-            # `|| true` здесь по тому же доводу, что у `grep` выше: строки
-            # `Executed` в журнале может не быть вовсе — шаг мог умереть
-            # раньше, — и тогда печатается то, что есть, а не выдумывается
-            # второе число.
-            asserts=$(grep -hoE 'Executed [0-9]+ tests, with [0-9]+ failure' "$log" \
-              | tail -1 | sed -E 's/.*with ([0-9]+) failure.*/\1/' || true)
-            if [ -n "$asserts" ]; then
-              printf '::notice title=Тесты · Packages/Core::упало тестов: %s (различных имён); провалившихся утверждений XCTest: %s\n' \
-                "$names" "$asserts"
-            else
-              printf '::notice title=Тесты · Packages/Core::упало тестов: %s (различных имён); строки XCTest «Executed …» в журнале нет\n' \
-                "$names"
-            fi
-          fi
-          # Шаг мог умереть до того, как XCTest сказал хоть слово: сборка,
-          # оболочка, отсутствие тулчейна. Тогда имени теста в журнале нет
-          # вовсе, и в аннотацию уходит хвост журнала — тот же приём и тот же
-          # довод, что у разбора символьного графа выше.
-          if [ "$status" -ne 0 ] && [ -z "$failed" ]; then
-            bash .github/scripts/annotate.sh "Тесты · Packages/Core" "$status" "$log" || true
-          fi
-          exit $status
+        env:
+          TEST_TARGET: Core
+          TEST_PACKAGE_PATH: Packages/Core
+          # MEE-329, тот же довод и тот же расчёт запаса, что у Core (Linux):
+          # на зелёном прогоне (run 35919402086, 35919377429) этот шаг занимает
+          # 22–25 с; 300 с — более чем десятикратный запас.
+          TEST_TIMEOUT_SECONDS: "300"
+        # Подстраховка снаружи скрипта — тот же довод, что у Core (Linux).
+        timeout-minutes: 7
+        run: *run-swift-test-with-timeout
 
       # Вторая половина того же приёма, по тому же доводу: вектор называет
       # аннотация, а не имя шага (MEE-263).
@@ -387,52 +509,13 @@ jobs:
         # независимы, и вердикт по одному не вправе уносить вердикт по другому.
         if: ${{ !cancelled() && steps.graph.outputs.build_ok == 'true' }}
         shell: bash
-        run: |
-          set -o pipefail
-          log="$RUNNER_TEMP/tests-Mac.log"
-          status=0
-          swift test --package-path Packages/Mac 2>&1 | tee "$log" || status=$?
-          # `|| true` здесь несущий, а не украшение: шаг идёт под `bash -eo
-          # pipefail`, а grep без совпадений возвращает 1 — без guard зелёный
-          # прогон умирал бы на собственной аннотации.
-          failed=$(grep -hoE "Test Case '[^']+' failed" "$log" | cut -d"'" -f2 | sort -u || true)
-          if [ -n "$failed" ]; then
-            while IFS= read -r name; do
-              printf '::error title=Упал тест · Packages/Mac::%s\n' "$name"
-            done <<< "$failed"
-            # Издание 12. Уведомление и строка XCTest считают РАЗНОЕ, и до этой
-            # правки обе величины стояли в одном журнале, не назвав своего
-            # предмета ни одна: `sort -u` выше считает РАЗЛИЧНЫЕ ИМЕНА упавших
-            # тестов, а `Executed N tests, with M failures` — ПРОВАЛИВШИЕСЯ
-            # УТВЕРЖДЕНИЯ, которых у одного имени бывает несколько. Прогон 128
-            # (работа 104943671531): 11 утверждений в 7 именах; прогон 136
-            # (работа 104957082353): 17 и 10. Противоречия между ними нет —
-            # читатель получал два ответа на один вопрос, и чаще всего ровно
-            # ОДИН из них: уведомление печатается последними строками шага и
-            # попадает в хвост журнала, а строка `Executed …` лежит за
-            # полусотней строк дампа символов выше и хвостом в 44 строки уже
-            # не ловится (замер издания 12, тот же журнал). Поэтому обе
-            # величины печатаются рядом и каждая со своим именем.
-            names=$(printf '%s\n' "$failed" | wc -l | tr -d ' ')
-            # `|| true` здесь по тому же доводу, что у `grep` выше: строки
-            # `Executed` в журнале может не быть вовсе — шаг мог умереть
-            # раньше, — и тогда печатается то, что есть, а не выдумывается
-            # второе число.
-            asserts=$(grep -hoE 'Executed [0-9]+ tests, with [0-9]+ failure' "$log" \
-              | tail -1 | sed -E 's/.*with ([0-9]+) failure.*/\1/' || true)
-            if [ -n "$asserts" ]; then
-              printf '::notice title=Тесты · Packages/Mac::упало тестов: %s (различных имён); провалившихся утверждений XCTest: %s\n' \
-                "$names" "$asserts"
-            else
-              printf '::notice title=Тесты · Packages/Mac::упало тестов: %s (различных имён); строки XCTest «Executed …» в журнале нет\n' \
-                "$names"
-            fi
-          fi
-          # Шаг мог умереть до того, как XCTest сказал хоть слово: сборка,
-          # оболочка, отсутствие тулчейна. Тогда имени теста в журнале нет
-          # вовсе, и в аннотацию уходит хвост журнала — тот же приём и тот же
-          # довод, что у разбора символьного графа выше.
-          if [ "$status" -ne 0 ] && [ -z "$failed" ]; then
-            bash .github/scripts/annotate.sh "Тесты · Packages/Mac" "$status" "$log" || true
-          fi
-          exit $status
+        env:
+          TEST_TARGET: Mac
+          TEST_PACKAGE_PATH: Packages/Mac
+          # MEE-329, тот же довод: на зелёном прогоне (run 35919402086,
+          # 35919377429) этот шаг занимает 18–21 с; 300 с — более чем
+          # пятнадцатикратный запас.
+          TEST_TIMEOUT_SECONDS: "300"
+        # Подстраховка снаружи скрипта — тот же довод, что у Core (Linux).
+        timeout-minutes: 7
+        run: *run-swift-test-with-timeout
