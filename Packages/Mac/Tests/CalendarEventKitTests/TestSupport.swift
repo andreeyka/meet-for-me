@@ -59,10 +59,13 @@ struct Harness {
     let gateway = FakeEventKitGateway()
     let permissions = FakePermissionsPort(startingStatus: .granted, startingOutcome: .granted, checkedAt: Date())
     let host = FakeConnectorHostServices()
+    // IR-118 (MEE-348): не используется пока (`resolveConference` ведёт Р4), пустой словарь —
+    // достаточный вход до ответа C-009.
+    let platformResolver = FixedPlatformResolver(answers: [:])
     let connector: EventKitConnector
 
     init() {
-        connector = EventKitConnector(gateway: gateway, permissions: permissions)
+        connector = EventKitConnector(gateway: gateway, permissions: permissions, platformResolver: platformResolver)
     }
 
     @discardableResult

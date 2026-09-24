@@ -122,6 +122,11 @@ final class NormalizationTests: XCTestCase {
         } catch ConnectorError.protocolViolation(_) {}
     }
 
+    /// Ждёт C-009 (IR-118, MEE-348, возврат РП на MEE-349, 24.09): К16 в этом виде — тест
+    /// временной эвристики Р4 (`EventNormalizer.detectConference`), не финального поведения.
+    /// РП: «в нынешнем виде (таблица доменов) К16 принят не будет». Тест остаётся зелёным,
+    /// пока `EventKitConnector.resolveConference` не переключат на `platformResolver`
+    /// (см. `// СТРОКА:` там же) — замена этого теста идёт той же правкой.
     func test_k16_conferenceHeuristicMatchesKnownProviderAndAbsence() async throws {
         let harness = Harness()
         try await harness.initialize()
