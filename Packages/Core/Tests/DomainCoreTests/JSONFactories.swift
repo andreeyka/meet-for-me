@@ -53,6 +53,37 @@ enum EventJSON {
     }
 }
 
+/// Полезная нагрузка коннектора (C-006 §6.1) — те же поля `EventJSON`, кроме `id`; `id`
+/// подаётся только `withId`, чтобы проверить инвариант 15 (ключ `id` — отказ разбора).
+enum PayloadJSON {
+
+    static func text(
+        title: String = "\"Синхронизация\"",
+        start: String = "\"2026-09-11T09:30:00.000Z\"",
+        end: String = "\"2026-09-11T10:00:00.000Z\"",
+        timeZone: String = "\"Europe/Moscow\"",
+        isAllDay: String = "false",
+        organizer: String = "null",
+        attendees: String = "[]",
+        conference: String = "null",
+        icalUid: String = "null",
+        location: String = "null",
+        bodyText: String = "null",
+        lastModified: String = "\"2026-09-10T12:00:00.000Z\"",
+        withId: String? = nil
+    ) -> String {
+        let idField = withId.map { "\"id\": \($0), " } ?? ""
+        return """
+        {\(idField)"sourceConnectorId": "eventkit", "externalId": "evt-1", \
+        "icalUid": \(icalUid), "title": \(title), "start": \(start), "end": \(end), \
+        "timeZone": \(timeZone), "isAllDay": \(isAllDay), "isCancelled": false, \
+        "organizer": \(organizer), "attendees": \(attendees), "location": \(location), \
+        "bodyText": \(bodyText), "conference": \(conference), \
+        "lastModified": \(lastModified)}
+        """
+    }
+}
+
 enum ManifestJSON {
 
     static let identifier = "3F2504E0-4F89-41D3-9A0C-0305E82C3301"

@@ -121,6 +121,10 @@ func decodeEvent(_ text: String) throws -> MeetingEvent {
     try DomainJSON.decode(MeetingEvent.self, from: Data(text.utf8))
 }
 
+func decodePayload(_ text: String) throws -> MeetingEventPayload {
+    try DomainJSON.decode(MeetingEventPayload.self, from: Data(text.utf8))
+}
+
 func decodeManifest(_ text: String) throws -> RecordingManifest {
     try DomainJSON.decode(RecordingManifest.self, from: Data(text.utf8))
 }

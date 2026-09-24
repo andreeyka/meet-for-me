@@ -93,7 +93,12 @@ final class SessionMachineAdHocRestartTests: XCTestCase {
     /// Ветвь (б): ad-hoc-сессия, дошедшая до `recording`, — строка `recordings` есть,
     /// `RecordingStatus` равен `.recording`, `manifest.meetingId == nil`. Она
     /// восстанавливается ПЕРЕЧНЕМ А по записи: `recover`, приведение к `.finalized`, вход в
-    /// `processing`; `origin` берётся из `manifest.meetingId`: `nil` → `.adHoc`.
+    /// `processing`; `origin` определяется участием записи в ответе `adHoc()` (издание v8,
+    /// К77), а не значением `manifest.meetingId` — у этой записи оно `nil` с момента
+    /// создания (она изначально ad-hoc), и потому она отдаётся `adHoc()` и получает
+    /// `origin == .adHoc` тем же основанием, каким прежде (издание v7) читалось само поле:
+    /// ответ этого пункта не меняется, меняется только контрактная опора, на которую он
+    /// ссылается.
     func test_k97_b_anAdHocRecordingIsRestoredByListA() async throws {
         let stand = try bench(policy: .auto)
         let recordingId = UUID()
@@ -104,7 +109,7 @@ final class SessionMachineAdHocRestartTests: XCTestCase {
         await stand.machine.start(now: moment)
 
         let live = try unwrap(await stand.machine.sessions().first)
-        XCTAssertEqual(live.origin, .adHoc, "`manifest.meetingId == nil` → `.adHoc`")
+        XCTAssertEqual(live.origin, .adHoc, "отдана `adHoc()` (нет привязки к встрече) → `.adHoc`")
         XCTAssertNil(live.meetingId)
         XCTAssertEqual(live.state, .processing, "восстановлена перечнем А по записи")
         XCTAssertEqual(live.recordingId, recordingId)
