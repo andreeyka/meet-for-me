@@ -519,25 +519,3 @@ jobs:
         # Подстраховка снаружи скрипта — тот же довод, что у Core (Linux).
         timeout-minutes: 7
         run: *run-swift-test-with-timeout
-
-      # MEE-374/MEE-379 («Готовность» обеих постановок) — ВРЕМЕННЫЙ шаг: 50 повторов
-      # ЗАТРОНУТЫХ заменой пауз тестов (не всего Packages/Mac), тот же приём, что уже стоял
-      # у MEE-378 (снят коммитом `095cfb3` после подтверждения). Простой цикл `bash`, не общий
-      # вотчдог выше — отфильтрованный набор занимает секунды на повтор, `timeout-minutes`
-      # ниже — самостоятельный предохранитель. Снимается следующим коммитом после зелёного
-      # прогона.
-      - name: МЕЕ-374/379 временно · CaptureTests+RequestTests x50
-        if: ${{ !cancelled() && steps.graph.outputs.build_ok == 'true' }}
-        shell: bash
-        timeout-minutes: 10
-        run: |
-          set -euo pipefail
-          filter='AlignmentTests|CapturedProcessTests|CompositionTests|DiscontinuityTests'
-          filter+='|DriftCompensationTests|EventsLivenessTests|FlushCadenceTests|LevelsTests'
-          filter+='|PowerAndPauseTests|PromptTimeoutTests|ScaleErrorTests|SessionLifecycleTests'
-          filter+='|RequestTests'
-          for i in $(seq 1 50); do
-            echo "::group::CaptureTests+RequestTests повтор $i/50"
-            swift test --package-path Packages/Mac --filter "$filter"
-            echo "::endgroup::"
-          done
