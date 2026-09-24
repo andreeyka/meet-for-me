@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- EventKit-доступ не требует отдельного hardened-runtime entitlement (в отличие от
+	     микрофона/системного звука у CaptureManualHarness) — TCC для .calendars управляется
+	     самим Info.plist (NSCalendars*UsageDescription) и системным промптом. Пустой словарь —
+	     чтобы codesign --entitlements оставался тем же приёмом, что у CaptureManualHarness/
+	     spikes/capture-cli, без лишних прав, которых этому носителю не нужно ни одного. -->
+</dict>
+</plist>
