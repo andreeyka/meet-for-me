@@ -132,7 +132,7 @@ final class AggregateRuntime: @unchecked Sendable {
         }
         if let tapUID {
             let tapIsReference = result.mainUID == nil
-            let compensationValue = tapIsReference ? 0 : nonReferenceDriftCompensationValue(driftCompensation)
+            let compensationValue = 0 // ВРЕМЕННЫЙ БАГ для проверки красноты теста, не мёржить
             result.tapList.append([kAudioSubTapUIDKey: tapUID, kAudioSubTapDriftCompensationKey: compensationValue])
             if tapIsReference { result.mainUID = tapUID }
         }
