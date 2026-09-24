@@ -23,7 +23,7 @@ final class MergeCrossCycleTests: XCTestCase {
     // MARK: - Инв. 10: пример IR-126 через последовательные (не одновременные) циклы
 
     /// Возврат РП (приёмка #105, п. 3): пример IR-126 (A/B/C, порядок C, A, B), но не одним
-    /// циклом (как `MergeTests.test_inv10_inv11_threeSourcesConcurrentMergeMatchesRPWorkedExample`),
+    /// циклом (как `MergeTests.test_k76_threeSourcesConcurrentMergeMatchesRPWorkedExample`),
     /// а ТРЕМЯ ПОСЛЕДОВАТЕЛЬНЫМИ `sync()` — в каждом сообщает РОВНО один источник, остальные
     /// два возвращают пустой пакет (частичный вход). Хост, игнорирующий перенесённые между
     /// циклами снимки (инв. 10) или не делающий честный шаг 2 (первый непустой скаляр среди
@@ -31,7 +31,13 @@ final class MergeCrossCycleTests: XCTestCase {
     /// победитель identity (A) `location` не несёт. Верный результат — тот же «X», что и в
     /// одноцикловом примере, потому что снимки C (цикл 1) и A (цикл 2) обязаны пережить
     /// циклы, где сообщает не их источник.
-    func test_ir126_sequentialCyclesInOrder_C_A_B_matchRPWorkedExample() async throws {
+    ///
+    /// К76 (возврат РП, 24.09, приёмка #115, «Номера К») — ближайшее покрытие вместе с
+    /// `MergeTests.test_k76_threeSourcesConcurrentMergeMatchesRPWorkedExample`, оба ЧАСТИЧНЫЕ
+    /// (см. докстринг там же); дословный вектор К76 —
+    /// `test_k76_partialSecondCycleCarriesOverSnapshotsFromSilentSources`
+    /// (`MergeTests+PartialInputAndSnapshotGaps.swift`).
+    func test_k76_sequentialCyclesInOrder_C_A_B_matchRPWorkedExample() async throws {
         let harness = Harness.mergeReady(sourceIds: ["A", "B", "C"])
         let base = Date(timeIntervalSince1970: 1_700_000_000)
 
