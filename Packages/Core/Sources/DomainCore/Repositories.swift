@@ -44,17 +44,25 @@ public struct MeetingSource: Codable, Equatable, Sendable {
     public let externalId: String
     public let icalUid: String?
     public let lastModified: Date
+    /// IR-126 (MEE-372), C-010 v18, инвариант 31: снимок `MeetingEventPayload`, каким его
+    /// в последний раз отдал коннектор для этой пары — `nil`, пока источник не написал
+    /// собственный снимок (строка `meeting_sources` до миграции `v1-slice2`, либо источник,
+    /// заведённый до первого синка коннектора). `= nil` в `init` — существующие вызовы
+    /// этим не затронуты.
+    public let payload: MeetingEventPayload?
 
     public init(
         sourceConnectorId: String,
         externalId: String,
         icalUid: String?,
-        lastModified: Date
+        lastModified: Date,
+        payload: MeetingEventPayload? = nil
     ) {
         self.sourceConnectorId = sourceConnectorId
         self.externalId = externalId
         self.icalUid = icalUid
         self.lastModified = lastModified
+        self.payload = payload
     }
 }
 

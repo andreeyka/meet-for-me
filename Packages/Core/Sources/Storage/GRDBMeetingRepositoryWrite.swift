@@ -25,7 +25,7 @@ extension GRDBMeetingRepository {
         let idText = record.event.id.uuidString
         let event = record.event
         let now = EpochTime.seconds(Date())
-        let sources = Self.sourcesIncludingOwnIdentity(of: event, declared: record.sources)
+        let sources = try Self.sourcesIncludingOwnIdentity(of: event, declared: record.sources)
         let dedupText = try record.dedupKey.map { try StorageJSON.encodeToText($0) }
 
         do {
@@ -46,23 +46,37 @@ extension GRDBMeetingRepository {
         }
     }
 
-    /// СТРОКА (шапка `GRDBMeetingRepository.swift`): собственная идентичность
-    /// `event` гарантированно входит в набор источников, добавляется, если такой
-    /// пары ещё нет.
+    /// СТРОКА (шапка `GRDBMeetingRepository.swift`): собственная идентичность `event`
+    /// гарантированно входит в набор источников.
+    ///
+    /// IR-126 (MEE-372), C-010 v18, инвариант 31 (решение РП, приёмка MEE-384): синтез
+    /// снимка `MeetingEventPayload(dropping: event)` — ТОЛЬКО когда `declared` пуст (первое
+    /// сохранение события без собственных источников). Непустой `declared` без identity
+    /// `event` среди него БРОСАЕТ `constraintViolation`, а не молча добавляет строку со
+    /// снимком и `nil`-полями идентичности: источник, заявивший о себе явно, но забывший
+    /// собственную идентичность, — ошибка вызывающей стороны, не повод придумывать за неё
+    /// строку с пустой парой (та же граница «строим на границе, не чиним внутри», что у
+    /// `MeetingEventPayload` целиком, C-008 §«Построение значения на границе модуля»).
     static func sourcesIncludingOwnIdentity(
         of event: MeetingEvent, declared: [MeetingSource]
-    ) -> [MeetingSource] {
-        let ownKey = (event.sourceConnectorId, event.externalId)
-        var sources = declared
-        if !sources.contains(where: { ($0.sourceConnectorId, $0.externalId) == ownKey }) {
-            sources.append(MeetingSource(
+    ) throws -> [MeetingSource] {
+        guard !declared.isEmpty else {
+            return [MeetingSource(
                 sourceConnectorId: event.sourceConnectorId,
                 externalId: event.externalId,
                 icalUid: event.icalUid,
-                lastModified: event.lastModified
-            ))
+                lastModified: event.lastModified,
+                payload: MeetingEventPayload(dropping: event)
+            )]
         }
-        return sources
+        let ownKey = (event.sourceConnectorId, event.externalId)
+        guard declared.contains(where: { ($0.sourceConnectorId, $0.externalId) == ownKey }) else {
+            throw StorageError.constraintViolation(
+                message: "meeting_sources: непустой список источников не содержит " +
+                    "собственную идентичность события (инвариант 31 C-010 v18)"
+            )
+        }
+        return declared
     }
 
     private static let meetingUpsertSQL = """
@@ -124,15 +138,19 @@ extension GRDBMeetingRepository {
     private static func replaceMeetingSources(idText: String, sources: [MeetingSource], db: Database) throws {
         try db.execute(sql: "DELETE FROM meeting_sources WHERE meeting_id = ?", arguments: [idText])
         for source in sources {
+            // IR-126 (MEE-372), C-010 v18: снимок пишется дословно через DomainJSON
+            // (StorageJSON.encodeToText — тот же путь, что у meetings.dedup_key), NULL при
+            // отсутствии, а не пустая строка/плейсхолдер.
+            let payloadText = try source.payload.map { try StorageJSON.encodeToText($0) }
             try db.execute(
                 sql: """
                 INSERT INTO meeting_sources
-                    (source_connector_id, external_id, meeting_id, ical_uid, last_modified)
-                VALUES (?, ?, ?, ?, ?)
+                    (source_connector_id, external_id, meeting_id, ical_uid, last_modified, raw_payload_json)
+                VALUES (?, ?, ?, ?, ?, ?)
                 """,
                 arguments: [
                     source.sourceConnectorId, source.externalId, idText,
-                    source.icalUid, EpochTime.seconds(source.lastModified)
+                    source.icalUid, EpochTime.seconds(source.lastModified), payloadText
                 ]
             )
         }

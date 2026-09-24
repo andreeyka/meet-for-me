@@ -159,6 +159,7 @@ public final class InMemoryMeetingRepository: MeetingRepository, @unchecked Send
         if let error = failureIfAny(.save, id: record.event.id.uuidString) {
             throw error
         }
+        let sources = try Self.sourcesIncludingOwnIdentity(of: record.event, declared: record.sources)
         let dedupClash = locked { () -> Bool in
             guard let key = record.dedupKey else { return false }
             return records.contains { $0.key != record.event.id && $0.value.dedupKey == key }
@@ -170,7 +171,7 @@ public final class InMemoryMeetingRepository: MeetingRepository, @unchecked Send
             records.contains { existingId, existing in
                 guard existingId != record.event.id else { return false }
                 return existing.sources.contains { existingSource in
-                    record.sources.contains {
+                    sources.contains {
                         $0.sourceConnectorId == existingSource.sourceConnectorId
                             && $0.externalId == existingSource.externalId
                     }
@@ -186,8 +187,37 @@ public final class InMemoryMeetingRepository: MeetingRepository, @unchecked Send
             if records[record.event.id] == nil {
                 order.append(record.event.id)
             }
-            records[record.event.id] = record
+            records[record.event.id] = MeetingRecord(
+                event: record.event, dedupKey: record.dedupKey, status: record.status, sources: sources
+            )
         }
+    }
+
+    /// IR-126 (MEE-372), C-010 v18, инвариант 31 (решение РП, приёмка MEE-384) — то же
+    /// правило, дословно, что `GRDBMeetingRepository.sourcesIncludingOwnIdentity`
+    /// (`Storage/GRDBMeetingRepositoryWrite.swift`): постановка MEE-384 (п. 6) требует
+    /// фейк с тем же поведением. Пустой `declared` — снимок `dropping(event)`; непустой
+    /// без identity — `constraintViolation`, ничего не синтезируется.
+    private static func sourcesIncludingOwnIdentity(
+        of event: MeetingEvent, declared: [MeetingSource]
+    ) throws -> [MeetingSource] {
+        guard !declared.isEmpty else {
+            return [MeetingSource(
+                sourceConnectorId: event.sourceConnectorId,
+                externalId: event.externalId,
+                icalUid: event.icalUid,
+                lastModified: event.lastModified,
+                payload: MeetingEventPayload(dropping: event)
+            )]
+        }
+        let ownKey = (event.sourceConnectorId, event.externalId)
+        guard declared.contains(where: { ($0.sourceConnectorId, $0.externalId) == ownKey }) else {
+            throw StorageError.constraintViolation(
+                message: "meeting_sources: непустой список источников не содержит " +
+                    "собственную идентичность события (инвариант 31 C-010 v18)"
+            )
+        }
+        return declared
     }
 
     public func meeting(id: UUID) async throws -> MeetingRecord? {

@@ -61,7 +61,11 @@ final class MeetingRepositoryTests: StorageAsyncTestCase {
         defer { StorageTestSupport.cleanup(temp) }
         let repository = temp.database.meetingRepository()
 
-        let event = try TestFixtures.meetingEvent(externalId: "ext-30")
+        // externalId совпадает с первым источником ниже: IR-126 (MEE-372), C-010 v18,
+        // инвариант 31 — непустой declared без собственной идентичности события теперь
+        // бросает constraintViolation (sourcesIncludingOwnIdentity, MEE-384), и K91 сам по
+        // себе про эту границу не спрашивает — идентичность просто входит в первую пару.
+        let event = try TestFixtures.meetingEvent(externalId: "ext-30-a")
         let sources = [
             MeetingSource(
                 sourceConnectorId: "eventkit", externalId: "ext-30-a", icalUid: nil,
@@ -102,12 +106,17 @@ final class MeetingRepositoryTests: StorageAsyncTestCase {
             sourceConnectorId: "eventkit", externalId: "ext-92-shared", icalUid: nil,
             lastModified: TestFixtures.epoch
         )
-        let eventA = try TestFixtures.meetingEvent(externalId: "ext-92-a")
+        // Оба события претендуют на sharedSource КАК НА СВОЮ идентичность (externalId
+        // совпадает с sharedSource у обоих) — IR-126 (MEE-372), C-010 v18, инвариант 31:
+        // непустой declared без собственной идентичности события сам по себе бросает
+        // constraintViolation (sourcesIncludingOwnIdentity, MEE-384), и K92 хочет проверить
+        // ИМЕННО коллизию пары НА УРОВНЕ СУБД у второй встречи, а не эту более раннюю границу.
+        let eventA = try TestFixtures.meetingEvent(externalId: "ext-92-shared")
         try await repository.save(
             MeetingRecord(event: eventA, dedupKey: nil, status: .scheduled, sources: [sharedSource])
         )
 
-        let eventB = try TestFixtures.meetingEvent(externalId: "ext-92-b")
+        let eventB = try TestFixtures.meetingEvent(externalId: "ext-92-shared")
         do {
             try await repository.save(
                 MeetingRecord(event: eventB, dedupKey: nil, status: .scheduled, sources: [sharedSource])
@@ -128,6 +137,81 @@ final class MeetingRepositoryTests: StorageAsyncTestCase {
         )
         let updatedA = try await repository.meeting(id: eventA.id)
         XCTAssertEqual(updatedA?.status, .armed, "повторный save А с той же парой прошёл")
+    }
+
+    // MARK: - Инвариант 31 (C-010 v18, IR-126/MEE-372, миграция v1-slice2, MEE-384)
+
+    /// `payload` проходит круг save/read дословно, `NULL` ⇔ `nil`: два источника одной
+    /// встречи, один со снимком, другой без.
+    func test_inv31_payloadRoundTripsSaveAndReadVerbatim() async throws {
+        let temp = try StorageTestSupport.makeDatabase()
+        defer { StorageTestSupport.cleanup(temp) }
+        let repository = temp.database.meetingRepository()
+
+        let event = try TestFixtures.meetingEvent(externalId: "ext-31-with")
+        let snapshot = MeetingEventPayload(dropping: event)
+        let withPayload = MeetingSource(
+            sourceConnectorId: "eventkit", externalId: "ext-31-with", icalUid: nil,
+            lastModified: TestFixtures.epoch, payload: snapshot
+        )
+        let withoutPayload = MeetingSource(
+            sourceConnectorId: "graph:work", externalId: "ext-31-without", icalUid: nil,
+            lastModified: TestFixtures.epoch
+        )
+        try await repository.save(MeetingRecord(
+            event: event, dedupKey: nil, status: .scheduled, sources: [withPayload, withoutPayload]
+        ))
+
+        let read = try await repository.meeting(id: event.id)
+        let sources = try XCTUnwrap(read?.sources)
+        let readWith = try XCTUnwrap(sources.first { $0.externalId == "ext-31-with" })
+        let readWithout = try XCTUnwrap(sources.first { $0.externalId == "ext-31-without" })
+        XCTAssertEqual(readWith.payload, snapshot, "снимок дословно, не приблизительно")
+        XCTAssertNil(readWithout.payload, "NULL ⇔ nil")
+    }
+
+    /// Первое сохранение с пустым `declared` даёт снимок `dropping(event)` — не строку
+    /// с пустыми полями идентичности и `payload == nil`.
+    func test_inv31_emptyDeclaredSynthesizesDroppingSnapshot() async throws {
+        let temp = try StorageTestSupport.makeDatabase()
+        defer { StorageTestSupport.cleanup(temp) }
+        let repository = temp.database.meetingRepository()
+
+        let event = try TestFixtures.meetingEvent(externalId: "ext-31-empty")
+        try await repository.save(MeetingRecord(event: event, dedupKey: nil, status: .scheduled, sources: []))
+
+        let read = try await repository.meeting(id: event.id)
+        let sources = try XCTUnwrap(read?.sources)
+        XCTAssertEqual(sources.count, 1, "ровно один синтезированный источник")
+        let synthesized = try XCTUnwrap(sources.first)
+        XCTAssertEqual(synthesized.sourceConnectorId, event.sourceConnectorId)
+        XCTAssertEqual(synthesized.externalId, event.externalId)
+        XCTAssertEqual(synthesized.payload, MeetingEventPayload(dropping: event), "снимок dropping(event)")
+    }
+
+    /// Непустой `declared` без идентичности события — `constraintViolation`, ничего не
+    /// создаётся (ни строка `meetings`, ни строка с пустой парой в `meeting_sources`).
+    func test_inv31_nonEmptyDeclaredWithoutIdentityThrowsConstraintViolation() async throws {
+        let temp = try StorageTestSupport.makeDatabase()
+        defer { StorageTestSupport.cleanup(temp) }
+        let repository = temp.database.meetingRepository()
+
+        let event = try TestFixtures.meetingEvent(externalId: "ext-31-missing")
+        let unrelated = MeetingSource(
+            sourceConnectorId: "graph:work", externalId: "ext-31-unrelated", icalUid: nil,
+            lastModified: TestFixtures.epoch
+        )
+        do {
+            try await repository.save(MeetingRecord(
+                event: event, dedupKey: nil, status: .scheduled, sources: [unrelated]
+            ))
+            XCTFail("ожидался constraintViolation — declared без собственной идентичности события")
+        } catch StorageError.constraintViolation {
+            // ожидаемо
+        }
+
+        let created = try await repository.meeting(id: event.id)
+        XCTAssertNil(created, "встреча не создана")
     }
 
     // MARK: - К11
