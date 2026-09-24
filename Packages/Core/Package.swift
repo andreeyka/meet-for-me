@@ -90,11 +90,20 @@ if includeStorage {
     // несовместима с тулчейном 5.10 (не собралась бы и на Core + Mac ровно
     // тем же способом, каким v6 не линкуется на Core (Linux)).
     dependencies.append(.package(url: "https://github.com/groue/GRDB.swift", exact: "6.29.3"))
+    // ВРЕМЕННО, проверочная ветка MEE-191 (возврат РП 24.09, п.2): изолированный таргет
+    // имитирует стороннюю зависимость наподобие GRDB — объявляет свой тип с именем, которое
+    // совпадает с разрешённым именем ИЗ ДРУГОГО модуля (`Foundation.Date`), но им не является.
+    // Изолирован в собственном таргете нарочно: у `Date` внутри `DomainCore`/`DomainTestKit`
+    // десятки словоупотреблений, и то же имя в их собственном пространстве имён сломало бы
+    // саму сборку затенением, а не проверило бы разбор символьного графа. Снимается вместе с
+    // прочими нарушителями этой ветки, в main не попадает.
+    targets.append(.target(name: "VerifyMEE191", dependencies: []))
     targets.append(
         .target(
             name: "Storage",
             dependencies: [
                 "DomainCore",
+                "VerifyMEE191",
                 .product(name: "GRDB", package: "GRDB.swift"),
             ]
         )

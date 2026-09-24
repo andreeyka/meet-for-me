@@ -7,3 +7,19 @@
 //  только через interface-request (П2, П6). Границы и запреты — docs/module-map.md.
 //
 //  Каркас: кода нет намеренно. Первый код появляется вместе с задачей из Linear.
+
+// ВРЕМЕННО — проверочная ветка MEE-191 (возврат РП 24.09). Два новых нарушителя, каждый на
+// один из вернувшихся пунктов; снимаются перед закрытием ветки, в main не попадают.
+import DomainCore
+import VerifyMEE191
+
+/// П.1: `AudioCapturePort` — настоящий тип `DomainCore`, которого НЕТ в `allowed-types/
+/// Storage.json` (список несёт 56 других позиций, эта — тип чужого контракта, C-004, а не C-010).
+/// Старый барьер пропускал мимо списка любой repo-модуль, включая `DomainCore`, — находка «38 из
+/// 56 позиций списка Storage ничего не проверяли». Обязан покраснеть на списке.
+public func mee191VerifyDomainTypeNotInList() -> AudioCapturePort? { nil }
+
+/// П.2: `VerifyMEE191.Date` — не `Foundation.Date`, хотя имя совпадает с разрешённым именем
+/// `Foundation.Date`. Старая сверка по одному имени спутала бы их; сверка по паре «модуль, имя»
+/// обязана отличить и покраснеть.
+public func mee191VerifyModuleNamePair() -> VerifyMEE191.Date { VerifyMEE191.Date() }
