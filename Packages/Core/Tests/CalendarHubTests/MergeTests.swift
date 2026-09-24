@@ -165,17 +165,18 @@ final class MergeTests: XCTestCase {
     /// самой сериализации — `test_k77_secondMergeOfSameMeetingDoesNotStartUntilFirstFinishes`
     /// (`MergeTests+Serialization.swift`).
     ///
-    /// К76 (перечень MEE-347, дельта под C-005 v14, группа М) — этот тест и
-    /// `test_ir126_sequentialCyclesInOrder_C_A_B_matchRPWorkedExample`
+    /// К76 (перечень MEE-347, дельта под C-005 v14, группа М) — возврат РП (24.09, приёмка
+    /// #115, «Номера К»): этот тест и `test_k76_sequentialCyclesInOrder_C_A_B_matchRPWorkedExample`
     /// (`MergeCrossCycleTests.swift`) вместе покрывают тот же рабочий пример РП только
-    /// ЧАСТИЧНО (возврат РП, 24.09, MEE-361, приёмка дельты b943cc7e): К76 требует ОДНО общее
-    /// слияние трёх источников, ЗАТЕМ частичный второй цикл, где сообщает только C (снимки A и
-    /// B при этом обязаны перенестись из первого цикла) — ни этот тест (одно совместное
-    /// слияние, без второго цикла), ни соседний (три отдельных последовательных
-    /// однокисточниковых цикла) не строят именно эту конструкцию входа. СТРОКА: тест на К76
-    /// дословно не заведён — вне объёма этой правки (зона МЕЕ-386 продолжает держать пробел
-    /// явно).
-    func test_inv10_inv11_threeSourcesConcurrentMergeMatchesRPWorkedExample() async throws {
+    /// ЧАСТИЧНО, помечены общим номером как ближайшее покрытие, не как дословное совпадение
+    /// (возврат РП, 24.09, MEE-361, приёмка дельты b943cc7e): К76 требует ОДНО общее слияние
+    /// трёх источников, ЗАТЕМ частичный второй цикл, где сообщает только C (снимки A и B при
+    /// этом обязаны перенестись из первого цикла) — ни этот тест (одно совместное слияние, без
+    /// второго цикла), ни соседний (три отдельных последовательных однокисточниковых цикла) не
+    /// строят именно эту конструкцию входа. Дословный вектор К76 —
+    /// `test_k76_partialSecondCycleCarriesOverSnapshotsFromSilentSources`
+    /// (`MergeTests+PartialInputAndSnapshotGaps.swift`).
+    func test_k76_threeSourcesConcurrentMergeMatchesRPWorkedExample() async throws {
         let harness = Harness.mergeReady(sourceIds: ["A", "B", "C"])
         let base = Date(timeIntervalSince1970: 1_700_000_000)
         harness.connector("A").setFetchEvents([

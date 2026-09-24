@@ -97,6 +97,13 @@ extension MergeTests {
     /// и `save` второго бросил бы `constraintViolation` (инв. 30 C-010: пара уже занята
     /// встречей, которую сохранил первый). Верная (единая цепочка) сериализация не даёт
     /// этой гонке случиться вовсе — второй вызов видит запись первого уже сохранённой.
+    ///
+    /// К77 (возврат РП, 24.09, приёмка #115, «Номера К») — смежный, не тот же вектор:
+    /// `test_k77_secondMergeOfSameMeetingDoesNotStartUntilFirstFinishes` (выше в этом файле)
+    /// про ДВА РАЗНЫХ источника одной уже известной встречи, здесь — ДВЕ пары одного и того
+    /// же источника с разными `DedupKey` (см. докстринг выше). Тот же механизм (`gate`/
+    /// `release` на `save`), другой сценарий инв. 11 — не переименован под `test_k77_`, чтобы
+    /// не заявлять дословное совпадение, которого нет.
     func test_inv11_differentDedupKeysSameSourcePairDoesNotRaceIntoConstraintViolation() async throws {
         let harness = Harness.mergeReady(sourceIds: ["A"])
         let base = Date(timeIntervalSince1970: 1_700_000_000)

@@ -64,7 +64,9 @@ public final class FakeCalendarConnector: CalendarConnector, @unchecked Sendable
 
     public var callLog: PortCallLog { log }
 
-    private func locked<Value>(_ body: () -> Value) -> Value {
+    /// Не `private`: `FakeCalendarConnector+FirstFetchEventsGate.swift` тоже под этим же
+    /// замком — `private` в Swift видна только внутри своего ФАЙЛА, а тип теперь на два файла.
+    func locked<Value>(_ body: () -> Value) -> Value {
         lock.lock()
         defer { lock.unlock() }
         return body()
@@ -177,6 +179,14 @@ public final class FakeCalendarConnector: CalendarConnector, @unchecked Sendable
         locked { errors[method] }
     }
 
+    /// Возврат РП (24.09, приёмка #119, 22:12 UTC, п. 1): ворота на ПЕРВЫЙ вызов `fetchEvents`
+    /// — НЕ реагируют на отмену, срабатывают ровно раз. Методы —
+    /// `FakeCalendarConnector+FirstFetchEventsGate.swift` (SwiftLint `type_body_length`
+    /// считает каждое расширение типа отдельно, тот же приём, что у `CalendarPortImplSync.swift`).
+    var firstFetchEventsGateArmed = false
+    var firstFetchEventsGateConsumed = false
+    var firstFetchEventsGateContinuation: CheckedContinuation<Void, Never>?
+
     // MARK: - CalendarConnector
 
     public func initialize(
@@ -231,6 +241,7 @@ public final class FakeCalendarConnector: CalendarConnector, @unchecked Sendable
             port: Self.portName, method: CalendarConnectorMethod.fetchEvents.rawValue,
             arguments: [String(from.timeIntervalSince1970), String(to.timeIntervalSince1970)] + calendarIds
         )
+        await waitIfFirstFetchEventsGated()
         try await hangOrGate(.fetchEvents)
         if let error = failureOrNil(.fetchEvents) { throw error }
         return locked { fetchEventsResult }
