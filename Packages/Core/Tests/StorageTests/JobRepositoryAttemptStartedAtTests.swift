@@ -61,40 +61,61 @@ final class JobRepositoryAttemptStartedAtTests: StorageAsyncTestCase {
         defer { StorageTestSupport.cleanup(temp) }
         let jobs = temp.database.jobRepository()
 
-        // Десять строк: одна выигрышная по priority, остальные девять — с
-        // ПОПАРНО РАЗЛИЧИМЫМИ значениями attempt_started_at (ни одного
-        // повтора, ни одного лишнего nil сверх победителя) и заведомо ниже
-        // приоритетом, чтобы решение claimNext зависело только от priority.
-        // Различимость нужна для второй половины теста: одинаковые значения
-        // не выявили бы случайную сортировку jobs(status:) по этой колонке
-        // сравнением списков — а `Set` в прежней версии не выявил бы её и
-        // подавно, даже с различимыми значениями, потому что стирает порядок.
-        let winner = TestFixtures.job(type: .transcode, options: .init(priority: 99, attemptStartedAt: nil))
-        try await jobs.insert(winner)
-        var others: [UUID] = []
-        for offset in 0..<9 {
-            let job = TestFixtures.job(
-                type: .transcode,
-                options: .init(priority: 1, attemptStartedAt: TestFixtures.epoch.addingTimeInterval(Double(offset)))
-            )
-            try await jobs.insert(job)
-            others.append(job.id)
-        }
+        let jobIds = try await Self.insertTenJobsWithShuffledAttemptStartedAt(jobs: jobs, database: temp.database)
 
+        let winner = try XCTUnwrap(jobIds.min { $0.uuidString < $1.uuidString })
         let picked = try await jobs.claimNext(
             types: [.transcode], excluding: [], now: TestFixtures.epoch, leaseSeconds: 60
         )
-        XCTAssertEqual(picked?.id, winner.id, "выбор не зависит от attempt_started_at — решает priority")
+        XCTAssertEqual(
+            picked?.id, winner,
+            "выбор не зависит от attempt_started_at — при равных priority/run_after/created_at решает id"
+        )
 
         // Списком, не множеством: jobs(status:) не объявляет ORDER BY по
         // attempt_started_at, и порядок вставки (ROWID) обязан остаться виден
         // как последовательность — сравнение через Set стёрло бы случайную
         // сортировку по этой колонке так же незаметно, как её отсутствие.
+        let expectedRemaining = jobIds.filter { $0 != winner }
         let listing = try await jobs.jobs(status: .pending)
         XCTAssertEqual(
-            listing.jobs.map(\.id), others,
+            listing.jobs.map(\.id), expectedRemaining,
             "состав И порядок jobs(status:) не зависят от attempt_started_at"
         )
         XCTAssertTrue(listing.unreadable.isEmpty)
+    }
+
+    /// Десять строк с ОДИНАКОВЫМИ priority/run_after/created_at (без
+    /// искусственного priority: 99 — все ключи claimNext, кроме id, равны,
+    /// так что по К39 выбор сводится к последнему ключу — id ASC) и ПОПАРНО
+    /// РАЗЛИЧИМЫМИ attempt_started_at, значения которых НАРОЧНО перемешаны и
+    /// НЕ идут в порядке вставки: если бы claimNext или jobs(status:) хоть
+    /// как-то зависели от attempt_started_at (например, случайно сортировали
+    /// по нему), результат отличался бы от «id ASC»/«порядок вставки» так,
+    /// что тест бы это заметил. Значения, растущие вместе с порядком
+    /// вставки, такую ошибку не поймали бы — совпадение с правильным ответом
+    /// было бы случайным, а не доказательством.
+    private static func insertTenJobsWithShuffledAttemptStartedAt(
+        jobs: JobRepository, database: StorageDatabase
+    ) async throws -> [UUID] {
+        var jobIds: [UUID] = []
+        for _ in 0..<10 {
+            let job = TestFixtures.job(type: .transcode, options: .init(priority: 1))
+            try await jobs.insert(job)
+            jobIds.append(job.id)
+        }
+        let shuffledOffsets = [7, 2, 9, 0, 5, 3, 8, 1, 6, 4]
+        try database.rawWrite { db in
+            for (index, id) in jobIds.enumerated() {
+                try db.execute(
+                    sql: "UPDATE jobs SET attempt_started_at = ? WHERE id = ?",
+                    arguments: [
+                        EpochTime.seconds(TestFixtures.epoch.addingTimeInterval(Double(shuffledOffsets[index]))),
+                        id.uuidString
+                    ]
+                )
+            }
+        }
+        return jobIds
     }
 }

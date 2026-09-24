@@ -27,33 +27,26 @@ final class PersonRepositoryTests: StorageAsyncTestCase {
         let me = try await repository.me()
         XCTAssertEqual(me?.id, personB)
 
-        // (ii) прямая вставка второй строки is_me=1 через Ш7 — отвергнута
-        // частичным уникальным индексом `idx_persons_me`.
-        //
-        // НЕ через вызов метода PersonRepository — повторная проверка кода
-        // `GRDBPersonRepository.setMe(personId:)` (файл в этом же модуле)
-        // подтверждает второй раз: тело метода —
-        //     UPDATE persons SET is_me = 0 WHERE is_me = 1
-        //     UPDATE persons SET is_me = 1, updated_at = ? WHERE id = ?
-        // — обе строки выполняются в ОДНОЙ транзакции `database.dbPool.write`
-        // (GRDB оборачивает `write(_:)` в транзакцию целиком, не допуская
-        // чужой записи между двумя операторами одного вызова), поэтому first
-        // statement снимает `is_me` со всех строк ДО того, как second
-        // statement его кому-либо ставит — конфликт с `idx_persons_me`
-        // структурно недостижим ни при одном входе `setMe`, включая
-        // параллельные вызовы (сериализация одного писателя SQLite не даёт
-        // им перемежаться). `upsert`/`upsertPerson` пишут `is_me` только
-        // константой `0`. Другого публичного пути записать `is_me = 1` в
-        // модуле нет — единственный наблюдаемый путь к этому нарушению
-        // остаётся прямой записью через Ш7 (способ В плана MEE-311, тот же
-        // шов, которым уже открыт этот файл строкой выше).
-        //
-        // Сверяемый вызов — тот же `database.dbPool.write`, которым
-        // пользуется каждый пишущий метод порта (Ш7 `rawWrite` — прямой
-        // алиас `dbPool.write`, не отдельный путь); пойманная ошибка —
-        // настоящая `DatabaseError` от самого SQLite, не синтетическая.
+        try Self.assertSecondIsMeRowRejectedWithConstraintText(temp.database)
+    }
+
+    // (ii) прямая вставка второй строки is_me=1 через Ш7 — отвергнута
+    // частичным уникальным индексом `idx_persons_me`.
+    //
+    // СТРОКА: ни один метод PersonRepository не может физически столкнуться
+    // с этим нарушением — тело `GRDBPersonRepository.setMe(personId:)`
+    // (файл в этом же модуле) сперва снимает `is_me` со ВСЕХ строк и только
+    // следующим оператором ставит его целевой, обе строки — в ОДНОЙ
+    // транзакции `database.dbPool.write` (GRDB оборачивает `write(_:)` в
+    // транзакцию целиком, не допуская чужой записи между двумя операторами
+    // одного вызова, и один писатель SQLite не даёт двум таким транзакциям
+    // перемежаться даже при параллельных вызовах); `upsert`/`upsertPerson`
+    // пишут `is_me` только константой `0`. Решение РП по этому доводу: Ш7
+    // (`rawWrite` — прямой алиас `dbPool.write`, не отдельный путь) допустим
+    // как единственный наблюдаемый путь к нарушению.
+    private static func assertSecondIsMeRowRejectedWithConstraintText(_ database: StorageDatabase) throws {
         do {
-            try temp.database.rawWrite { db in
+            try database.rawWrite { db in
                 try db.execute(
                     sql: "INSERT INTO persons (id, display_name, is_me, created_at, updated_at) "
                         + "VALUES (?, 'C', 1, 0, 0)",
@@ -67,10 +60,42 @@ final class PersonRepositoryTests: StorageAsyncTestCase {
                 XCTFail("ожидался constraintViolation, получено \(mapped)")
                 return
             }
-            XCTAssertTrue(
-                message.contains("UNIQUE constraint failed: persons.is_me"),
-                "текст несёт именно это ограничение (persons.is_me), не общее слово UNIQUE: \(message)"
+            // Эталон собирается напрямую — тем же путём, тем же нарушением, во
+            // ВТОРОЙ изолированной базе: равенство без риска угадать обёртку
+            // GRDB (префикс кода SQLite, эхо SQL). Текст SQLite детерминирован
+            // (это не NSError с недетерминированным порядком печати словаря,
+            // как в К31(i) — здесь простая C-строка от самого SQLite).
+            let referenceMessage = try Self.constraintViolationMessageForSecondIsMeRow()
+            XCTAssertEqual(message, referenceMessage, "текст равен эталону, собранному тем же путём")
+        }
+    }
+
+    private static func constraintViolationMessageForSecondIsMeRow() throws -> String {
+        let reference = try StorageTestSupport.makeDatabase()
+        defer { StorageTestSupport.cleanup(reference) }
+        try reference.database.rawWrite { db in
+            try db.execute(
+                sql: "INSERT INTO persons (id, display_name, is_me, created_at, updated_at) "
+                    + "VALUES (?, 'seed', 1, 0, 0)",
+                arguments: [UUID().uuidString]
             )
+        }
+        do {
+            try reference.database.rawWrite { db in
+                try db.execute(
+                    sql: "INSERT INTO persons (id, display_name, is_me, created_at, updated_at) "
+                        + "VALUES (?, 'C', 1, 0, 0)",
+                    arguments: [UUID().uuidString]
+                )
+            }
+            XCTFail("эталон обязан бросить")
+            return ""
+        } catch {
+            guard case .constraintViolation(let message) = StorageErrorMapping.mapWrite(error) else {
+                XCTFail("эталон обязан быть constraintViolation")
+                return ""
+            }
+            return message
         }
     }
 

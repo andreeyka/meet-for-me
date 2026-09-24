@@ -26,6 +26,19 @@ final class ErrorMessageCompletenessTests: StorageAsyncTestCase {
             )
         }
 
+        // Эталон собирается напрямую, тем же входом — "not-json" через тот же
+        // DomainJSON.decode, которым StorageJSON.decodeFromText пользуется
+        // внутри StorageErrorMapping.map, — а не походом в БД второй раз и не
+        // угаданным литералом: сверка равенством ниже сравнивает ДВА живых
+        // результата одного и того же вызова на одном и том же входе.
+        let referenceMessage: String
+        do {
+            _ = try DomainJSON.decode(RecordingManifest.self, from: Data("not-json".utf8))
+            XCTFail("эталон обязан бросить"); return
+        } catch {
+            referenceMessage = String(describing: error)
+        }
+
         do {
             _ = try await recordings.recording(id: recordingId)
             XCTFail("ожидался dataCorrupted")
@@ -33,26 +46,7 @@ final class ErrorMessageCompletenessTests: StorageAsyncTestCase {
             guard case .dataCorrupted(_, _, let message) = error else {
                 XCTFail("ожидался dataCorrupted, получено \(error)"); return
             }
-            // Полное литеральное равенство с НЕЗАВИСИМЫМ повторным разбором того же
-            // текста здесь не проверяется намеренно — уже найденный в части 3a баг
-            // теста К35 показал, что порядок печати `userInfo` обёрнутой `NSError`
-            // (`NSDebugDescription`/`NSJSONSerializationErrorIndex`) не гарантирован
-            // между двумя ОТДЕЛЬНЫМИ разборами одного и того же входа. Вместо этого
-            // сверяются все детерминированные части «целиком» — точный префикс,
-            // оба имени ключей `userInfo` (независимо от их взаимного порядка) и
-            // точный конец строки, — так что где бы текст ни был обрезан, проверка
-            // это поймает, не полагаясь на порядок недетерминированной середины.
-            XCTAssertTrue(
-                message.hasPrefix(
-                    "dataCorrupted(Swift.DecodingError.Context(codingPath: [], debugDescription: "
-                        + "\"The given data was not valid JSON.\", underlyingError: "
-                        + "Optional(Error Domain=NSCocoaErrorDomain Code=3840"
-                ),
-                "точное начало описания DecodingError, не усечено и не подменено: \(message)"
-            )
-            XCTAssertTrue(message.contains("NSDebugDescription"), "первый ключ userInfo цел: \(message)")
-            XCTAssertTrue(message.contains("NSJSONSerializationErrorIndex"), "второй ключ userInfo цел: \(message)")
-            XCTAssertTrue(message.hasSuffix("})))"), "текст завершён всеми закрывающими скобками: \(message)")
+            XCTAssertEqual(message, referenceMessage, "полный текст равен эталону, собранному напрямую")
         }
     }
 
@@ -83,6 +77,20 @@ final class ErrorMessageCompletenessTests: StorageAsyncTestCase {
             try db.execute(sql: "PRAGMA ignore_check_constraints = OFF")
         }
 
+        // Эталон собирается напрямую, тем же входом (100, 50) конструктору
+        // Transcript.Segment — тот же DomainValidationError, что ловит
+        // StorageErrorMapping.map при чтении испорченной строки.
+        let referenceMessage: String
+        do {
+            _ = try Transcript.Segment(
+                startMs: 100, endMs: 50, channel: .mic, speakerCluster: nil,
+                text: "x", textOriginal: nil, textConfidence: nil, words: []
+            )
+            XCTFail("эталон обязан бросить"); return
+        } catch let error as DomainValidationError {
+            referenceMessage = error.description
+        }
+
         do {
             _ = try await transcripts.transcript(id: header.id)
             XCTFail("ожидался dataCorrupted")
@@ -90,18 +98,7 @@ final class ErrorMessageCompletenessTests: StorageAsyncTestCase {
             guard case .dataCorrupted(_, _, let message) = error else {
                 XCTFail("ожидался dataCorrupted, получено \(error)"); return
             }
-            // `DomainValidationError.description` — ровно
-            // "\(contract).\(type) инв. \(invariant), \(path): \(message)" (шапка
-            // DomainValidationError.swift). Контракт §0.1 сам называет стабильными
-            // только contract/type/invariant/path — свободный текст `message` в
-            // конце явно объявлен нестабильным и сравнению не подлежит. Поэтому
-            // «целиком» здесь значит: весь префикс до двоеточия, всеми четырьмя
-            // полями сразу и в точном формате, а не по одному разрозненными
-            // подстроками — не только «где-то есть 3» и «где-то есть endMs».
-            XCTAssertTrue(
-                message.hasPrefix("C-003.Transcript.Segment инв. 3, endMs: "),
-                "полный префикс — contract, type, номер инварианта и path одной строкой: \(message)"
-            )
+            XCTAssertEqual(message, referenceMessage, "полный текст равен эталону, собранному напрямую")
         }
     }
 }

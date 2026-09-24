@@ -1,9 +1,9 @@
 //  PortsDataCorruptedExtraTests — К29 перечня MEE-189 (инвариант 21, восемь
 //  портов §5), владелец: DEV-2. Разведён с `PortsDataCorruptedTests.swift` по
-//  объёму (`type_body_length`) — не по смыслу: три дополнительных входа сверх
-//  «по одному битому на порт» из возврата РП (перекрывающиеся segments,
-//  корпус «три целые плюс одна битая» на методе-коллекции, adHoc()/
-//  unfinalized() на той же битой строке).
+//  объёму (`type_body_length`) — не по смыслу: дополнительные входы сверх
+//  «по одному битому на порт» из возвратов РП (перекрывающиеся segments,
+//  корпус «три целые плюс одна битая» на методах-коллекциях, включая
+//  adHoc()/unfinalized(), с сверкой entity И id).
 
 import XCTest
 import GRDB
@@ -43,7 +43,9 @@ final class PortsDataCorruptedExtraTests: StorageAsyncTestCase {
                 arguments: [header.id.uuidString]
             )
         }
-        try await Self.assertDataCorrupted(entity: "Transcript") { try await transcripts.transcript(id: header.id) }
+        try await Self.assertDataCorrupted(entity: "Transcript", id: header.id.uuidString) {
+            try await transcripts.transcript(id: header.id)
+        }
     }
 
     // MARK: - Connector: all() — одна битая строка среди трёх целых
@@ -69,60 +71,75 @@ final class PortsDataCorruptedExtraTests: StorageAsyncTestCase {
         }
         // Три целые строки не маскируют битую — метод-коллекция не пропускает
         // её молча (инвариант 21: dataCorrupted, а не тихий пропуск строки).
-        try await Self.assertDataCorrupted(entity: "Connector") { try await connectors.all() }
+        try await Self.assertDataCorrupted(entity: "Connector", id: "broken") { try await connectors.all() }
     }
 
-    // MARK: - Recording: unfinalized()/adHoc() — та же битая manifest_json, другие читающие методы порта
+    // MARK: - Recording: unfinalized() — три целые строки плюс одна битая
 
-    func testK29_recordingUnfinalizedGivesDataCorruptedOnBrokenManifestJSON() async throws {
+    func testK29_recordingUnfinalizedGivesDataCorruptedOnBrokenRowAmongThreeIntactRows() async throws {
         let temp = try StorageTestSupport.makeDatabase()
         defer { StorageTestSupport.cleanup(temp) }
         let layout = FileLayout(root: temp.directory)
         let recordings = temp.database.recordingRepository(fileLayout: layout)
-        let recordingId = UUID()
+        for _ in 0..<3 {
+            try await recordings.save(RecordingRecord(
+                manifest: try TestFixtures.recordingManifest(), status: .recording
+            ))
+        }
+        let brokenId = UUID()
         try await recordings.save(RecordingRecord(
-            manifest: try TestFixtures.recordingManifest(recordingId: recordingId), status: .recording
+            manifest: try TestFixtures.recordingManifest(recordingId: brokenId), status: .recording
         ))
         try temp.database.rawWrite { db in
             try db.execute(
-                sql: "UPDATE recordings SET manifest_json = 'not-json' WHERE id = ?",
-                arguments: [recordingId.uuidString]
+                sql: "UPDATE recordings SET manifest_json = 'not-json' WHERE id = ?", arguments: [brokenId.uuidString]
             )
         }
-        try await Self.assertDataCorrupted(entity: "Recording") { try await recordings.unfinalized() }
+        try await Self.assertDataCorrupted(entity: "Recording", id: brokenId.uuidString) {
+            try await recordings.unfinalized()
+        }
     }
 
-    func testK29_recordingAdHocGivesDataCorruptedOnBrokenManifestJSON() async throws {
+    // MARK: - Recording: adHoc() — три целые строки плюс одна битая
+
+    func testK29_recordingAdHocGivesDataCorruptedOnBrokenRowAmongThreeIntactRows() async throws {
         let temp = try StorageTestSupport.makeDatabase()
         defer { StorageTestSupport.cleanup(temp) }
         let layout = FileLayout(root: temp.directory)
         let recordings = temp.database.recordingRepository(fileLayout: layout)
-        let recordingId = UUID()
+        for _ in 0..<3 {
+            try await recordings.save(RecordingRecord(
+                manifest: try TestFixtures.recordingManifest(meetingId: nil), status: .recording
+            ))
+        }
+        let brokenId = UUID()
         try await recordings.save(RecordingRecord(
-            manifest: try TestFixtures.recordingManifest(recordingId: recordingId, meetingId: nil), status: .recording
+            manifest: try TestFixtures.recordingManifest(recordingId: brokenId, meetingId: nil), status: .recording
         ))
         try temp.database.rawWrite { db in
             try db.execute(
-                sql: "UPDATE recordings SET manifest_json = 'not-json' WHERE id = ?",
-                arguments: [recordingId.uuidString]
+                sql: "UPDATE recordings SET manifest_json = 'not-json' WHERE id = ?", arguments: [brokenId.uuidString]
             )
         }
-        try await Self.assertDataCorrupted(entity: "Recording") { try await recordings.adHoc() }
+        try await Self.assertDataCorrupted(entity: "Recording", id: brokenId.uuidString) {
+            try await recordings.adHoc()
+        }
     }
 
     // MARK: - Оснастка
 
     private static func assertDataCorrupted<T>(
-        entity: String, file: StaticString = #filePath, line: UInt = #line, _ body: () async throws -> T
+        entity: String, id: String, file: StaticString = #filePath, line: UInt = #line, _ body: () async throws -> T
     ) async throws {
         do {
             _ = try await body()
             XCTFail("ожидался dataCorrupted", file: file, line: line)
         } catch let error as StorageError {
-            guard case .dataCorrupted(let named, _, _) = error else {
+            guard case .dataCorrupted(let gotEntity, let gotId, _) = error else {
                 XCTFail("ожидался dataCorrupted, получено \(error)", file: file, line: line); return
             }
-            XCTAssertEqual(named, entity, file: file, line: line)
+            XCTAssertEqual(gotEntity, entity, file: file, line: line)
+            XCTAssertEqual(gotId, id, "id — битой строки среди целых, не заглушка", file: file, line: line)
         }
     }
 }
