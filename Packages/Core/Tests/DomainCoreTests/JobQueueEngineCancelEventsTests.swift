@@ -205,6 +205,10 @@ final class JobQueueEngineCancelEventsTests: XCTestCase {
             "заводить второй"
         )
         await rig.queue.waitUntilIdle()
+        // Второй `start()` этого теста (см. довод выше) иначе оставляет свои `timerTask`/
+        // `powerEventsTask` без парного `stop()` до конца функции — тот же класс утечки,
+        // что предупреждает `deinit` `JobQueueEngine.swift` (найдено РП на приёмке #91).
+        await rig.queue.stop()
     }
 
     private func assertNextPassOnlyBlocksNoHandler(
