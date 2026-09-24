@@ -21,11 +21,13 @@ final class ControlSurfaceEntryPointsTests: XCTestCase {
         harness.connectorRepository.seed(ids.map { Harness.record(id: $0) })
         let connectors = ids.map { harness.connector($0) }
         for (index, connector) in connectors.enumerated() {
+            HangDiagnostics.checkpoint("K66 loop iter \(index) (\(ids[index])) before listCalendars")
             connector.setInitializeResult(capabilities: ConnectorCapabilities(
                 deltaSync: false, push: false, attendees: true, conference: true, auth: .none
             ))
             connector.setListCalendars([])
             _ = try await harness.hub.listCalendars(source: CalendarSourceId(rawValue: ids[index]))
+            HangDiagnostics.checkpoint("K66 loop iter \(index) (\(ids[index])) after listCalendars")
         }
         HangDiagnostics.checkpoint("K66 after listCalendars loop")
 
