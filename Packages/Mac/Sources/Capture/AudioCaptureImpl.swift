@@ -45,11 +45,18 @@ public final class AudioCaptureImpl: AudioCapturePort, @unchecked Sendable {
     let eventsLock = NSLock()
     var eventContinuations: [UUID: AsyncStream<CaptureEvent>.Continuation] = [:]
 
-    /// Тестовый крюк (MEE-365, возврат РП п. 1): синхронизация с циклом
-    /// `installPowerEventsIfNeeded` вместо угадывания задержки фиксированным `Task.sleep`.
+    /// Тестовый крюк (MEE-365, возврат РП п. 1; MEE-371 — то же для подписки): синхронизация с
+    /// циклом `installPowerEventsIfNeeded` вместо угадывания задержки фиксированным `Task.sleep`.
     /// `internal`, не публичный — разрешённого списка инварианта 25 не касается.
     let powerEventsLock = NSLock()
     var pendingPowerEventContinuations: [CheckedContinuation<Void, Never>] = []
+    /// MEE-371: `power.events()` регистрирует подписку внутри `Task { ... }` в
+    /// `installPowerEventsIfNeeded` — тело задачи выполняется не синхронно с её созданием, а по
+    /// планировщику. `FakePowerPort.emit` не буферизует события без подписчика (см. фейк) — тест,
+    /// пославший событие до фактической регистрации, теряет его. `awaitPowerEventsSubscribed`
+    /// ждёт именно момента регистрации, а не факта обработки события.
+    var isPowerEventsSubscribed = false
+    var pendingSubscriptionContinuations: [CheckedContinuation<Void, Never>] = []
 
     /// Инициализатор для тестов и для харнесса-писателя (план MEE-315 §6): все швы подставные.
     init(power: PowerPort, gateway: HardwareGateway, deadline: PromptDeadline, pollDriver: CapturePollDriver) {

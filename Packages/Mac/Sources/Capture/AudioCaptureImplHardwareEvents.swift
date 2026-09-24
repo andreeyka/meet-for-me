@@ -45,7 +45,15 @@ extension AudioCaptureImpl {
         guard !alreadyInstalled else { return }
         powerEventsTask = Task { [weak self] in
             guard let self else { return }
-            for await event in self.power.events() {
+            let stream = self.power.events()
+            // Подписка на AsyncStream регистрируется синхронно внутри `events()`, до этой строки —
+            // сигнал ниже верен именно в момент, когда `emit` со стороны шва уже не потеряет событие.
+            self.markPowerEventsSubscribed()
+            for await event in stream {
+                // MEE-371 п. 2: будить ожидающих на ЛЮБОЙ развилке итерации, не только на ветке
+                // обработки — иначе `performAndAwaitNextPowerEvent` вокруг события, отброшенного
+                // проверкой фазы ниже (сеанс не `.running`), висел бы до таймаута теста.
+                defer { self.resumePendingPowerEventContinuations() }
                 guard case .running(let session) = self.currentSessionPhase() else { continue }
                 switch event {
                 case .willSleep:
@@ -55,9 +63,34 @@ extension AudioCaptureImpl {
                 default:
                     break
                 }
-                self.resumePendingPowerEventContinuations()
             }
         }
+    }
+
+    /// MEE-371: тест ждёт, пока цикл выше фактически зарегистрирует подписку на `power.events()`
+    /// (см. комментарий у `isPowerEventsSubscribed`), вместо фиксированной паузы перед первым
+    /// `power.emit(...)`. Если подписка уже установлена (повторный вызов на живом порте — сеансы
+    /// разделяют одну подписку на всю жизнь порта), резюмирует немедленно.
+    func awaitPowerEventsSubscribed() async {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            powerEventsLock.lock()
+            if isPowerEventsSubscribed {
+                powerEventsLock.unlock()
+                continuation.resume()
+                return
+            }
+            pendingSubscriptionContinuations.append(continuation)
+            powerEventsLock.unlock()
+        }
+    }
+
+    private func markPowerEventsSubscribed() {
+        powerEventsLock.lock()
+        isPowerEventsSubscribed = true
+        let waiting = pendingSubscriptionContinuations
+        pendingSubscriptionContinuations = []
+        powerEventsLock.unlock()
+        for continuation in waiting { continuation.resume() }
     }
 
     /// MEE-365: тест зовёт `action` (обычно — `power.emit(...)`) и ждёт, пока цикл выше не

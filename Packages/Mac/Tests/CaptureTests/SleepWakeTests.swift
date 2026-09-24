@@ -12,6 +12,7 @@ final class SleepWakeTests: CaptureAsyncTestCase {
         let harness = Harness()
         let directory = try Harness.makeDirectory()
         try await harness.start(directory: directory)
+        await harness.port.awaitPowerEventsSubscribed()
         harness.gateway.feed(.samples(.mic, frameCount: 480, channelCount: 1, hostTime: 1_000))
         try await Task.sleep(nanoseconds: 10_000_000)
 
@@ -44,6 +45,7 @@ final class SleepWakeTests: CaptureAsyncTestCase {
         let harness = Harness()
         let directory = try Harness.makeDirectory()
         try await harness.start(directory: directory)
+        await harness.port.awaitPowerEventsSubscribed()
         harness.gateway.feed(.samples(.mic, frameCount: 480, channelCount: 1, hostTime: 1_000))
         try await Task.sleep(nanoseconds: 10_000_000)
 
@@ -77,10 +79,19 @@ final class SleepWakeTests: CaptureAsyncTestCase {
     /// `power.emit(...)`, резюмируется циклом обработки сразу после того, как `.willSleep`
     /// обработан целиком (`handleSleep` вернулся) — чтение с диска идёт по факту обработки, не
     /// по угаданному времени.
+    ///
+    /// MEE-371: оставалась ещё одна угаданная задержка — фиксированная пауза ПЕРЕД первым
+    /// `power.emit(...)`, которая на деле ждала не обработки события, а самой РЕГИСТРАЦИИ
+    /// подписки `installPowerEventsIfNeeded` на `power.events()` (тело `Task { ... }` выполняется
+    /// не синхронно с её созданием). `FakePowerPort.emit` не буферизует события без подписчика —
+    /// на медленном раннере событие терялось бы, и `performAndAwaitNextPowerEvent` висел бы до
+    /// таймаута теста. `awaitPowerEventsSubscribed()` — тот же приём, что выше, но для момента
+    /// подписки, а не обработки: ждёт сигнала о завершённой регистрации перед любым `emit`.
     func test_sleepWritesValidManifestToDiskImmediately() async throws {
         let harness = Harness()
         let directory = try Harness.makeDirectory()
         try await harness.start(directory: directory)
+        await harness.port.awaitPowerEventsSubscribed()
         harness.gateway.feed(.samples(.mic, frameCount: 480, channelCount: 1, hostTime: 1_000))
         try await Task.sleep(nanoseconds: 10_000_000)
 
@@ -106,6 +117,7 @@ final class SleepWakeTests: CaptureAsyncTestCase {
         let harness = Harness()
         let directory = try Harness.makeDirectory()
         try await harness.start(directory: directory)
+        await harness.port.awaitPowerEventsSubscribed()
         harness.gateway.feed(.samples(.mic, frameCount: 480, channelCount: 1, hostTime: 1_000))
         try await Task.sleep(nanoseconds: 10_000_000)
 
