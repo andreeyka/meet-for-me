@@ -27,6 +27,7 @@ final class ControlSurfaceEntryPointsTests: XCTestCase {
             connector.setListCalendars([])
             _ = try await harness.hub.listCalendars(source: CalendarSourceId(rawValue: ids[index]))
         }
+        HangDiagnostics.checkpoint("K66 after listCalendars loop")
 
         let delayedConnector = connectors[2]
         delayedConnector.hang(.shutdown)
@@ -34,6 +35,7 @@ final class ControlSurfaceEntryPointsTests: XCTestCase {
         let flag = DoneFlag()
         let stopTask = Task {
             await harness.hub.stop()
+            HangDiagnostics.checkpoint("K66 stop() returned")
             await flag.markDone()
         }
 
@@ -52,11 +54,14 @@ final class ControlSurfaceEntryPointsTests: XCTestCase {
             connectors[0].shutdownCallCount > 0 && connectors[1].shutdownCallCount > 0
                 && delayedConnector.callCount(.shutdown) > 0
         }
+        HangDiagnostics.checkpoint("K66 pollUntil satisfied")
         let doneEarly = await flag.isDone()
         XCTAssertFalse(doneEarly, "stop() не возвращается, пока не отработал shutdown третьего источника")
 
         delayedConnector.release(.shutdown)
+        HangDiagnostics.checkpoint("K66 released, awaiting stopTask")
         await stopTask.value
+        HangDiagnostics.checkpoint("K66 stopTask.value returned")
 
         let doneAfterRelease = await flag.isDone()
         XCTAssertTrue(doneAfterRelease)
