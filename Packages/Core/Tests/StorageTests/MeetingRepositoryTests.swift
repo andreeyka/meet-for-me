@@ -52,9 +52,11 @@ final class MeetingRepositoryTests: StorageAsyncTestCase {
 
     // MARK: - Инвариант 30 (C-010 v10, IR-118, MEE-348)
 
-    /// «Пара — первичный ключ `meeting_sources`, результат не более чем один; полный
+    /// К91. «Пара — первичный ключ `meeting_sources`, результат не более чем один; полный
     /// перебор `meetings` не нужен». Прямая точечная выборка, не полное чтение таблицы.
-    func test_invariant30_meetingBySourcePairFindsRecordOrNil() async throws {
+    /// Переименован из `test_invariant30_...` — дельта «Т» перечня MEE-189, номер критерия
+    /// в имени, как у соседних тестов.
+    func testK91_meetingBySourcePairFindsRecordOrNil() async throws {
         let temp = try StorageTestSupport.makeDatabase()
         defer { StorageTestSupport.cleanup(temp) }
         let repository = temp.database.meetingRepository()
@@ -83,6 +85,49 @@ final class MeetingRepositoryTests: StorageAsyncTestCase {
 
         let missing = try await repository.meeting(sourceConnectorId: "eventkit", externalId: "нет-такой")
         XCTAssertNil(missing, "пары нет — nil, а не отказ")
+    }
+
+    /// К92 (дельта «Т» перечня MEE-189). Пара `(source_connector_id, external_id)`, уже
+    /// занятая одной встречей, — `save` другой встречи с той же парой бросает
+    /// `constraintViolation` (СУБД: коллизия `PRIMARY KEY meeting_sources`, см.
+    /// `StorageErrorMapping.mapWrite`), строка второй встречи не создаётся, пара остаётся
+    /// у первой; повторный `save` первой встречи с той же парой проходит без ошибки —
+    /// `replaceMeetingSources` сперва удаляет её же старые строки, коллизии с собой нет.
+    func testK92_saveRejectsPairAlreadyOwnedByAnotherMeeting() async throws {
+        let temp = try StorageTestSupport.makeDatabase()
+        defer { StorageTestSupport.cleanup(temp) }
+        let repository = temp.database.meetingRepository()
+
+        let sharedSource = MeetingSource(
+            sourceConnectorId: "eventkit", externalId: "ext-92-shared", icalUid: nil,
+            lastModified: TestFixtures.epoch
+        )
+        let eventA = try TestFixtures.meetingEvent(externalId: "ext-92-a")
+        try await repository.save(
+            MeetingRecord(event: eventA, dedupKey: nil, status: .scheduled, sources: [sharedSource])
+        )
+
+        let eventB = try TestFixtures.meetingEvent(externalId: "ext-92-b")
+        do {
+            try await repository.save(
+                MeetingRecord(event: eventB, dedupKey: nil, status: .scheduled, sources: [sharedSource])
+            )
+            XCTFail("ожидался constraintViolation — пара уже занята встречей А")
+        } catch StorageError.constraintViolation {
+            // ожидаемо
+        }
+
+        let createdB = try await repository.meeting(id: eventB.id)
+        XCTAssertNil(createdB, "встреча Б не создана")
+
+        let pairOwner = try await repository.meeting(sourceConnectorId: "eventkit", externalId: "ext-92-shared")
+        XCTAssertEqual(pairOwner?.event.id, eventA.id, "пара осталась у А")
+
+        try await repository.save(
+            MeetingRecord(event: eventA, dedupKey: nil, status: .armed, sources: [sharedSource])
+        )
+        let updatedA = try await repository.meeting(id: eventA.id)
+        XCTAssertEqual(updatedA?.status, .armed, "повторный save А с той же парой прошёл")
     }
 
     // MARK: - К11
