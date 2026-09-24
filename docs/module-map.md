@@ -1,13 +1,34 @@
 # Карта модулей
 
-Версия 1.6. Утверждена пользователем (MEE-1). Источник: `docs/architecture.md` v0.7.
+Версия 1.7. Утверждена пользователем (MEE-1). Источник: `docs/architecture.md` v0.7.
+Изменение против v1.6: возврат РП по IR-118 (MEE-348) — правка v1.6 была неверна, откатывается.
+Довод v1.6 («ни C-005, ни C-006 не упоминают `JoinInfo`») проверял только контракты calendar-hub,
+а не C-009 сам: C-009 v10 (MEE-15) называет `calendar-hub` потребителем `ProcessMonitorPort`/`JoinInfo`
+не оговоркой, а решением — четырежды в тексте («Стороны-потребители», «Данные на границе», абзац
+«Зачем это сказано в контракте», «Фейк для тестов»): `calendar-hub` вызывает `PlatformResolver`,
+получает `JoinInfo` и строит из него `MeetingEvent.Conference` — именно эта операция и есть разбор
+ссылки на созвон, а не то, что calendar-hub возит готовый `joinUrl` строкой без разбора, как
+утверждала v1.6. Строка вернулась к прежнему виду: у C-009 в столбце потребителей снова
+`detector, calendar-hub`. Заодно исправлена стоявшая рядом строка `calendar-hub` («МОДУЛЬ:
+calendar-hub», «Реализует контракты») — описание ключа дедупа `join-URL → ICS UID →
+организатор+время` устарело с C-005 v4: время (`startEpochSeconds`) входит во все три ветви ключа,
+не только в третью, и правило/функцию `DedupKey.make(from:)` объявляет и реализует `domain-core`
+(C-005, шапка: «владеет определением порта и правилом дедупа»), а не calendar-hub — тот только
+вызывает её при реализации `CalendarPort` (ответ IR-118, MEE-348, вопрос 2). Строка модуля правлена:
+«дедуп — вызывает `DedupKey.make(from:)` (объявляет и реализует `domain-core`, C-005; ключ:
+join-URL/ICS UID/организатор — все три ветви со временем начала)». У `domain-core` («МОДУЛЬ:
+domain-core», «Реализует контракты») дописан `DedupKey.make` в список того, что этот модуль
+реализует — прежде он там не упоминался вовсе. Ответ ни одного метода не меняется ни одной из трёх
+правок — это доводка таблицы и текста модулей под уже принятое решение, а не новое решение.
 Изменение против v1.5: IR-118 (MEE-348) — таблица контрактов §4 называла `calendar-hub` потребителем
 C-009 (`ProcessMonitorPort` + `JoinInfo`), хотя ни C-005, ни C-006 (собственные контракты calendar-hub)
 `JoinInfo` не упоминают ни разу, а разбор ссылки в `JoinInfo` — операция `detector`/`PlatformResolver`
 над уже готовым `MeetingEvent.Conference.joinUrl`; calendar-hub эту ссылку только проносит строкой,
 не читая. Строка правлена: у C-009 в столбце потребителей остался один `detector`. Ответ ни одного
 метода не меняется — это была ошибка таблицы, а не решение, которое кто-то принимал и от которого
-что-то зависит.
+что-то зависит. **Правка неверна и откачена версией 1.7 выше** — довод проверял только контракты
+calendar-hub, а не сам C-009, который называет calendar-hub потребителем решением, а не оговоркой;
+текст этого абзаца сохранён для истории, действует запись v1.7.
 Изменение против v1.4: IR-116 (MEE-340) — строка calendar-eventkit «Запрещено: … нормализация событий
 (это хост)» противоречила самому механизму: `MeetingEventPayload` (C-006 §6.1) несёт все семь инвариантов
 нормализации C-001 уже в своём инициаторе, а его строит коннектор — `fetchEvents` возвращает
@@ -130,7 +151,8 @@ Mac. Работа `Core (Linux)` `storage` не проверяет вовсе; �
   архитектору, DEV-2 читает его из тестов, но не изменяет (§1)
 - Владелец: DEV-2
 - Реализует контракты: DTO (`MeetingEvent`, `RecordingManifest`, `Transcript`, `JoinInfo`, `MeetingSignal`), определения портов
-  (`AudioCapturePort`, `CalendarPort`, `PermissionsPort`, `ProcessMonitorPort`, `PowerPort`), машина состояний
+  (`AudioCapturePort`, `CalendarPort`, `PermissionsPort`, `ProcessMonitorPort`, `PowerPort`), правило дедупа
+  `DedupKey.make(from:)` (C-005 — «владеет определением порта и правилом дедупа») [v1.7, IR-118], машина состояний
   `SessionCoordinator`, `Scheduler`, интерфейс `JobQueue`, фейки всех портов в `DomainTestKit`
 - Потребляет контракты: —
 - Запрещено: импорт AppKit, SwiftUI, AVFoundation, CoreAudio, EventKit, GRDB, XPC. Только Foundation.
@@ -235,8 +257,9 @@ Mac. Работа `Core (Linux)` `storage` не проверяет вовсе; �
 - Каталоги: `Packages/Core/Sources/CalendarHub/`, `Packages/Core/Tests/CalendarHubTests/`
 - Владелец: DEV-2
 - Реализует контракты: `CalendarPort`, хост плагинов (in-process и stdio JSON-RPC), назначение `id`
-  событию (C-001 «Поведение», C-006 §6.1 — коннектор нормализует, id назначает только хост), дедуп
-  (ключ: join-URL → ICS UID → организатор+время), расписание опроса
+  событию (C-001 «Поведение», C-006 §6.1 — коннектор нормализует, id назначает только хост), дедуп —
+  вызывает `DedupKey.make(from:)` (объявляет и реализует `domain-core`, C-005; ключ: join-URL/ICS
+  UID/организатор — все три ветви со временем начала) [v1.7, IR-118], расписание опроса
 - Потребляет контракты: протокол плагина календаря, порты репозиториев из `domain-core`
 - Запрещено: импорт EventKit и любых Apple-фреймворков сверх Foundation; знание о конкретных коннекторах
 
@@ -350,7 +373,7 @@ Mac. Работа `Core (Linux)` `storage` не проверяет вовсе; �
 | C-006 | Протокол плагина календаря (JSON-RPC + Swift-зеркало) | domain-core | calendar-hub, calendar-eventkit, plugin-graph | нет |
 | C-007 | `PermissionsPort` | domain-core | permissions, app-ui | нет |
 | C-008 | `PowerPort` | domain-core | permissions, capture | нет |
-| C-009 | `ProcessMonitorPort` + `JoinInfo` | domain-core | detector | нет |
+| C-009 | `ProcessMonitorPort` + `JoinInfo` | domain-core | detector, calendar-hub | нет |
 | C-010 | Схема SQLite и репозитории | storage | все потребители данных | нет |
 | C-011 | Протоколы движка (`TranscriptionEngine`, `DiarizationEngine`, `EmbeddingEngine`, `PostProcessor`) | engine-xpc | attribution, domain-core, gigaam | **частично** (R12: таймстампы) |
 | C-012 | XPC-контракт: сообщения, прогресс, отмена | engine-xpc | domain-core | нет |
