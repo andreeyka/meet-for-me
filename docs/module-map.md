@@ -1,6 +1,10 @@
 # Карта модулей
 
-Версия 1.16. Утверждена пользователем (MEE-1). Источник: `docs/architecture.md` v0.7.
+Версия 1.17. Утверждена пользователем (MEE-1). Источник: `docs/architecture.md` v0.7.
+Изменение против v1.16: малый возврат РП по IR-080 (MEE-175), п. 5 — раздел «МОДУЛЬ: domain-core» называл
+у обработчика задачи `attribute` четыре репозитория и не называл `AppFacade`, хотя C-015 §7 (та же правка)
+уже называет: обработчик читает `AppFacade.settings()`, чтобы узнать, выключены ли голосовые профили.
+Список дополнен `AppFacade` — совпадает с C-015 v7 §7 дословно.
 Изменение против v1.15: IR-080 (MEE-175) — таблица «Планируемые контракты Среза 1» и шапка C-013 называли
 владельца обработчика задачи `attribute` по-разному: таблица и C-013 — `attribution`, C-015 и раздел
 «МОДУЛЬ: domain-core» — `domain-core`. Решено в пользу `domain-core` (C-013 §8, C-015 §7 — обработчик
@@ -242,7 +246,7 @@ Mac. Работа `Core (Linux)` `storage` не проверяет вовсе; �
   (`AudioCapturePort`, `CalendarPort`, `PermissionsPort`, `ProcessMonitorPort`, `PowerPort`), правило дедупа
   `DedupKey.make(from:)` (C-005 — «владеет определением порта и правилом дедупа») [v1.7, IR-118], машина состояний
   `SessionCoordinator`, `Scheduler`, интерфейс `JobQueue`, обработчик задачи `attribute` (C-013 §8, C-015 §7 —
-  IR-080) поверх `AttributionPort`/`MeetingRepository`/`TranscriptRepository`/`PersonRepository`/`SpeakerProfileRepository`,
+  IR-080) поверх `AttributionPort`/`MeetingRepository`/`TranscriptRepository`/`PersonRepository`/`SpeakerProfileRepository`/`AppFacade`,
   фейки всех портов в `DomainTestKit`
 - Потребляет контракты: —
 - Запрещено: импорт AppKit, SwiftUI, AVFoundation, CoreAudio, EventKit, GRDB, XPC. Только Foundation.
