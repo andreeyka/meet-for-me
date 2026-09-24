@@ -114,7 +114,7 @@ final class HostServicesTests: XCTestCase {
         // здесь контрактом не предусмотрено (не то же самое, что MEE-365 — там был свой
         // тестовый крюк, здесь наблюдаемая сторона не даёт такого же прямого доступа).
         host.log(.error, "проверочное сообщение")
-        while await harness.hub.loggedEntries(for: source).isEmpty { await Task.yield() }
+        await pollUntil(await !harness.hub.loggedEntries(for: source).isEmpty)
 
         let entries = await harness.hub.loggedEntries(for: source)
         XCTAssertEqual(entries.count, 1)

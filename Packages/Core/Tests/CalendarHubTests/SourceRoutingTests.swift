@@ -107,7 +107,7 @@ final class SourceRoutingTests: XCTestCase {
             await harness.hub.stop()
             await flag.markDone()
         }
-        while connectors[0].shutdownCallCount == 0 || connectors[1].shutdownCallCount == 0 { await Task.yield() }
+        await pollUntil(connectors[0].shutdownCallCount > 0 && connectors[1].shutdownCallCount > 0)
         let doneEarly = await flag.isDone()
         XCTAssertFalse(doneEarly, "stop() не возвращается, пока висит задержанный источник")
         delayed.release(.shutdown)

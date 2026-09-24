@@ -17,9 +17,30 @@
 //    по числу источников.
 
 import Foundation
+import XCTest
 import DomainCore
 import DomainTestKit
 import CalendarHub
+
+/// Ограниченный опрос: `Task.yield()` в цикле до `timeout`, а не без предела — возврат РП
+/// (приёмка #85, дефект 7): `resolveTimeoutAfterHang` (`InitializationTests.swift`) висела
+/// бы вечно, если бы условие никогда не стало истинным (реальный дефект реализации, не
+/// зависший коннектор теста) — тест обязан упасть явно, не полагаться на внешний таймаут CI.
+/// `condition` — `@autoclosure`, перевычисляется на каждой итерации; допускает побочный
+/// эффект (например, `waitSeam.resolveNext()`), тем же приёмом, что было в исходном цикле.
+func pollUntil(
+    _ condition: @autoclosure () async -> Bool, timeout: Duration = .seconds(10),
+    file: StaticString = #filePath, line: UInt = #line
+) async {
+    let deadline = ContinuousClock.now + timeout
+    while await !condition() {
+        if ContinuousClock.now >= deadline {
+            XCTFail("опрос не дождался условия за \(timeout)", file: file, line: line)
+            return
+        }
+        await Task.yield()
+    }
+}
 
 final class FakeWaitSeam: WaitSeam, @unchecked Sendable {
     private let lock = NSLock()

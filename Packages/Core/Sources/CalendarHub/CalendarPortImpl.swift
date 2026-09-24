@@ -3,16 +3,19 @@
 //
 //  Модуль: calendar-hub · Владелец: DEV-1 · Слой: домен
 //
-//  Эта правка закрывает группы А (К1-К10, кроме версии MAJOR у К1 и кадра shutdown у
-//  К9-Б — обе части нужны только stdio-транспорту, ещё не написанному, group Ж),
-//  Б (К11-К14, К61), В (К15-К29, дедуп/слияние), Г (К30-К43, синхронизация), Д (К62-К63,
-//  поток changes), Е (К44-К45, расписание). Управляющая поверхность источника (шесть
-//  методов MEE-355, v6/IR-120 — beginAuth/completeAuth/settingsSchema/configure/
-//  healthCheck/stop; группы К/Л, К3 вход Б/К66-К69/К71-К75) РЕАЛИЗОВАНА этой же правкой —
-//  MEE-355 слилась в main раньше, чем ожидала постановка MEE-362. Тесты на эти критерии —
-//  ОТДЕЛЬНАЯ, ещё не написанная в этой правке работа (ControlSurfaceEntryPointsTests.swift/
-//  SourceRoutingTests.swift по плану MEE-361), реализация опережает своё покрытие тестами
-//  осознанно — конформанс `CalendarPortImpl: CalendarPort` иначе не собрался бы вовсе.
+//  Часть 1 (#85) реализовала весь код перечисленных ниже групп; тесты на бо́льшую часть
+//  этого списка написаны только частью 2 (MEE-362 ч.2) — какие именно тесты и где, называет
+//  шапка каждого файла `CalendarHubTests` по отдельности, эта шапка счёт не дублирует и не
+//  держит (возврат РП, приёмка #85, дефект 6: этот абзац раньше утверждал «группы Б, В, Г,
+//  Д, Е закрыты», хотя тестов на них не было ни строки — вводило в заблуждение).
+//
+//  Группы А (К1-К10, кроме версии MAJOR у К1 и кадра shutdown у К9-Б — обе части нужны
+//  только stdio-транспорту, ещё не написанному, group Ж), Б (К11-К14, К61), В (К15-К29,
+//  дедуп/слияние — К20-К24/К28 только в пределах одной синхронизации, межсинхронизационное
+//  слияние ждёт IR-126/MEE-372), Г (К30-К43, синхронизация), Д (К62-К63, поток changes),
+//  Е (К44-К45, расписание). Управляющая поверхность источника (шесть методов MEE-355,
+//  v6/IR-120 — beginAuth/completeAuth/settingsSchema/configure/healthCheck/stop; группы
+//  К/Л, К3 вход Б/К66-К69/К71-К75).
 
 import Foundation
 import DomainCore
@@ -35,6 +38,11 @@ public actor CalendarPortImpl: CalendarPort {
     private var logEntries: [CalendarSourceId: [(level: LogLevel, message: String)]] = [:]
     private var notifyEntries: [CalendarSourceId: [(kind: HostNotificationKind, detail: String?)]] = [:]
     var inFlightSync: [CalendarSourceId: Task<CalendarSyncResult, Never>] = [:]
+    /// Возврат РП (приёмка #85, дефект 2): актор реентерабелен через `await` — без этого два
+    /// одновременных вызова, заставших `capabilities[source] == nil` до первого `await`
+    /// `ensureInitialized`, оба проходили бы охрану и оба звали `connector.initialize()`,
+    /// нарушая К1/К7 («ровно один initialize на источник»). Тот же приём, что `inFlightSync`.
+    private var inFlightInitialize: [CalendarSourceId: Task<ConnectorCapabilities, Error>] = [:]
     private let changeHub = CalendarChangeHub()
     private var scheduleTask: Task<Void, Never>?
 
@@ -218,7 +226,20 @@ public actor CalendarPortImpl: CalendarPort {
         await withTaskGroup(of: Void.self) { group in
             for source in initializedSources {
                 guard let connector = connectors[source] else { continue }
-                group.addTask { await connector.shutdown() }
+                group.addTask {
+                    // Возврат РП (приёмка #85, дефект 3): shutdown() без таймаута мог
+                    // повесить stop() навсегда на одном зависшем коннекторе — К9 обязан
+                    // действовать здесь так же, как у остальных методов. `retryable: false`
+                    // — инв. 20 (shutdown никогда не повторяется); параметр уже был в
+                    // CallWrapper, просто не был нигде востребован. `try?`: stop()
+                    // контрактом не бросает и не возвращает значение — таймаут одного
+                    // источника не мешает остальным и не всплывает наружу.
+                    _ = try? await self.callConnector(
+                        source: source, connector: connector, timeout: .other, retryable: false
+                    ) {
+                        await connector.shutdown()
+                    }
+                }
             }
             for await _ in group {}
         }
@@ -248,16 +269,36 @@ public actor CalendarPortImpl: CalendarPort {
 
     // MARK: - Инициализация, порядок, таймауты (К1, К3 вход А, К7-К10)
 
-    /// К1/К7: ровно один `initialize` на источник, прежде любого другого вызова. К10/Р10:
+    /// К1/К7: ровно один `initialize` на источник, прежде любого другого вызова — включая
+    /// два одновременных вызова (возврат РП, дефект 2: `inFlightInitialize` — тот же приём,
+    /// что `inFlightSync` у `syncOne`, единственный `Task` на источник, к которому
+    /// присоединяются все конкурентные вызовы, а не создают свой). К10/Р10:
     /// `upstreamUnavailable` сбрасывает кэш `capabilities` — следующий вызов инициализирует
     /// заново.
     func ensureInitialized(_ source: CalendarSourceId, connector: CalendarConnector) async throws {
         guard capabilities[source] == nil else { return }
-        let host = HostServicesImpl(secretStore: secretStore, namespace: source.rawValue, hub: self, source: source)
-        let (_, caps) = try await callConnector(source: source, connector: connector, timeout: .initialize) {
-            try await connector.initialize(host: host, connectorInstanceId: source.rawValue)
+        if let existing = inFlightInitialize[source] {
+            capabilities[source] = try await existing.value
+            return
         }
-        capabilities[source] = caps
+        let host = HostServicesImpl(secretStore: secretStore, namespace: source.rawValue, hub: self, source: source)
+        let task = Task<ConnectorCapabilities, Error> {
+            let (_, caps) = try await self.callConnector(
+                source: source, connector: connector, timeout: .initialize
+            ) {
+                try await connector.initialize(host: host, connectorInstanceId: source.rawValue)
+            }
+            return caps
+        }
+        inFlightInitialize[source] = task
+        do {
+            let caps = try await task.value
+            capabilities[source] = caps
+            inFlightInitialize[source] = nil
+        } catch {
+            inFlightInitialize[source] = nil
+            throw error
+        }
     }
 
     private func requireConnector(_ source: CalendarSourceId) throws -> CalendarConnector {

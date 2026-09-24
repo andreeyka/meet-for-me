@@ -1,5 +1,7 @@
 //  CalendarPortImpl+Sync — синхронизация источников (К30-К39, К42-К43, К71-К72), дедуп по
-//  признакам (а)/(б) правила слияния C-005 п.4 (К17-К19, К29, К31).
+//  признакам (а)/(б) правила слияния C-005 п.4 (реализует К17-К19, К29, К31 — возврат РП,
+//  приёмка #85, дефект 6: заявление «покрыты» здесь раньше значило «есть тесты», тестов не
+//  было ни строки; актуальное покрытие тестами называет шапка `DedupAndMergeTests.swift`).
 //
 //  Модуль: calendar-hub · Владелец: DEV-1 · Слой: домен
 //
@@ -68,7 +70,14 @@ extension CalendarPortImpl {
                 upsertedCount: 0, deletedCount: 0, failure: error
             )
         } catch {
+            // Возврат РП (приёмка #85, дефект 4): эта ветка не писала через setSyncOutcome
+            // вовсе, в отличие от ветки CalendarError выше — ConnectorRecord.lastError не
+            // обновлялся на ошибках, не являющихся CalendarError (например, StorageError
+            // из репозиториев). Тот же вызов, что и там.
             let mapped = CalendarError.transport(sourceId: source, message: String(describing: error))
+            try? await connectorRepository.setSyncOutcome(
+                at: Date(), error: String(describing: mapped), connectorId: source.rawValue
+            )
             return CalendarSyncResult(
                 sourceId: source, trigger: trigger, startedAt: startedAt, finishedAt: Date(),
                 upsertedCount: 0, deletedCount: 0, failure: mapped
@@ -92,10 +101,22 @@ extension CalendarPortImpl {
         if caps?.deltaSync == true, record.cursor == nil {
             // Развилка Р9: первая синхронизация — сначала fetchChanges(nil), затем
             // fetchEvents на полном окне Р2, в этом порядке, тем же циклом.
-            var outcome = try await applyDeltaSync(
-                source: source, connector: connector, cursor: nil, calendarIds: calendarIds
+            //
+            // Возврат РП (приёмка #85, дефект 1): `applyFirstDeltaStep` НЕ сохраняет курсор
+            // сама — если бы курсор шага 1 сохранялся сразу (как делает обычный
+            // `applyDeltaSync` для уже идущей дельта-синхронизации), а шаг 2 (полное окно)
+            // упал, следующий цикл увидел бы курсор уже сохранённым и пошёл бы по дельте —
+            // полное окно не загрузилось бы никогда. Курсор пишется здесь, ПОСЛЕ того как
+            // applyFullWindow тоже завершилась успешно (если бы она бросила, до этой строки
+            // выполнение не дошло бы вовсе).
+            let (deltaOutcome, pendingCursor) = try await applyFirstDeltaStep(
+                source: source, connector: connector, calendarIds: calendarIds
             )
             let full = try await applyFullWindow(source: source, connector: connector, calendarIds: calendarIds)
+            if let pendingCursor {
+                try await connectorRepository.setCursor(pendingCursor, connectorId: source.rawValue)
+            }
+            var outcome = deltaOutcome
             outcome.upserted += full.upserted
             outcome.deleted += full.deleted
             return outcome
@@ -166,12 +187,51 @@ extension CalendarPortImpl {
         }
     }
 
-    /// Назначение id по правилу слияния C-005 п.4 (признаки а/б — К17-К19, К29). Слияние
-    /// скаляров/`attendees` по п.2-3 и ассоциативность/коммутативность (К20-К24, К28) —
-    /// ОТДЕЛЬНАЯ, ещё не написанная в этой правке работа: здесь пока «последний пишет
-    /// поверх» на уровне СКАЛЯРОВ целиком, не честный fallback по возрастанию
-    /// `sourceConnectorId` для отдельных полей. К17-К19, К29, К31 — покрыты. К20-К24, К28 —
-    /// НЕ покрыты этой правкой, следующая часть.
+    /// Развилка Р9, шаг 1: `fetchChanges(cursor: nil)`, применяет пакет, НЕ сохраняет курсор
+    /// — вызывающая сторона (`fetchAndApply`) сохраняет его сама, только после того как
+    /// шаг 2 (`applyFullWindow`) тоже прошёл успешно (возврат РП, дефект 1). Разделена с
+    /// обычным `applyDeltaSync` намеренно, не общим параметром "persist" на нём: тот метод
+    /// вызывает СВОЙ собственный резервный `applyFullWindow` изнутри catch-ветки
+    /// `cursorInvalid` — двух независимых источников «применить полное окно» в одном цикле
+    /// быть не должно, а общий флаг это бы запутал.
+    private func applyFirstDeltaStep(
+        source: CalendarSourceId, connector: CalendarConnector, calendarIds: [String]
+    ) async throws -> (outcome: SyncOutcome, pendingCursor: String?) {
+        do {
+            let batch = try await callConnector(source: source, connector: connector, timeout: .fetchWindow) {
+                try await connector.fetchChanges(cursor: nil, calendarIds: calendarIds)
+            }
+            var outcome = SyncOutcome()
+            for payload in batch.events where try await applyIncoming(payload: payload) {
+                outcome.upserted += 1
+            }
+            for externalId in batch.deletedExternalIds
+            where try await applyDeletedExternalId(source: source, externalId: externalId) {
+                outcome.deleted += 1
+            }
+            if batch.resetRequired {
+                // Инв. 8: курсор всё равно должен стать nil — можно сразу, дефект 1 защищает
+                // только НЕПУСТОЙ курсор, потерять здесь нечего.
+                try await connectorRepository.setCursor(nil, connectorId: source.rawValue)
+                return (outcome, nil)
+            }
+            return (outcome, batch.cursor)
+        } catch let error as ConnectorError {
+            guard case .cursorInvalid = error else { throw Self.mapConnectorError(error, source: source) }
+            // Курсор на этом шаге уже nil — «протухшего» курсора в обычном смысле инв. 19
+            // здесь нет; трактуем как «пакета нет», без собственного резервного полного окна
+            // (его и так сейчас вызовет fetchAndApply — вызывающая сторона).
+            return (SyncOutcome(), nil)
+        }
+    }
+
+    /// Назначение id по правилу слияния C-005 п.4 (признаки а/б — реализует К17-К19, К29).
+    /// Слияние скаляров/`attendees` по п.2-3 в честном виде (fallback по возрастанию
+    /// `sourceConnectorId` для каждого отдельного поля, К20-К24, К28) НЕ реализовано —
+    /// `MeetingSource` не хранит per-source сырые поля (IR-126/MEE-372, не решено
+    /// архитектором); здесь пока «последний пишет поверх» на уровне СКАЛЯРОВ целиком. К20-К24
+    /// тестами покрыты только В ПРЕДЕЛАХ одной синхронизации (`DedupAndMergeTests.swift`,
+    /// см. его шапку) — межсинхронизационное честное слияние ждёт того же IR-126.
     @discardableResult
     private func applyIncoming(payload: MeetingEventPayload) async throws -> Bool {
         let provisional = try payload.assigningId(UUID())
@@ -214,11 +274,21 @@ extension CalendarPortImpl {
             emit(.deleted([record.event.id]))
             return true
         }
-        // К65 вход Б: источник теряется у многоисточниковой встречи — не `.deleted`.
-        // Пересчёт содержимого по оставшимся источникам (правило слияния п.1-2) — та же
-        // ещё не написанная работа, что К20-К24: здесь только источник убирается из
-        // списка, содержимое `event` не пересчитывается заново. К65 вход Б покрыт этой
-        // правкой лишь частично — «не .deleted» да, «пересчёт по оставшимся» нет ещё.
+        // СТРОКА (возврат РП, приёмка #85, дефект 5 — проверено против C-005 п.4 по его
+        // прямому требованию): К65 вход Б — источник теряется у многоисточниковой встречи,
+        // «не .deleted» соблюдено. Контракт НЕ говорит явно, обязан ли `event` при этом
+        // пересчитываться по оставшимся источникам заново, если проигравший (уже удалённый)
+        // источник был победителем правила слияния п.2-3 — молчание того же рода, что
+        // К20-К24/К28 (MeetingSource без сырых полей источника, IR-126/MEE-372): честное
+        // слияние скаляров по правилу «победитель — источник» здесь так же неисполнимо без
+        // той же схемы. Вилка не решена мной:
+        // (а) как сейчас — `event` не пересчитывается, источник просто убирается из списка;
+        //     до IR-126 остаётся тем же временным «последний пишет поверх», что у К20-К24;
+        // (б) `event` обязан пересчитываться по оставшимся источникам сразу, тем же
+        //     проходом `applyIncoming` использовал бы для НОВОГО входящего payload — требует
+        //     ту же схему (per-source сырые поля), которой сегодня нет.
+        // Не меняю поведение до решения IR-126 (инструкция РП, приёмка #85) — находка та же,
+        // не вторая.
         let remaining = record.sources.filter {
             !($0.sourceConnectorId == source.rawValue && $0.externalId == externalId)
         }
