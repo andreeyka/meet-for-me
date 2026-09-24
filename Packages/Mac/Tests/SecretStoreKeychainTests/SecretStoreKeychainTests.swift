@@ -238,31 +238,30 @@ final class SecretStoreKeychainTests: XCTestCase {
 
     // MARK: - Е. Ошибки Keychain — К12-К14
 
-    /// Возврат РП (CI, macos-14, #101): исходная версия удаляла реальный тестовый keychain
-    /// через `SecKeychainDelete`, затем звала `store.set` через ту же (уже недействительную)
-    /// ссылку — на раннере macos-14 запись не отказывала вовсе. Причина — вторая гипотеза
-    /// РП: `SecKeychainDelete` снимает keychain из внутреннего реестра/списка поиска, но не
-    /// делает саму `SecKeychainRef` равно недействительной для КАЖДОГО вызова `SecItem*` —
-    /// `kSecMatchSearchList`/`kSecUseKeychain` с такой ссылкой, похоже, тихо откатываются на
-    /// keychain по умолчанию (раннер CI — login keychain, разблокирован), а не отказывают.
-    /// Недетерминированно, вектор через удаление УЖЕ СУЩЕСТВОВАВШЕГО keychain не годится.
+    /// Возврат РП (CI, macos-14, #101): ДВЕ предыдущие попытки не дали детерминированного
+    /// отказа. Первая — `SecKeychainDelete()` реального keychain, затем повторное
+    /// использование той же ссылки: молча откатывается на keychain по умолчанию, ничего не
+    /// бросает. Вторая — `SecKeychainOpen()` на пути, где keychain никогда не существовал
+    /// (документированно без проверки пути при самом вызове): тоже не бросила — похоже,
+    /// Security framework на macos-14 либо заводит keychain на лету при первом реальном
+    /// обращении через такую ссылку, либо тоже тихо откатывается на умолчание. Общий
+    /// знаменатель обеих неудач — путь/ссылка вовсе НЕ СУЩЕСТВУЕТ для Security framework на
+    /// момент вызова, а именно это, похоже, и прощается без отказа.
     ///
-    /// Вместо этого — ссылка на keychain, который НИКОГДА не существовал: `SecKeychainOpen`
-    /// не проверяет путь при вызове (документированное поведение — заводит саму ссылку без
-    /// доступа к файлу), отказ наступает только при первой реальной попытке использовать её.
-    /// Здесь нет истории «был закреплён в реестре, потом снят» — не на чем откатиться на
-    /// умолчание, поэтому первое же обращение обязано отказать по-настоящему.
+    /// Третий заход — держим РЕАЛЬНУЮ, доказанно рабочую пару `keychain`/`store` из setUp
+    /// (ту же, через которую успешно пишут все остальные тесты этого файла — сама
+    /// адресация заведомо верна), портим не ссылку, а ДОСТУПНОСТЬ файла под ней: снимаем
+    /// право записи с самого keychain-файла на диске. Чтение (поиск `SecItemUpdate` перед
+    /// записью, пустой — свежий keychain теста) при этом разрешено; запись (`SecItemAdd`,
+    /// файл — заведомо ТОТ САМЫЙ, что работает у всех остальных тестов) обязана упереться в
+    /// реальный отказ ОС на попытке открыть файл без права записи — списать на умолчание
+    /// здесь нечего, ссылка та же самая, что у всех остальных тестов файла.
     func test_ss12_13_unexpectedOnDeletedKeychain() async throws {
-        let missingURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("SecretStoreKeychainTests-missing-\(UUID().uuidString).keychain")
-        var missingKeychain: SecKeychain?
-        let openStatus = missingURL.path.withCString { SecKeychainOpen($0, &missingKeychain) }
-        XCTAssertEqual(openStatus, errSecSuccess, "SecKeychainOpen заводит ссылку без проверки пути")
-        let doomedStore = SecretStoreKeychain(keychain: try XCTUnwrap(missingKeychain))
+        try FileManager.default.setAttributes([.posixPermissions: 0o444], ofItemAtPath: keychainURL.path)
 
         do {
-            try await doomedStore.set(key: "refreshToken", value: "tok", namespace: "eventkit-1")
-            XCTFail("ожидалась ошибка — keychain по этому пути никогда не существовал")
+            try await store.set(key: "refreshToken", value: "tok", namespace: "eventkit-1")
+            XCTFail("ожидалась ошибка — файл keychain доступен только для чтения")
         } catch let error as SecretStoreKeychainError {
             switch error {
             case .unexpected:
