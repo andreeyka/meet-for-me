@@ -19,10 +19,14 @@
 //  C-014 §0 сам называет для `ModelRole`/`ModelRuntime` место объявления — `DomainCore`,
 //  а не `ModelManager` («их одновременно используют движок C-011, фасад UI C-016 и
 //  очередь C-013, а граф пакетов запрещает этим модулям зависеть друг от друга»).
-//  `ModelBundle` тем же пунктом тоже назван местом `DomainCore`, но здесь не объявлен:
-//  ни `missingModels`, ни что-либо из «Предмета» MEE-319 его не тянет — заводить его
-//  без потребителя значило бы расширять поверхность домена сверх того, что требует эта
-//  задача (П2); строка для того, кто первым свяжет `beginUse(_:)`.
+//  `ModelBundle` тем же пунктом тоже назван местом `DomainCore` — до MEE-390 здесь не был
+//  объявлен: ни `missingModels`, ни что-либо из «Предмета» MEE-319 его не тянуло, а заводить
+//  его без потребителя значило бы расширять поверхность домена сверх того, что требовала та
+//  задача (П2). Потребитель нашёлся: C-011 v5 (движок, `TranscriptionRequest.asrModel` и
+//  далее) объявляет свои типы запросов полями `ModelBundle`, и модуль `EngineKit` (MEE-390)
+//  первым его связал — дословно по C-014 v4/v5 «Определение» §4 (`modelId`, `version`,
+//  `role`, `runtime`, `directoryURL`), без домена валидации (§0 C-001 на эти поля C-014
+//  не распространяет, тем же приёмом, что и у `ModelFile`/`ModelDescriptor` этого файла).
 //
 //  СТРОКА: объём `ModelCatalogPort`. C-013 §1.1 дословно требует только один метод порта —
 //  `missingModels(profileId:)`. C-014 v4 объявляет тот же порт с шестнадцатью другими
@@ -58,6 +62,24 @@ public enum ModelRole: String, Codable, Sendable, CaseIterable {
 public enum ModelRuntime: String, Codable, Sendable {
     case coreml
     case onnx
+}
+
+/// C-014 v4/v5 (MEE-22), «Определение» §4 — модель, готовая к использованию: каталог на
+/// диске уже проверен (`beginUse`), файлов по путям внутри `directoryURL` можно доверять.
+public struct ModelBundle: Codable, Equatable, Sendable {
+    public let modelId: String
+    public let version: String
+    public let role: ModelRole
+    public let runtime: ModelRuntime
+    public let directoryURL: URL
+
+    public init(modelId: String, version: String, role: ModelRole, runtime: ModelRuntime, directoryURL: URL) {
+        self.modelId = modelId
+        self.version = version
+        self.role = role
+        self.runtime = runtime
+        self.directoryURL = directoryURL
+    }
 }
 
 /// Контракт: «порядок объявления задаёт отношение «новее»» — `Comparable` не
