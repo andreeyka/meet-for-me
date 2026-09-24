@@ -1,9 +1,9 @@
 {
-  "_source": "C-012 v6, инвариант 23 (часть про таргет EngineXPCClient), https://linear.app/easypto/issue/MEE-20 (перепроверено переписью MEE-191). Позиции записаны парой «модуль.имя» (возврат РП 24.09, п.2: сверка только по имени путала `GRDB.Data` с `Foundation.Data`) — модуль домена, которого сегодня в дереве часто ещё нет (модуль не реализован), назван DomainCore по правилу карты модулей (`docs/module-map.md`: `domain-core` владеет определениями портов и DTO для всех перечисленных здесь контрактов) и по факту уже реализованных типов того же контракта (перепроверено grep по дереву на 24.09).",
+  "_source": "C-012 v6, инвариант 23 (часть про таргет EngineXPCClient), https://linear.app/easypto/issue/MEE-20 (перепроверено переписью MEE-191). Позиции записаны парой «модуль.имя» (возврат РП 24.09, п.2: сверка только по имени путала `GRDB.Data` с `Foundation.Data`) — модуль домена, которого сегодня в дереве часто ещё нет (модуль не реализован), назван DomainCore по правилу карты модулей (`docs/module-map.md`: `domain-core` владеет определениями портов и DTO для всех перечисленных здесь контрактов) и по факту уже реализованных типов того же контракта (перепроверено grep по дереву на 24.09). Правка IR-127 (MEE-376, C-012 v7): два собственных @objc-протокола (EngineXPCServiceProtocol, EngineXPCClientProtocol — инвариант 23 называет их «два собственных» дословно) были записаны DomainCore.* — мёртвые позиции, потому что type_allowed пропускает module == target без сверки списка; исправлены на EngineXPCClient.*.",
   "_count": 23,
   "types": [
-    "DomainCore.EngineXPCServiceProtocol",
-    "DomainCore.EngineXPCClientProtocol",
+    "EngineXPCClient.EngineXPCServiceProtocol",
+    "EngineXPCClient.EngineXPCClientProtocol",
     "DomainCore.TranscriptionJobSpec",
     "DomainCore.TranscriptionProgress",
     "DomainCore.TranscriptionServiceError",
