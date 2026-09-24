@@ -142,7 +142,7 @@ final class FakeAttributionPortTests: XCTestCase {
     }
 
     func test_fixtureSystemSegmentWhitespaceOnlyHasNilClusterAndBlankText() throws {
-        let input = AttributionFixtures.systemSegmentWhitespaceOnlyWithoutCluster
+        let input = AttributionFixtures.whitespaceOnlySystemSegmentNoCluster
         let segment = try XCTUnwrap(input.transcript.segments.first)
 
         XCTAssertNil(segment.speakerCluster)

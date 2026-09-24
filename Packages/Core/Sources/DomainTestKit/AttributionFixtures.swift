@@ -196,7 +196,7 @@ public enum AttributionFixtures {
     /// пришёл с `speakerCluster == nil` — проверяет инвариант 22 вместе с его границей:
     /// C-003 §Segment допускает `speakerCluster == nil` на `.system` ровно тогда, когда
     /// текст после `trimmingCharacters` пуст (инвариант 6 C-003).
-    public static let systemSegmentWhitespaceOnlyWithoutCluster: AttributionInput = {
+    public static let whitespaceOnlySystemSegmentNoCluster: AttributionInput = {
         let transcript = try! Transcript(
             recordingId: MeetingEventFixtures.uuid("00000000-0000-0000-0000-0000000000D6"),
             language: "ru", engine: "gigaam-sherpa-onnx", modelVersion: "v3.0.1", createdAt: createdAt,
@@ -238,7 +238,7 @@ public enum AttributionFixtures {
         noEmbeddings,
         uncertainWordNearParticipantName,
         segmentAlreadyUserEdited,
-        systemSegmentWhitespaceOnlyWithoutCluster
+        whitespaceOnlySystemSegmentNoCluster
     ]
 }
 
