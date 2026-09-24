@@ -164,15 +164,6 @@ final class JobQueueEngineCancelEventsTests: XCTestCase {
         XCTAssertEqual(ready?.status, .succeeded, "пересмотр не встал на noHandler")
     }
 
-    /// MEE-363 (переоткрыта, красный main после #86): 50 независимых повторов К67 подряд —
-    /// временный, убирается следующим коммитом до слияния, тем же приёмом, что первый заход
-    /// MEE-363.
-    func test_mee363_temporary_k67RepeatedFiftyTimes() async throws {
-        for _ in 0..<50 {
-            try await test_k67_noHandlerBlocksWithoutStallingTheRest()
-        }
-    }
-
     private func assertNextPassOnlyBlocksNoHandler(
         _ rig: JobQueueTestRig, summarizeId: UUID, iterator: inout AsyncStream<JobEvent>.AsyncIterator
     ) async throws {
