@@ -12,10 +12,17 @@ extension JobQueueEngine {
     /// Восстановление — прежде, чем принять новую работу: ни одна строка не должна остаться
     /// `running` при перезапуске (инвариант 10), после — таймер и подписка на `PowerPort`,
     /// и один немедленный пересмотр, чтобы готовые `pending`-задачи не ждали 60 секунд.
+    ///
+    /// Снимает прежние `timerTask`/`powerEventsTask`, если они есть, — контракт не запрещает
+    /// повторный `start()` без промежуточного `stop()` (тест К54/К67 зовёт его так намеренно,
+    /// проверяя «на каждом пересмотре»), и без явной отмены каждый такой вызов копил бы ещё
+    /// одну never-ending подписку/таймер на том же акторе.
     public func start() async {
         await recoverInterruptedJobs()
         isRunning = true
+        timerTask?.cancel()
         startTimer()
+        powerEventsTask?.cancel()
         startPowerEventsSubscription()
         await runRevisitPass()
     }

@@ -106,11 +106,14 @@ final class JobQueueEngineCancelEventsTests: XCTestCase {
 
         for _ in 0..<3 {
             await rig.queue.start()
+            // `waitUntilIdle()` — иначе фоновое завершение `readyId` (пересмотр по
+            // завершении, §7) гонится с этим прямым чтением: между `claimNext` и её же
+            // разворотом `noHandler` строка мгновенно, но НАБЛЮДАЕМО, побывала `running`.
+            await rig.queue.waitUntilIdle()
             let summarizeJob = try await rig.repository.job(id: summarizeId)
             XCTAssertEqual(summarizeJob?.status, .pending)
             XCTAssertEqual(summarizeJob?.attempts, 0)
         }
-        await rig.queue.waitUntilIdle()
         let ready = try await rig.repository.job(id: readyId)
         XCTAssertEqual(ready?.status, .succeeded, "пересмотр не встал на noHandler")
     }
