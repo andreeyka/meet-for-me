@@ -161,6 +161,25 @@ enum HangDiagnostics {
     static func checkpoint(_ label: String) {
         FileHandle.standardError.write(Data("[HANG-DIAG] \(label)\n".utf8))
     }
+
+    // СТРОКА (бисекция, следующий заход): маркеры до/после конкретных строк К66 сами
+    // застревали в доставке лога CI ровно до убийства по таймауту (видно по обрезанным
+    // строкам) — не различить "тест реально висит здесь" от "просто доставка отстаёт".
+    // Отдельный фоновый тик независимо от какого-либо теста: если он продолжает капать
+    // до самого конца — планировщик жив и не исчерпан целиком (не то зависание, что
+    // MEE-329 п.11, там висел весь процесс), сама точка внутри К66 — настоящий затор,
+    // не доставка. Если тик тоже замолкает — наоборот, процесс встал целиком.
+    private static let heartbeatOnce: Void = {
+        Task.detached(priority: .background) {
+            var tick = 0
+            while true {
+                try? await Task.sleep(for: .seconds(1))
+                tick += 1
+                checkpoint("heartbeat \(tick)")
+            }
+        }
+    }()
+    static func startHeartbeat() { _ = heartbeatOnce }
 }
 
 struct Harness {
@@ -172,6 +191,7 @@ struct Harness {
     let hub: CalendarPortImpl
 
     init(sourceIds: [String]) {
+        HangDiagnostics.startHeartbeat()
         var connectorMap: [CalendarSourceId: CalendarConnector] = [:]
         var fakes: [String: FakeCalendarConnector] = [:]
         for id in sourceIds {
