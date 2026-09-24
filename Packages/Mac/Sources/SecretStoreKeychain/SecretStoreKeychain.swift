@@ -1,5 +1,7 @@
 //
-//  SecretStoreKeychain — каркас без кода.
+//  SecretStoreKeychain — SecretStore на файловом Keychain (IR-122/IR-125, MEE-364).
+//
+//  Модуль: secret-store-keychain · Владелец: DEV-1
 //
 //  Реализует `SecretStore` (протокол объявляет `CalendarHub`, не `DomainCore`) поверх
 //  файлового Keychain — `SecItemAdd`/`SecItemCopyMatching`/`SecItemUpdate`/`SecItemDelete`
@@ -33,11 +35,15 @@
 //  без `catch`). НЕ `ConnectorError` (C-006 §6: тот для ошибки ПЛАГИНА, обратное направление)
 //  и не тип `DomainCore`. Два случая:
 //    * `SecretStoreKeychainError.denied(status: OSStatus)` — `errSecInteractionNotAllowed`/
-//      `errSecAuthFailed` (keychain заблокирован или доступ отклонён). Решение РП: проверяется
-//      ВРУЧНУЮ, не вектором CI — `SecKeychainLock`/`kSecUseAuthenticationUIFail` подвесили бы
-//      тест на диалоге системы на машине разработчика, цена без выгоды для Среза 1.
+//      `errSecAuthFailed` (keychain заблокирован или доступ отклонён). Возврат РП, MEE-364:
+//      покрыт CI-вектором — `SecKeychainLock` на СВОЙ временный keychain теста +
+//      `SecKeychainSetUserInteractionAllowed(false)` (без диалога системы, без риска подвесить
+//      тест на машине разработчика) — `SecretStoreKeychainTests.test_ss12_deniedOnLockedTempKeychain`.
 //    * `SecretStoreKeychainError.unexpected(status: OSStatus)` — любой другой не-`errSecSuccess`
-//      код, несёт его `OSStatus` дословно.
+//      код, несёт его `OSStatus` дословно. Конкретный автоматический вектор (удалённый/
+//      недействительный keychain → `errSecNoSuchKeychain`) НЕ покрыт: на macos-14 CI такая
+//      ссылка не отказывает ни на `SecItemCopyMatching`, ни на `SecItemAdd` — находка передана
+//      аналитику (MEE-366/MEE-364), посылка К12/К13(ii) перечня эмпирически не подтвердилась.
 //  `get(key:namespace:)` на `errSecItemNotFound` отдаёт `nil`, не бросает — это ответ по типу
 //  метода (`String?`), а не отказ. `set(key:value: nil, namespace:)` на отсутствующей записи —
 //  успех без действия: `errSecItemNotFound` от `SecItemDelete` не пробрасывается, удаление уже

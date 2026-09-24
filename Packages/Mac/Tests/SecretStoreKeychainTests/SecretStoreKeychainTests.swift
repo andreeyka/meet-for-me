@@ -1,5 +1,7 @@
 //
-//  SecretStoreKeychainTests — каркас без кода.
+//  SecretStoreKeychainTests — тесты SecretStoreKeychain на настоящем временном Keychain.
+//
+//  Модуль: secret-store-keychain · Владелец: DEV-1
 //
 //  Реальные round-trip-тесты идут против временного файлового тестового Keychain —
 //  Keychain Services не требуют TCC-разрешения для операций над собственным keychain
@@ -19,20 +21,24 @@
 //  Обязательный вектор: namespace="x", key="y/z" и namespace="x/y", key="z" — оба должны
 //  дать РАЗНЫЕ записи (раздельные kSecAttrService/kSecAttrAccount, не конкатенация).
 //
-//  ОШИБКИ (IR-125, MEE-368; малый возврат): `get` на отсутствующей записи — `nil`, не отказ.
-//  `set(value: nil)` на отсутствующей записи — успех без действия, не отказ (идемпотентное
-//  удаление). Обязательный вектор на оба случая — предмет этих тестов, не только ручной
-//  проверки. `SecretStoreKeychainError.unexpected(status:)` — вектор на любой другой
-//  не-`errSecItemNotFound` отказ Keychain Services, тоже предмет этих тестов (например,
-//  через подмену запроса на заведомо негодный).
+//  ОШИБКИ (IR-125, MEE-368; возврат РП, MEE-364): `get` на отсутствующей записи — `nil`,
+//  не отказ. `set(value: nil)` на отсутствующей записи — успех без действия, не отказ
+//  (идемпотентное удаление). Обязательный вектор на оба случая — предмет этих тестов.
+//  `SecretStoreKeychainError.denied(status:)` — покрыт: `SecKeychainLock` на СВОЙ временный
+//  keychain теста + `SecKeychainSetUserInteractionAllowed(false)` (без диалога системы) даёт
+//  детерминированный `errSecAuthFailed` (`test_ss12_deniedOnLockedTempKeychain`).
 //
-//  Что остаётся ручной проверкой (решение РП, малый возврат): `SecretStoreKeychainError
-//  .denied(status:)` — заблокированный login keychain (`errSecInteractionNotAllowed`) и
-//  отклонённый доступ (`errSecAuthFailed`) — и первый диалог доступа подписанного,
-//  установленного приложения. Автоматический вектор потребовал бы `SecKeychainLock` и
-//  `kSecUseAuthenticationUI: kSecUseAuthenticationUIFail` — без второго тест на машине
-//  разработчика повиснет на диалоге системы, цена без выгоды для Среза 1. Решение —
-//  IR-122/IR-125, MEE-358/MEE-368.
+//  Что остаётся ручной проверкой (решение РП): заблокированный LOGIN keychain (первый
+//  диалог разблокировки подписанного установленного приложения) и отклонённый доступ
+//  СТОРОННЕГО приложения к чужой записи — обе ветви `.denied` требуют интерактивной сессии
+//  за пределами CI, не воспроизводятся временным keychain теста. Решение — IR-122/IR-125,
+//  MEE-358/MEE-368.
+//
+//  `SecretStoreKeychainError.unexpected(status:)` — НЕ покрыт автоматически. Единственный
+//  опробованный вектор (удалённый/недействительный keychain → `errSecNoSuchKeychain`) на
+//  macos-14 CI не отказывает: `SecItemCopyMatching`/`SecItemAdd` через такую ссылку молча
+//  проходят (три независимых захода, история — комментарий в MEE-364). Посылка К12/К13(ii)
+//  перечня MEE-366 эмпирически не подтвердилась — находка передана аналитику.
 //
 
 import CalendarHub
@@ -255,11 +261,12 @@ final class SecretStoreKeychainTests: XCTestCase {
     /// `SecKeychainSetUserInteractionAllowed(false)` (глобально для процесса, восстанавливается
     /// `defer` до конца этого метода — файл гоняется строго последовательно, CI без
     /// `--parallel`, гонки с соседним тестом нет) — без диалога системы, детерминированно даёт
-    /// `.denied` (фактический код на CI — `errSecAuthFailed`, не `errSecInteractionNotAllowed`,
-    /// оба входят в один случай `.denied`). Автоматизирует то, что раньше требовало рук;
-    /// собственный вектор К12/К13(ii) (`errSecNoSuchKeychain`) остаётся неавтоматизированным —
-    /// см. отчёт.
-    func test_ss12_13_unexpectedOnDeletedKeychain() async throws {
+    /// `.denied`. Возврат РП, MEE-364: конкретный `OSStatus` внутри `.denied` не фиксируем —
+    /// на CI это `errSecAuthFailed`, но контракт объявляет оба случая (`errSecAuthFailed`/
+    /// `errSecInteractionNotAllowed`) равноправно, пиновать один из двух ничем не оправдано.
+    /// Собственный вектор К12/К13(ii) (`errSecNoSuchKeychain`/`.unexpected`) остаётся
+    /// неавтоматизированным — см. отчёт в MEE-364.
+    func test_ss12_deniedOnLockedTempKeychain() async throws {
         let keychainToLock = try XCTUnwrap(keychain)
         XCTAssertEqual(SecKeychainSetUserInteractionAllowed(false), errSecSuccess)
         defer { SecKeychainSetUserInteractionAllowed(true) }
@@ -274,11 +281,8 @@ final class SecretStoreKeychainTests: XCTestCase {
             XCTFail("ожидалась ошибка — keychain заперт, взаимодействие с пользователем выключено")
         } catch let error as SecretStoreKeychainError {
             switch error {
-            case .denied(let status):
-                // CI (macos-14, run 36035031759): фактический код — errSecAuthFailed
-                // (-25293), не errSecInteractionNotAllowed (-25308) — оба случая мапятся в
-                // .denied (SecretStoreKeychainError.init(status:)), находка при реализации.
-                XCTAssertEqual(status, errSecAuthFailed)
+            case .denied:
+                break // конкретный OSStatus не фиксируем — errSecAuthFailed/errSecInteractionNotAllowed равноправны
             case .unexpected:
                 XCTFail("ожидался .denied, получен .unexpected")
             }
