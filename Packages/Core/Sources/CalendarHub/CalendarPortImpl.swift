@@ -38,11 +38,6 @@ public actor CalendarPortImpl: CalendarPort {
     private var logEntries: [CalendarSourceId: [(level: LogLevel, message: String)]] = [:]
     private var notifyEntries: [CalendarSourceId: [(kind: HostNotificationKind, detail: String?)]] = [:]
     var inFlightSync: [CalendarSourceId: Task<CalendarSyncResult, Never>] = [:]
-    /// Возврат РП (приёмка #85, дефект 2): актор реентерабелен через `await` — без этого два
-    /// одновременных вызова, заставших `capabilities[source] == nil` до первого `await`
-    /// `ensureInitialized`, оба проходили бы охрану и оба звали `connector.initialize()`,
-    /// нарушая К1/К7 («ровно один initialize на источник»). Тот же приём, что `inFlightSync`.
-    private var inFlightInitialize: [CalendarSourceId: Task<ConnectorCapabilities, Error>] = [:]
     private let changeHub = CalendarChangeHub()
     private var scheduleTask: Task<Void, Never>?
 
@@ -267,36 +262,29 @@ public actor CalendarPortImpl: CalendarPort {
 
     // MARK: - Инициализация, порядок, таймауты (К1, К3 вход А, К7-К10)
 
-    /// К1/К7: ровно один `initialize` на источник, прежде любого другого вызова — включая
-    /// два одновременных вызова (возврат РП, дефект 2: `inFlightInitialize` — тот же приём,
-    /// что `inFlightSync` у `syncOne`, единственный `Task` на источник, к которому
-    /// присоединяются все конкурентные вызовы, а не создают свой). К10/Р10:
+    /// К1/К7: ровно один `initialize` на источник, прежде любого другого вызова. К10/Р10:
     /// `upstreamUnavailable` сбрасывает кэш `capabilities` — следующий вызов инициализирует
     /// заново.
+    ///
+    /// СТРОКА (возврат РП, приёмка #85, дефект 2 — временно откачено): актор реентерабелен
+    /// через `await` внутри — два одновременных вызова, заставших `capabilities[source] ==
+    /// nil` до первого `await`, оба звали бы `connector.initialize()`, нарушая К1/К7.
+    /// Намеченный фикс (`inFlightInitialize`, отдельный `Task` на источник, тот же приём, что
+    /// `inFlightSync` у `syncOne`) скомпилировался, но прогон CI после него завис на ОБЕИХ
+    /// платформах без единой строки диагностики дальше «Build complete!» — тот же симптом,
+    /// что и у отката дефекта 3 рядом, и revert одного дефекта 3 его не снял (бисекция,
+    /// комментарий MEE-362). Проверяю здесь: может статься, лишний `Task` на КАЖДЫЙ вызов
+    /// `ensureInitialized` (а он один на почти каждый тест) исчерпывает кооперативный пул
+    /// потоков раннера CI, а не гонка сама по себе. Дефект 2 остаётся открытым; следующий
+    /// заход — без отдельного `Task`, тем же приёмом continuation-очереди, что уже стоит у
+    /// `hangOrGate`/`FakeWaitSeam.sleep`, без нового потока пула на каждый вызов.
     func ensureInitialized(_ source: CalendarSourceId, connector: CalendarConnector) async throws {
         guard capabilities[source] == nil else { return }
-        if let existing = inFlightInitialize[source] {
-            capabilities[source] = try await existing.value
-            return
-        }
         let host = HostServicesImpl(secretStore: secretStore, namespace: source.rawValue, hub: self, source: source)
-        let task = Task<ConnectorCapabilities, Error> {
-            let (_, caps) = try await self.callConnector(
-                source: source, connector: connector, timeout: .initialize
-            ) {
-                try await connector.initialize(host: host, connectorInstanceId: source.rawValue)
-            }
-            return caps
+        let (_, caps) = try await callConnector(source: source, connector: connector, timeout: .initialize) {
+            try await connector.initialize(host: host, connectorInstanceId: source.rawValue)
         }
-        inFlightInitialize[source] = task
-        do {
-            let caps = try await task.value
-            capabilities[source] = caps
-            inFlightInitialize[source] = nil
-        } catch {
-            inFlightInitialize[source] = nil
-            throw error
-        }
+        capabilities[source] = caps
     }
 
     private func requireConnector(_ source: CalendarSourceId) throws -> CalendarConnector {
