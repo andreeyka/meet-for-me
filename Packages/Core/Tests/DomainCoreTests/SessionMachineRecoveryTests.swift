@@ -11,11 +11,6 @@ import XCTest
 @testable import DomainCore
 import DomainTestKit
 
-/// Заведена только ради полноты перебора К77: перечень А обязан быть проверен на КАЖДОМ
-/// значении, и `allCases` ловит добавление нового значения сборкой, а не молчаливым
-/// сужением перебора.
-extension RecordingStatus: CaseIterable {}
-
 final class SessionMachineRecoveryTests: XCTestCase {
 
     private let moment = SessionMachineFixtures.start
@@ -104,12 +99,16 @@ final class SessionMachineRecoveryTests: XCTestCase {
         await stand.machine.stop()
     }
 
-    /// Перебор исчерпывающий по самому перечислению `RecordingStatus` (`CaseIterable`,
-    /// заведённый рядом только для теста) × трём видам происхождения порознь — добавление
-    /// значения либо вида ломает сборку этого `switch`-а без `default`, а не расширяет
-    /// перебор молча.
+    /// Перебор × трём видам происхождения порознь. `RecordingStatus` объявлен в другом
+    /// модуле (`DomainCore`) без `CaseIterable`, и ретроактивная синтеза `allCases` через
+    /// модульную границу компилятором не выполняется (проверено — CI отвечал: «extension
+    /// outside of file declaring enum prevents automatic synthesis»); литерал ниже —
+    /// именно поэтому явный список, а не `allCases`. Полноту перебора вместо него держит
+    /// исчерпывающий `switch` без `default` внутри `assertListA` (четыре случая, ни одного
+    /// лишнего): добавление значения `RecordingStatus` ломает СБОРКУ этого `switch`-а, а не
+    /// расширяет перебор молча, — и это тот же эффект, которого искал бы `allCases`.
     func test_k77_everyRecordingStatusTimesEveryOriginKindAnswersAsListA() async throws {
-        for status in RecordingStatus.allCases {
+        for status in [RecordingStatus.recording, .stopping, .finalized, .failed] {
             for kind in OriginKind.allCases {
                 try await assertListA(status: status, kind: kind)
             }

@@ -282,10 +282,8 @@ final class SessionMachineDisputeEndTests: XCTestCase {
         ))
         await stand.machine.tick(now: after)
 
-        XCTAssertTrue(
-            await stand.machine.prompts().isEmpty,
-            "спрос снят по завершении спора — событием машины, а не истечением `expiresAt`"
-        )
+        let resolved = await stand.machine.prompts().isEmpty
+        XCTAssertTrue(resolved, "спрос снят по завершении спора — событием машины, а не истечением `expiresAt`")
         await stand.machine.stop()
     }
 
