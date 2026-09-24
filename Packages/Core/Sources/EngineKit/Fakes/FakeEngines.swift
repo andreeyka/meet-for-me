@@ -15,7 +15,7 @@ import Foundation
 
 public final class FakeTranscriptionEngine: TranscriptionEngine, @unchecked Sendable {
     public let engineId: String
-    public var simulatedWorkNanoseconds: UInt64 = 1_000_000
+    public var simulatedWorkNanoseconds: Int = 1_000_000
     public var modelVersion = "fake-1.0"
     /// К1: тест подставляет результат, чей throwing-init заведомо бросает
     /// `DomainValidationError` — движок обязан поймать её и завернуть в `.invalidResult`.
@@ -55,7 +55,7 @@ public final class FakeTranscriptionEngine: TranscriptionEngine, @unchecked Send
             progress(.started(stage: .asr))
         }
         do {
-            try await Task.sleep(nanoseconds: simulatedWorkNanoseconds)
+            try await Task.sleep(nanoseconds: UInt64(simulatedWorkNanoseconds))
         } catch {
             throw EngineError.cancelled
         }
@@ -107,7 +107,7 @@ public final class FakeTranscriptionEngine: TranscriptionEngine, @unchecked Send
 
 public final class FakeDiarizationEngine: DiarizationEngine, @unchecked Sendable {
     public let engineId: String
-    public var simulatedWorkNanoseconds: UInt64 = 1_000_000
+    public var simulatedWorkNanoseconds: Int = 1_000_000
     public var modelVersion = "fake-1.0"
     public var forcedResult: (() throws -> DiarizationResult)?
 
@@ -125,7 +125,7 @@ public final class FakeDiarizationEngine: DiarizationEngine, @unchecked Sendable
         }
         progress(.started(stage: .diarization))
         do {
-            try await Task.sleep(nanoseconds: simulatedWorkNanoseconds)
+            try await Task.sleep(nanoseconds: UInt64(simulatedWorkNanoseconds))
         } catch {
             throw EngineError.cancelled
         }
@@ -174,7 +174,7 @@ public final class FakeEmbeddingEngine: EmbeddingEngine, @unchecked Sendable {
 
 public final class FakePostProcessor: PostProcessor, @unchecked Sendable {
     public let engineId: String
-    public var simulatedWorkNanoseconds: UInt64 = 1_000_000
+    public var simulatedWorkNanoseconds: Int = 1_000_000
     public var promptVersion = "fake-1.0"
     public var forcedResult: (() throws -> [MeetingOutputDraft])?
 
@@ -187,7 +187,7 @@ public final class FakePostProcessor: PostProcessor, @unchecked Sendable {
     ) async throws -> [MeetingOutputDraft] {
         progress(.started(stage: .postProcess))
         do {
-            try await Task.sleep(nanoseconds: simulatedWorkNanoseconds)
+            try await Task.sleep(nanoseconds: UInt64(simulatedWorkNanoseconds))
         } catch {
             throw EngineError.cancelled
         }
