@@ -1,6 +1,7 @@
 //  InMemoryTextCorrectionsTests — C-010 v19, инвариант 32 (IR-129, MEE-388),
-//  владелец: DEV-2. Номера — по инварианту (`test_inv32_*`): дельта MEE-189 для этого
-//  метода ещё не выпущена аналитиком. Вынесено в свой файл — тот же приём, что у
+//  владелец: DEV-2. Тесты без своего критерия перечня MEE-189 остаются `test_inv32_*`
+//  (по инварианту); К95/К96/К98 (дельта Х MEE-189, усилены находками QA — MEE-398)
+//  названы своим номером. Вынесено в свой файл — тот же приём, что у
 //  `InMemoryTranscriptRepositoryTests` (`type_body_length`/обнаружение тестов на Linux).
 
 import XCTest
@@ -85,7 +86,9 @@ final class InMemoryTextCorrectionsTests: XCTestCase {
 
     // MARK: - words[i]
 
-    func test_inv32_appliesCorrectionWhenWordOriginalNotYetSet() async throws {
+    /// К95 (перечень MEE-189, дельта Х): правило «только если ещё не записано» — по КАЖДОМУ
+    /// слову отдельно, соседнее слово вне правки не трогается ни в одном поле.
+    func test_k95_appliesCorrectionWhenWordOriginalNotYetSet() async throws {
         let fixture = try await makeFixture()
         let correction = TextCorrection(
             segmentId: fixture.segmentId, wordIndex: 1, original: "привет", replacement: "Иван",
@@ -98,6 +101,32 @@ final class InMemoryTextCorrectionsTests: XCTestCase {
         XCTAssertEqual(row.segment.words[1].text, "Иван")
         XCTAssertEqual(row.segment.words[1].original, "привет")
         XCTAssertEqual(row.segment.words[0].text, "Билл", "слово вне правки не тронуто")
+        XCTAssertEqual(row.segment.words[0].original, "билл", "соседнее слово: .original тоже не тронут")
+    }
+
+    /// К95 (перечень MEE-189, дельта Х): ДВА настоящих вызова, оба правят одно и то же
+    /// слово разными `replacement` — не одна правка внутри одного вызова, как выше.
+    func test_k95_secondRealCallToSameWordOverwritesTextButPreservesOriginalFromFirstCall() async throws {
+        let fixture = try await makeFixture()
+        let first = TextCorrection(
+            segmentId: fixture.segmentId, wordIndex: 1, original: "привет", replacement: "Иван",
+            personId: UUID(), similarity: 0.9
+        )
+        try await fixture.repositories.transcripts.applyTextCorrections(
+            segmentId: fixture.segmentId, text: "Билл Иван", corrections: [first]
+        )
+        // Второй вызов задаёт другой `original` ("ИНАЧЕ") — если бы `.original`
+        // переписывался заново, тест поймал бы это по значению из ВТОРОГО вызова.
+        let second = TextCorrection(
+            segmentId: fixture.segmentId, wordIndex: 1, original: "ИНАЧЕ", replacement: "Пётр",
+            personId: UUID(), similarity: 0.9
+        )
+        try await fixture.repositories.transcripts.applyTextCorrections(
+            segmentId: fixture.segmentId, text: "Билл Пётр", corrections: [second]
+        )
+        let row = try await fixture.row()
+        XCTAssertEqual(row.segment.words[1].text, "Пётр", "второй настоящий вызов переписывает text снова")
+        XCTAssertEqual(row.segment.words[1].original, "привет", "original сохранён от первого вызова, не от второго")
     }
 
     /// РП, 24.09 20:45 UTC: правило 1 — `words[i].text` пишется для КАЖДОЙ правки; оговорка
@@ -168,7 +197,9 @@ final class InMemoryTextCorrectionsTests: XCTestCase {
 
     // MARK: - constraintViolation — строка не меняется целиком
 
-    func test_inv32_constraintViolationForWordIndexOutOfRange() async throws {
+    /// К96 (перечень MEE-189, дельта Х): атомарность отказа — все ЧЕТЫРЕ поля строки,
+    /// не только `text`.
+    func test_k96_constraintViolationForWordIndexOutOfRangeLeavesAllFourFieldsUntouched() async throws {
         let fixture = try await makeFixture()
         let correction = TextCorrection(
             segmentId: fixture.segmentId, wordIndex: 99, original: "x", replacement: "y",
@@ -184,6 +215,9 @@ final class InMemoryTextCorrectionsTests: XCTestCase {
         }
         let row = try await fixture.row()
         XCTAssertEqual(row.segment.text, fixture.originalText, "text не изменился — отказ до записи")
+        XCTAssertNil(row.segment.textOriginal, "text_original не тронут")
+        XCTAssertEqual(row.segment.words, fixture.words, "words не тронуты целиком")
+        XCTAssertFalse(row.isUserEdited, "is_user_edited не тронут")
     }
 
     /// Смешанный вход: первая правка в диапазоне, вторая — нет. Валидация — до записи,
@@ -236,7 +270,9 @@ final class InMemoryTextCorrectionsTests: XCTestCase {
         XCTAssertEqual(row.segment.words[1].original, "привет")
     }
 
-    func test_inv32_constraintViolationForMismatchedSegmentId() async throws {
+    /// К96 (перечень MEE-189, дельта Х): та же атомарность, чужой `segmentId` вместо
+    /// диапазона `wordIndex` — все четыре поля строки не тронуты.
+    func test_k96_constraintViolationForMismatchedSegmentIdLeavesAllFourFieldsUntouched() async throws {
         let fixture = try await makeFixture()
         let correction = TextCorrection(
             segmentId: fixture.segmentId + 1, wordIndex: 0, original: "x", replacement: "y",
@@ -251,7 +287,10 @@ final class InMemoryTextCorrectionsTests: XCTestCase {
             guard case .constraintViolation = error else { return XCTFail("получено \(error)") }
         }
         let row = try await fixture.row()
-        XCTAssertEqual(row.segment.text, fixture.originalText)
+        XCTAssertEqual(row.segment.text, fixture.originalText, "text не тронут")
+        XCTAssertNil(row.segment.textOriginal, "text_original не тронут")
+        XCTAssertEqual(row.segment.words, fixture.words, "words не тронуты целиком")
+        XCTAssertFalse(row.isUserEdited, "is_user_edited не тронут")
     }
 
     // MARK: - notFound
@@ -264,5 +303,25 @@ final class InMemoryTextCorrectionsTests: XCTestCase {
         } catch let error as StorageError {
             XCTAssertEqual(error, .notFound(entity: "Segment", id: "404"))
         }
+    }
+
+    /// К98 (перечень MEE-189, дельта Х): несуществующий `segmentId` РЯДОМ с фикстурным
+    /// сегментом — не в пустом репозитории, как выше, — и фикстура после отказа не тронута.
+    func test_k98_notFoundForMissingSegmentIdLeavesFixtureSegmentUnchanged() async throws {
+        let fixture = try await makeFixture()
+        let missingSegmentId = fixture.segmentId + 999
+        do {
+            try await fixture.repositories.transcripts.applyTextCorrections(
+                segmentId: missingSegmentId, text: "не должно примениться", corrections: []
+            )
+            XCTFail("ожидался notFound")
+        } catch let error as StorageError {
+            XCTAssertEqual(error, .notFound(entity: "Segment", id: String(missingSegmentId)))
+        }
+        let row = try await fixture.row()
+        XCTAssertEqual(row.segment.text, fixture.originalText, "фикстура не изменилась")
+        XCTAssertNil(row.segment.textOriginal)
+        XCTAssertEqual(row.segment.words, fixture.words)
+        XCTAssertFalse(row.isUserEdited)
     }
 }
