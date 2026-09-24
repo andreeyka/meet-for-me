@@ -37,6 +37,7 @@ public enum TranscriptRepositoryMethod: String, Sendable, CaseIterable {
     case segments
     case updateAttribution
     case updateSegmentText
+    case applyTextCorrections
     case search
 }
 
@@ -46,13 +47,17 @@ public final class InMemoryTranscriptRepository: TranscriptRepository, @unchecke
     /// Имя порта в журнале вызовов — имя из контракта, а не имя фейка.
     public static let portName = "TranscriptRepository"
 
-    private let lock = NSLock()
-    private let log: PortCallLog
+    /// Не `private`: раздел «Правка сегментов и постправка» вынесен в отдельный файл по
+    /// объёму (`file_length`), и ему нужен тот же замок и тот же журнал вызовов.
+    let lock = NSLock()
+    let log: PortCallLog
 
     private var headersById: [UUID: TranscriptHeader] = [:]
     private var headerOrder: [UUID] = []
     private var transcriptsById: [UUID: Transcript] = [:]
-    private var rowsByTranscript: [UUID: [SegmentRow]] = [:]
+    /// Не `private` по той же причине, что `lock`/`log` — читается и пишется из
+    /// `InMemoryTranscriptRepositoryCorrections.swift` под тем же замком.
+    var rowsByTranscript: [UUID: [SegmentRow]] = [:]
     private var failures: [TranscriptRepositoryMethod: (id: String?, error: StorageError)] = [:]
     private var nextTranscriptNumber: Int = 1
     private var nextSegmentRowId: Int64 = 1
@@ -64,7 +69,7 @@ public final class InMemoryTranscriptRepository: TranscriptRepository, @unchecke
     /// Журнал, в который пишет этот фейк. Тот же объект, что передали в инициализатор.
     public var callLog: PortCallLog { log }
 
-    private func locked<Value>(_ body: () -> Value) -> Value {
+    func locked<Value>(_ body: () -> Value) -> Value {
         lock.lock()
         defer { lock.unlock() }
         return body()
@@ -112,7 +117,7 @@ public final class InMemoryTranscriptRepository: TranscriptRepository, @unchecke
 
     // MARK: - Оснастка
 
-    private func failureIfAny(_ method: TranscriptRepositoryMethod, id: String?) -> StorageError? {
+    func failureIfAny(_ method: TranscriptRepositoryMethod, id: String?) -> StorageError? {
         locked { () -> StorageError? in
             guard let failure = failures[method] else { return nil }
             guard let wanted = failure.id else { return failure.error }
