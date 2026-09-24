@@ -164,6 +164,31 @@ final class TranscriptRepositoryCorrectionsTests: StorageAsyncTestCase {
         XCTAssertTrue(row.isUserEdited)
     }
 
+    /// РП, 24.09 20:57 UTC: `is_user_edited = 1` — молча не трогается ДАЖЕ с непустым
+    /// `corrections` (правило 2, слово в правке) — не только с пустым, как выше.
+    func test_inv32_skipsRowWithIsUserEditedSilentlyEvenWithWordCorrection() async throws {
+        let temp = try StorageTestSupport.makeDatabase()
+        defer { StorageTestSupport.cleanup(temp) }
+        let fixture = try await Self.makeFixture(temp)
+        try await fixture.transcripts.updateSegmentText(
+            segmentId: fixture.segmentId, text: "правка человека", isUserEdited: true
+        )
+        let correction = TextCorrection(
+            segmentId: fixture.segmentId, wordIndex: 1, original: "привет", replacement: "Иван",
+            personId: UUID(), similarity: 0.9
+        )
+
+        try await fixture.transcripts.applyTextCorrections(
+            segmentId: fixture.segmentId, text: "не должно примениться", corrections: [correction]
+        )
+
+        let row = try await fixture.row()
+        XCTAssertEqual(row.segment.text, "правка человека", "text не тронут")
+        XCTAssertNil(row.segment.textOriginal, "text_original не тронут")
+        XCTAssertEqual(row.segment.words, fixture.words, "words_json не тронут — включая слово из правки")
+        XCTAssertTrue(row.isUserEdited)
+    }
+
     // MARK: - constraintViolation — строка не меняется целиком
 
     func test_inv32_constraintViolationForWordIndexOutOfRange() async throws {
@@ -212,6 +237,8 @@ final class TranscriptRepositoryCorrectionsTests: StorageAsyncTestCase {
         let row = try await fixture.row()
         XCTAssertEqual(row.segment.text, fixture.originalText, "text не изменился — валидация до записи")
         XCTAssertEqual(row.segment.words, fixture.words, "words_json не тронут — включая годную первую правку")
+        XCTAssertNil(row.segment.textOriginal, "text_original не тронут")
+        XCTAssertFalse(row.isUserEdited, "is_user_edited не тронут")
     }
 
     // MARK: - Правило 2 (text/text_original сегмента) вместе с непустым corrections

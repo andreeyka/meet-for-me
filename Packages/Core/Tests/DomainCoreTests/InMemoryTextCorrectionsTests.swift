@@ -141,6 +141,27 @@ final class InMemoryTextCorrectionsTests: XCTestCase {
         XCTAssertTrue(row.isUserEdited)
     }
 
+    /// РП, 24.09 20:57 UTC: `is_user_edited = 1` — молча не трогается ДАЖЕ с непустым
+    /// `corrections` (правило 2, слово в правке) — не только с пустым, как выше.
+    func test_inv32_skipsRowWithIsUserEditedSilentlyEvenWithWordCorrection() async throws {
+        let fixture = try await makeFixture()
+        try await fixture.repositories.transcripts.updateSegmentText(
+            segmentId: fixture.segmentId, text: "правка человека", isUserEdited: true
+        )
+        let correction = TextCorrection(
+            segmentId: fixture.segmentId, wordIndex: 1, original: "привет", replacement: "Иван",
+            personId: UUID(), similarity: 0.9
+        )
+        try await fixture.repositories.transcripts.applyTextCorrections(
+            segmentId: fixture.segmentId, text: "не должно примениться", corrections: [correction]
+        )
+        let row = try await fixture.row()
+        XCTAssertEqual(row.segment.text, "правка человека", "text не тронут")
+        XCTAssertNil(row.segment.textOriginal, "text_original не тронут")
+        XCTAssertEqual(row.segment.words, fixture.words, "words не тронуты — включая слово из правки")
+        XCTAssertTrue(row.isUserEdited)
+    }
+
     // MARK: - constraintViolation — строка не меняется целиком
 
     func test_inv32_constraintViolationForWordIndexOutOfRange() async throws {
@@ -185,6 +206,8 @@ final class InMemoryTextCorrectionsTests: XCTestCase {
         let row = try await fixture.row()
         XCTAssertEqual(row.segment.text, fixture.originalText, "text не изменился — валидация до записи")
         XCTAssertEqual(row.segment.words, fixture.words, "words не тронуты — включая годную первую правку")
+        XCTAssertNil(row.segment.textOriginal, "text_original не тронут")
+        XCTAssertFalse(row.isUserEdited, "is_user_edited не тронут")
     }
 
     // MARK: - Правило 2 (text/textOriginal сегмента) вместе с непустым corrections
