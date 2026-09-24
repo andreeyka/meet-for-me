@@ -4,6 +4,7 @@
 //  `MeetingEventPayload`.
 
 import DomainCore
+import DomainTestKit
 import Foundation
 import XCTest
 @testable import CalendarEventKit
