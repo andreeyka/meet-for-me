@@ -1,10 +1,29 @@
 {
-  "_source": "C-012 v6, инвариант 23 (часть про таргет EngineXPCClient), https://linear.app/easypto/issue/MEE-20 (перепроверено переписью MEE-191)",
+  "_source": "C-012 v6, инвариант 23 (часть про таргет EngineXPCClient), https://linear.app/easypto/issue/MEE-20 (перепроверено переписью MEE-191). Позиции записаны парой «модуль.имя» (возврат РП 24.09, п.2: сверка только по имени путала `GRDB.Data` с `Foundation.Data`) — модуль домена, которого сегодня в дереве часто ещё нет (модуль не реализован), назван DomainCore по правилу карты модулей (`docs/module-map.md`: `domain-core` владеет определениями портов и DTO для всех перечисленных здесь контрактов) и по факту уже реализованных типов того же контракта (перепроверено grep по дереву на 24.09).",
   "_count": 23,
   "types": [
-    "EngineXPCServiceProtocol", "EngineXPCClientProtocol", "TranscriptionJobSpec",
-    "TranscriptionProgress", "TranscriptionServiceError", "TranscriptionServicePort", "Transcript",
-    "ModelCatalogPort", "Array", "Bool", "Codable", "Double", "Equatable", "Error", "Float", "Int",
-    "NSError", "NSObject", "Optional", "Sendable", "String", "UUID", "Void"
+    "DomainCore.EngineXPCServiceProtocol",
+    "DomainCore.EngineXPCClientProtocol",
+    "DomainCore.TranscriptionJobSpec",
+    "DomainCore.TranscriptionProgress",
+    "DomainCore.TranscriptionServiceError",
+    "DomainCore.TranscriptionServicePort",
+    "DomainCore.Transcript",
+    "DomainCore.ModelCatalogPort",
+    "Swift.Array",
+    "Swift.Bool",
+    "Swift.Codable",
+    "Swift.Double",
+    "Swift.Equatable",
+    "Swift.Error",
+    "Swift.Float",
+    "Swift.Int",
+    "<C/ObjC>.NSError",
+    "<C/ObjC>.NSObject",
+    "Swift.Optional",
+    "Swift.Sendable",
+    "Swift.String",
+    "Foundation.UUID",
+    "Swift.Void"
   ]
 }
