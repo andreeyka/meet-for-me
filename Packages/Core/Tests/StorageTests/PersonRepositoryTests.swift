@@ -60,42 +60,15 @@ final class PersonRepositoryTests: StorageAsyncTestCase {
                 XCTFail("ожидался constraintViolation, получено \(mapped)")
                 return
             }
-            // Эталон собирается напрямую — тем же путём, тем же нарушением, во
-            // ВТОРОЙ изолированной базе: равенство без риска угадать обёртку
-            // GRDB (префикс кода SQLite, эхо SQL). Текст SQLite детерминирован
-            // (это не NSError с недетерминированным порядком печати словаря,
-            // как в К31(i) — здесь простая C-строка от самого SQLite).
-            let referenceMessage = try Self.constraintViolationMessageForSecondIsMeRow()
-            XCTAssertEqual(message, referenceMessage, "текст равен эталону, собранному тем же путём")
-        }
-    }
-
-    private static func constraintViolationMessageForSecondIsMeRow() throws -> String {
-        let reference = try StorageTestSupport.makeDatabase()
-        defer { StorageTestSupport.cleanup(reference) }
-        try reference.database.rawWrite { db in
-            try db.execute(
-                sql: "INSERT INTO persons (id, display_name, is_me, created_at, updated_at) "
-                    + "VALUES (?, 'seed', 1, 0, 0)",
-                arguments: [UUID().uuidString]
+            // Явный литерал, написанный в тесте, а не собранный тем же кодом,
+            // который проверяется (по возврату РП — прежняя версия сравнивала
+            // реализацию саму с собой и осталась бы зелёной при любом тексте):
+            // SQLite называет нарушенное ограничение по имени колонки, а не
+            // индекса, — "UNIQUE constraint failed: persons.is_me".
+            XCTAssertTrue(
+                message.contains("persons.is_me"),
+                "текст несёт явный литерал колонки ограничения: \(message)"
             )
-        }
-        do {
-            try reference.database.rawWrite { db in
-                try db.execute(
-                    sql: "INSERT INTO persons (id, display_name, is_me, created_at, updated_at) "
-                        + "VALUES (?, 'C', 1, 0, 0)",
-                    arguments: [UUID().uuidString]
-                )
-            }
-            XCTFail("эталон обязан бросить")
-            return ""
-        } catch {
-            guard case .constraintViolation(let message) = StorageErrorMapping.mapWrite(error) else {
-                XCTFail("эталон обязан быть constraintViolation")
-                return ""
-            }
-            return message
         }
     }
 

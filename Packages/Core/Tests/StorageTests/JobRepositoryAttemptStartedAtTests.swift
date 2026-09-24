@@ -85,6 +85,17 @@ final class JobRepositoryAttemptStartedAtTests: StorageAsyncTestCase {
         XCTAssertTrue(listing.unreadable.isEmpty)
     }
 
+    /// Десять ФИКСИРОВАННЫХ id (не `UUID()` — по возврату РП: случайные
+    /// совпадали с верным победителем примерно в 10% прогонов, поскольку
+    /// «выигрышный» по `id ASC` из десяти случайных UUID сам был случаен, а
+    /// смещение `attempt_started_at` назначалось по индексу вставки — без
+    /// фиксации id проверка на самом деле краснела не всегда). Фиксированные
+    /// id заведомо упорядочены (растущий последний октет), поэтому победитель
+    /// известен заранее — `fixedJobIds[0]`.
+    private static let fixedJobIds: [UUID] = (0...9).map {
+        UUID(uuidString: "00000000-0000-0000-0000-00000000000\($0)")!
+    }
+
     /// Десять строк с ОДИНАКОВЫМИ priority/run_after/created_at (без
     /// искусственного priority: 99 — все ключи claimNext, кроме id, равны,
     /// так что по К39 выбор сводится к последнему ключу — id ASC) и ПОПАРНО
@@ -94,19 +105,20 @@ final class JobRepositoryAttemptStartedAtTests: StorageAsyncTestCase {
     /// по нему), результат отличался бы от «id ASC»/«порядок вставки» так,
     /// что тест бы это заметил. Значения, растущие вместе с порядком
     /// вставки, такую ошибку не поймали бы — совпадение с правильным ответом
-    /// было бы случайным, а не доказательством.
+    /// было бы случайным, а не доказательством. Победитель (`fixedJobIds[0]`)
+    /// получает смещение `7` — ни минимум (`0`), ни максимум (`9`) смещений,
+    /// так что сортировка по attempt_started_at в любую сторону выбрала бы
+    /// другую строку.
     private static func insertTenJobsWithShuffledAttemptStartedAt(
         jobs: JobRepository, database: StorageDatabase
     ) async throws -> [UUID] {
-        var jobIds: [UUID] = []
-        for _ in 0..<10 {
-            let job = TestFixtures.job(type: .transcode, options: .init(priority: 1))
+        for id in fixedJobIds {
+            let job = TestFixtures.job(id: id, type: .transcode, options: .init(priority: 1))
             try await jobs.insert(job)
-            jobIds.append(job.id)
         }
         let shuffledOffsets = [7, 2, 9, 0, 5, 3, 8, 1, 6, 4]
         try database.rawWrite { db in
-            for (index, id) in jobIds.enumerated() {
+            for (index, id) in fixedJobIds.enumerated() {
                 try db.execute(
                     sql: "UPDATE jobs SET attempt_started_at = ? WHERE id = ?",
                     arguments: [
@@ -116,6 +128,6 @@ final class JobRepositoryAttemptStartedAtTests: StorageAsyncTestCase {
                 )
             }
         }
-        return jobIds
+        return fixedJobIds
     }
 }
