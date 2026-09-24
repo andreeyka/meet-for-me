@@ -1,6 +1,14 @@
 # Карта модулей
 
-Версия 1.15. Утверждена пользователем (MEE-1). Источник: `docs/architecture.md` v0.7.
+Версия 1.16. Утверждена пользователем (MEE-1). Источник: `docs/architecture.md` v0.7.
+Изменение против v1.15: IR-080 (MEE-175) — таблица «Планируемые контракты Среза 1» и шапка C-013 называли
+владельца обработчика задачи `attribute` по-разному: таблица и C-013 — `attribution`, C-015 и раздел
+«МОДУЛЬ: domain-core» — `domain-core`. Решено в пользу `domain-core` (C-013 §8, C-015 §7 — обработчик
+держит только типы, уже объявленные в `domain-core`: `AttributionPort`, `MeetingRepository`,
+`TranscriptRepository`, `PersonRepository`, `SpeakerProfileRepository`; тот же класс, что уже реализованные
+здесь `SessionCoordinator`/`Scheduler`). Правлено: строка C-013 таблицы — `attribution` убран из
+«Потребители»; раздел «МОДУЛЬ: domain-core» — обработчик назван явно рядом с `SessionCoordinator`/`Scheduler`.
+Раздел «МОДУЛЬ: attribution» не тронут: он этой задачи не касался и сегодня.
 Изменение против v1.14: малый возврат РП по IR-125 (MEE-368) — раздел «МОДУЛЬ: secret-store-keychain» и
 комментарий `SecretStoreKeychain.swift` несли фактическую ошибку: довод для `internal` у нового `enum`
 ошибки был «тем же приёмом, что и сам протокол `SecretStore` — без публичной поверхности», а `SecretStore`
@@ -233,7 +241,9 @@ Mac. Работа `Core (Linux)` `storage` не проверяет вовсе; �
 - Реализует контракты: DTO (`MeetingEvent`, `RecordingManifest`, `Transcript`, `JoinInfo`, `MeetingSignal`), определения портов
   (`AudioCapturePort`, `CalendarPort`, `PermissionsPort`, `ProcessMonitorPort`, `PowerPort`), правило дедупа
   `DedupKey.make(from:)` (C-005 — «владеет определением порта и правилом дедупа») [v1.7, IR-118], машина состояний
-  `SessionCoordinator`, `Scheduler`, интерфейс `JobQueue`, фейки всех портов в `DomainTestKit`
+  `SessionCoordinator`, `Scheduler`, интерфейс `JobQueue`, обработчик задачи `attribute` (C-013 §8, C-015 §7 —
+  IR-080) поверх `AttributionPort`/`MeetingRepository`/`TranscriptRepository`/`PersonRepository`/`SpeakerProfileRepository`,
+  фейки всех портов в `DomainTestKit`
 - Потребляет контракты: —
 - Запрещено: импорт AppKit, SwiftUI, AVFoundation, CoreAudio, EventKit, GRDB, XPC. Только Foundation.
   Никаких файловых путей и синглтонов: всё снаружи приходит через порты. Ресурс собственного собранного
@@ -532,7 +542,7 @@ Mac. Работа `Core (Linux)` `storage` не проверяет вовсе; �
 | C-010 | Схема SQLite и репозитории | storage | все потребители данных | нет |
 | C-011 | Протоколы движка (`TranscriptionEngine`, `DiarizationEngine`, `EmbeddingEngine`, `PostProcessor`) | engine-xpc | attribution, domain-core, gigaam | **частично** (R12: таймстампы) |
 | C-012 | XPC-контракт: сообщения, прогресс, отмена | engine-xpc | domain-core | нет |
-| C-013 | Интерфейс `JobQueue` | domain-core | storage, engine-xpc, attribution | нет |
+| C-013 | Интерфейс `JobQueue` | domain-core | storage, engine-xpc | нет |
 | C-014 | Интерфейс каталога моделей и формат манифеста | model-manager | engine-xpc, gigaam, app-ui | нет |
 | C-015 | Интерфейс атрибуции | attribution | domain-core, app-ui | нет |
 | C-016 | Фасад приложения для UI | domain-core | app-ui | нет |
