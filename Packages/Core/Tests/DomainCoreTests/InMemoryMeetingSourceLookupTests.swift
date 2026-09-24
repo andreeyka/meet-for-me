@@ -11,7 +11,7 @@ import XCTest
 import DomainCore
 import DomainTestKit
 
-final class InMemoryMeetingRepositorySourceLookupTests: XCTestCase {
+final class InMemoryMeetingSourceLookupTests: XCTestCase {
 
     /// «Пара — первичный ключ `meeting_sources`, результат не более чем один; полный
     /// перебор `meetings` не нужен». Одна встреча с двумя источниками — обе пары находят
