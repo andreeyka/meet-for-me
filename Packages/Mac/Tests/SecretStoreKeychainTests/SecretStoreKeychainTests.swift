@@ -1,9 +1,21 @@
 //
 //  SecretStoreKeychainTests — каркас без кода.
 //
-//  Реальные round-trip-тесты идут против временного тестового Keychain
-//  (create/unlock/add-to-search-list в setUp, delete в tearDown) — Keychain Services
-//  не требуют TCC-разрешения для операций над собственным keychain процесса, в отличие
-//  от `permissions`. Что остаётся ручной проверкой — entitlement `keychain-access-group`
-//  подписанного бандла и синхронизация iCloud Keychain. Решение — IR-122, MEE-358.
+//  Реальные round-trip-тесты идут против временного файлового тестового Keychain —
+//  Keychain Services не требуют TCC-разрешения для операций над собственным keychain
+//  процесса, в отличие от `permissions`.
+//
+//  setUp: создать/разблокировать временный keychain-файл, СОХРАНИТЬ исходный список
+//  поиска (`SecKeychainCopySearchList`), затем добавить временный в список.
+//  tearDown: ВОССТАНОВИТЬ сохранённый исходный список поиска (`SecKeychainSetSearchList`)
+//  — не просто удалить временный файл: `SecKeychainSetSearchList` заменяет список целиком,
+//  и без явного восстановления повторные прогоны засоряют список поиска keychain на машине
+//  разработчика.
+//
+//  Обязательный вектор: namespace="x", key="y/z" и namespace="x/y", key="z" — оба должны
+//  дать РАЗНЫЕ записи (раздельные kSecAttrService/kSecAttrAccount, не конкатенация).
+//
+//  Что остаётся ручной проверкой: поведение при заблокированном login keychain
+//  (`errSecInteractionNotAllowed`) и первый диалог доступа подписанного, установленного
+//  приложения — оба требуют реальной интерактивной сессии. Решение — IR-122, MEE-358.
 //
