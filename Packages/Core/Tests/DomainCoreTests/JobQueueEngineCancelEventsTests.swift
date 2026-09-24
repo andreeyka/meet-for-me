@@ -96,23 +96,22 @@ final class JobQueueEngineCancelEventsTests: XCTestCase {
     /// Возврат РП по MEE-357: прежняя версия проверяла только конечное состояние строки
     /// (`.pending`, `attempts == 0`) — «пересмотр не встал» читалось лишь по тому, что
     /// `readyId` в итоге дошла до `succeeded`. Теперь читается событие `blocked(.noHandler)`
-    /// САМО, и то, что `started(readyId)` публикуется В ТОМ ЖЕ пересмотре, до
-    /// `waitUntilIdle()` — оба события лежат в буфере (синхронный `continuation.yield`) уже
-    /// к моменту, когда `await rig.queue.start()` вернул управление, поскольку весь
-    /// пересмотр — это один `while` внутри одного `await runRevisitPass()`.
+    /// САМО, и то, что `started(readyId)` публикуется в пересмотре 1, а не отложен.
     ///
-    /// MEE-370 (найдено красным main после #86): `start()` НЕ ждёт исполнение `readyId` —
-    /// оно идёт отдельной `Task` (§7, `beginExecuting`) — и `readyId` с фейковым нулевым
-    /// временем исполнения может успеть завершиться и завести СВОЙ, независимый пересмотр
-    /// (по её же завершении) раньше, чем этот тест прочитает `summarizeId` напрямую из
-    /// репозитория: тот независимый пересмотр заново берёт `summarizeId` (`claimNext` —
-    /// `running`) и ещё не успел вернуть его в `pending`, когда тест уже читает строку.
-    /// `waitUntilIdle()` — граница, которую сама очередь даёт для «дождаться ЛЮБого
-    /// самостоятельного пересмотра», и только после неё чтение репозитория детерминировано;
-    /// без неё тест читает состояние в произвольный момент гонки с чужой `Task`, которую
-    /// `start()` намеренно не ждёт (§7: «исполнение — отдельная Task, которую пересмотр не
-    /// ждёт»). Assertions ниже не изменились ни одним значением — снята только гонка вокруг
-    /// точки, где они читаются.
+    /// MEE-370 (найдено красным main после #86, дважды): `start()` НЕ ждёт исполнение
+    /// `readyId` — оно идёт отдельной `Task` (§7, `beginExecuting`), и эта `Task` — НАСТОЯЩИЙ
+    /// параллелизм (кооперативный пул Swift даёт ей отдельный поток, а не только очередь
+    /// приостановок ОДНОГО актора): с фейковым нулевым временем исполнения она может успеть
+    /// завершиться и завести СВОЙ пересмотр по завершении быстрее, чем этот тест прочитает
+    /// хоть что-то — порядок между её событиями и событиями пересмотра 1 после этой границы
+    /// НЕ определён языком и потому не проверяется здесь. Определено ЧИСЛО (ровно четыре
+    /// события до полного оседания — по два на каждый пересмотр: `started`/`blocked` у
+    /// первого, `succeeded`/`blocked` у второго, §7 требует оба безусловно) и ПРИЧИННЫЙ
+    /// порядок ВНУТРИ одной задачи (`started(readyId)` раньше `succeeded(readyId)`) и МЕЖДУ
+    /// пересмотрами (мьютекс `isRevisitLoopRunning`, `JobQueueEngineReview.swift`, не пускает
+    /// второй пересмотр раньше конца первого — отсюда второе `blocked(summarize)` всегда
+    /// последнее). `waitUntilIdle()` — единственная граница, которую очередь даёт для
+    /// «оба пересмотра точно окончены»; до неё фиксированного числа событий не существует.
     func test_k67_noHandlerBlocksWithoutStallingTheRest() async throws {
         let rig = JobQueueTestRig()
         let attributeHandler = FakeJobHandler(type: .attribute)
@@ -128,36 +127,32 @@ final class JobQueueEngineCancelEventsTests: XCTestCase {
         ))
         _ = await drainExactly(&iterator, count: 2)   // два submitted — не предмет этого критерия
 
-        // Пересмотр 1 (внутри этого start()): noHandler на summarizeId и старт readyId —
-        // оба в одном пересмотре, до waitUntilIdle().
         await rig.queue.start()
-        let firstPass = await drainExactly(&iterator, count: 2)
-        XCTAssertTrue(
-            firstPass.contains(.blocked(jobId: summarizeId, type: .summarize, reason: .noHandler)),
-            "К67: blocked(.noHandler) публикуется в первом же пересмотре"
-        )
-        XCTAssertTrue(
-            firstPass.contains(.started(jobId: readyId, type: .attribute)),
-            "К67: сосед стартовал в том же пересмотре, а не отложен на следующий"
-        )
-        // MEE-370: граница перед чтением репозитория — см. довод в шапке теста. Дожидается
-        // и исполнения readyId, и её самостоятельного пересмотра по завершении разом; ни то,
-        // ни другое не меняет значений ниже, снятых ДО этой правки теми же двумя строками.
         await rig.queue.waitUntilIdle()
-        let summarizeAfterFirstPass = try await rig.repository.job(id: summarizeId)
-        XCTAssertEqual(summarizeAfterFirstPass?.status, .pending)
-        XCTAssertEqual(summarizeAfterFirstPass?.attempts, 0)
+        let settled = await drainExactly(&iterator, count: 4)
 
-        // Пересмотр 2 — по завершении readyId (§7), уже осевший в `waitUntilIdle()` выше:
-        // успех readyId, затем тот же пересмотр по завершении снова видит summarizeId и
-        // снова не встаёт. Второй `waitUntilIdle()` — без эффекта (очередь уже idle), не
-        // лишний: явно называет, что второй пересмотр к этому моменту точно окончен.
-        await rig.queue.waitUntilIdle()
-        let secondPass = await drainExactly(&iterator, count: 2)
-        XCTAssertEqual(secondPass, [
-            .succeeded(jobId: readyId, type: .attribute),
-            .blocked(jobId: summarizeId, type: .summarize, reason: .noHandler)
-        ], "К67: пересмотр по завершении соседа снова публикует blocked(.noHandler) и не встаёт")
+        let blockedSummarize = JobEvent.blocked(jobId: summarizeId, type: .summarize, reason: .noHandler)
+        let startedReady = JobEvent.started(jobId: readyId, type: .attribute)
+        let succeededReady = JobEvent.succeeded(jobId: readyId, type: .attribute)
+        XCTAssertEqual(
+            settled.filter { $0 == blockedSummarize }.count, 2,
+            "К67: blocked(.noHandler) публикуется на пересмотре 1 И на пересмотре по " +
+            "завершении readyId — оба безусловны (§7)"
+        )
+        XCTAssertTrue(settled.contains(startedReady), "К67: сосед стартовал, а не отложен")
+        XCTAssertTrue(settled.contains(succeededReady), "readyId исполнилась до успеха")
+        XCTAssertEqual(
+            settled.last, blockedSummarize,
+            "второй пересмотр не начинается раньше конца первого (мьютекс) — его blocked " +
+            "последним и оседает"
+        )
+        let startedIndex = try XCTUnwrap(settled.firstIndex(of: startedReady))
+        let succeededIndex = try XCTUnwrap(settled.firstIndex(of: succeededReady))
+        XCTAssertLessThan(startedIndex, succeededIndex, "readyId стартует раньше, чем успевает")
+
+        let summarizeAfterSettling = try await rig.repository.job(id: summarizeId)
+        XCTAssertEqual(summarizeAfterSettling?.status, .pending)
+        XCTAssertEqual(summarizeAfterSettling?.attempts, 0)
 
         // Пересмотры 3 и 4 — summarizeId остаётся единственным кандидатом: блокируется на
         // каждом внешнем start(), ни один пересмотр не зависает.
