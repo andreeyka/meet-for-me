@@ -59,6 +59,16 @@ final class JobQueueEngineRepairTests: XCTestCase {
         XCTAssertEqual(rig.repository.failUnreadableCallCount, 1)
         let good = try await rig.repository.job(id: goodId)
         XCTAssertEqual(good?.status, .succeeded, "соседняя задача исполнилась")
+
+        // Усиление по возврату РП (MEE-350): битая строка сама по себе — не только событие
+        // `failed` наружу. `job(id:)`/`jobs(status:)` на ней по-прежнему отказывают (флаг
+        // `unreadable` не снимается `failUnreadable` — шапка `InMemoryJobRepository`), поэтому
+        // проверяем через `storedJobs` — то, что фейк отдаёт тесту в обход публичного контракта
+        // порта именно для такой проверки.
+        let badRow = try XCTUnwrap(rig.repository.storedJobs.first { $0.id == badId })
+        XCTAssertEqual(badRow.status, .failed, "битая строка переведена в failed, а не осталась pending")
+        XCTAssertEqual(badRow.lastError, message, "lastError — текст dataCorrupted дословно")
+        XCTAssertEqual(badRow.attempts, 1, "attempts не тронут ремонтом — это не потреблённая попытка")
     }
 
     /// К80: `job(id:)` на нечитаемой строке в терминальном статусе — `failUnreadable`
@@ -155,7 +165,9 @@ final class JobQueueEngineRepairTests: XCTestCase {
         try await rig.queue.register(handler: handler)
 
         let foreignId = UUID()
-        try await rig.repository.insert(makeUnreadableRow(id: foreignId, status: .pending, now: rig.clock.now()))
+        try await rig.repository.insert(makeUnreadableRow(
+            id: foreignId, status: .pending, now: rig.clock.now(), priority: 50
+        ))
         rig.repository.markUnreadable(
             jobId: foreignId,
             error: .dataCorrupted(entity: "Recording", id: foreignId.uuidString, message: "чужая сущность")
@@ -167,6 +179,27 @@ final class JobQueueEngineRepairTests: XCTestCase {
             XCTAssertEqual(entity, "Recording")
         }
         XCTAssertEqual(rig.repository.failUnreadableCallCount, 0)
+
+        // Усиление по возврату РП (MEE-350): не только прямое чтение `job(id:)` —
+        // §6, п. 4 («ремонт невозможен — пересмотр прекращён, попробует снова позже»)
+        // касается самого пересмотра (см. `catch { return }` в `runRevisitPass`,
+        // JobQueueEngineReview.swift). `foreignId` — старшего приоритета, чем соседняя
+        // готовая задача, поэтому `claimNext` достаёт именно её первой; пересмотр обязан
+        // остановиться ДО соседа, а не пропустить неисправимую строку молча и продолжить.
+        let readyId = try await rig.queue.submit(makeSubmission(priority: 10))
+
+        await rig.queue.start()
+        XCTAssertEqual(rig.repository.claimNextCallCount, 1, "пересмотр прекращён на неисправимой строке")
+        let readyAfterFirstStart = try await rig.repository.job(id: readyId)
+        XCTAssertEqual(readyAfterFirstStart?.status, .pending, "сосед не рассмотрен — пересмотр остановился раньше")
+
+        // «Попробует снова позже» — следующий пересмотр зовёт claimNext заново, а не
+        // запоминает отказ навсегда; неисправимая строка тем же старшинством приоритета
+        // блокирует и его — сосед остаётся pending.
+        await rig.queue.start()
+        XCTAssertEqual(rig.repository.claimNextCallCount, 2, "следующий пересмотр пробует claimNext снова")
+        let readyAfterSecondStart = try await rig.repository.job(id: readyId)
+        XCTAssertEqual(readyAfterSecondStart?.status, .pending, "неисправимая строка блокирует и второй пересмотр")
 
         let unparsableId = UUID()
         try await rig.repository.insert(makeUnreadableRow(id: unparsableId, status: .pending, now: rig.clock.now()))
@@ -186,10 +219,10 @@ final class JobQueueEngineRepairTests: XCTestCase {
 
     // MARK: - Оснастка
 
-    private func makeUnreadableRow(id: UUID, status: JobStatus, now: Date) -> Job {
+    private func makeUnreadableRow(id: UUID, status: JobStatus, now: Date, priority: Int = 0) -> Job {
         Job(
             id: id, type: .transcode, payload: .transcode(recordingId: UUID()), status: status,
-            priority: 0, attempts: 1, maxAttempts: 3, runAfter: now,
+            priority: priority, attempts: 1, maxAttempts: 3, runAfter: now,
             conditions: JobConditions(
                 requiresACPower: false, forbidWhileRecording: false,
                 maxThermalPressure: .critical, requiresProfileReady: nil

@@ -19,6 +19,12 @@ extension JobQueueEngine {
         var profileReadyCache: [String: Bool] = [:]
 
         while isRunning {
+            // Инвариант 28, §7 шаг 4: «слоты кончились — пересмотр окончен». Глобальный
+            // предел исчерпан — ЛЮБОЙ следующий кандидат уйдёт тем же `concurrencyLimit`
+            // независимо от типа; дальше не смотрим вовсе, а не звоним `claimNext` на
+            // каждого оставшегося ради того же самого `blocked`. Предел ТИПА сюда не
+            // входит — другой тип ещё может пройти, для него `hasFreeSlot` решает сама.
+            guard runningTasks.count < globalConcurrencyLimit else { return }
             let claimed: Job?
             do {
                 claimed = try await performWithRepair {

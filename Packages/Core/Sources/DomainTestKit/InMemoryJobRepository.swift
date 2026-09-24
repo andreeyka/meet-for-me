@@ -211,19 +211,18 @@ extension InMemoryJobRepository {
         )
         locked { claimNextCalls += 1 }
         let outcome = locked { () -> ClaimOutcome in
-            // СТРОКА (MEE-350, снятие): было `&& $0.runAfter <= now` — фильтровало НЕ
-            // ДОШЕДШИЕ по сроку строки прежде, чем очередь их вообще увидит, инвариант 3
-            // называет `runAfter` только СТУПЕНЬЮ ПОРЯДКА (см. `claimOrder`), а не условием
-            // отбора; готовность к запуску (инвариант 4, `JobBlockReason.notYetDue`,
-            // К56/К73/К78) — обязанность ОЧЕРЕДИ, которая решает её на ВЗЯТОМ кандидате
-            // (§7, шаг «условия»), а не решение фейка за неё молча. С фильтром такая строка
-            // никогда не доходила до `firstBlockingReason`, и ожидающий её тест навсегда
-            // подвисал на `await iterator.next()` — то самое зависание CI по этой ветке
-            // (РП, зависание #73). Ступени порядка (проверены `test_mee320_claimNext_orders…`)
-            // не задеты: во всех них `now` заведомо позже обоих сравниваемых `runAfter`.
+            // СТРОКА: возврат РП по MEE-350 — фильтр `runAfter <= now` здесь ВЕРНУЛ:
+            // C-010 инвариант 25 называет `claimNext` фильтрующим «по `status`, `run_after`
+            // и `type`» дословно, а C-013 требует от фейка «те же правила `claimNext`, что у
+            // настоящей таблицы». Возникающее отсюда противоречие с `JobBlockReason.notYetDue`
+            // (строка, не дошедшая по сроку, никогда не доходит до `firstBlockingReason`,
+            // делая эту ветвь очереди недостижимой через способ И) — реальное, но снимает его
+            // архитектор (открыт IR-121, MEE-356), а не правка фейка задним числом. До ответа
+            // IR-121: К56 (i) помечен `XCTSkip`, К73 перестроен на блокировки без `notYetDue`.
             let candidates = order.compactMap { jobsById[$0] }
                 .filter {
-                    $0.status == .pending && types.contains($0.type) && !excluding.contains($0.id)
+                    $0.status == .pending && types.contains($0.type)
+                        && !excluding.contains($0.id) && $0.runAfter <= now
                 }
                 .sorted(by: Self.claimOrder)
             guard let picked = candidates.first else { return .empty }

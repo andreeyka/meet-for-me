@@ -13,6 +13,13 @@ import DomainTestKit
 final class JobQueueEngineReadinessTests: XCTestCase {
 
     /// К53 (i): status != .pending — cancelled её исключает.
+    ///
+    /// Усиление по возврату РП (MEE-350): `runCallCount == 0` сразу после `start()`, без
+    /// `waitUntilIdle()`, верно и на неверной реализации — исполнение идёт отдельной `Task`
+    /// (§7), которую пересмотр не ждёт, и счётчик мог ещё просто не успеть увеличиться к
+    /// моменту проверки. `waitUntilIdle()` даёт фоновой `Task`, если реализация ошибочно её
+    /// всё же завела, шанс дойти до `handler.run()`; статус `cancelled` — вторым, независимым
+    /// от счётчика, признаком, что строка вообще не была тронута пересмотром.
     func test_k53a_cancelledStatusExcludesReadiness() async throws {
         let rig = JobQueueTestRig()
         let handler = FakeJobHandler(type: .transcode)
@@ -20,17 +27,27 @@ final class JobQueueEngineReadinessTests: XCTestCase {
         let id = try await rig.queue.submit(makeSubmission())
         try await rig.queue.cancel(jobId: id)
         await rig.queue.start()
+        await rig.queue.waitUntilIdle()
         XCTAssertEqual(handler.runCallCount, 0, "cancelled задача не исполняется")
+        let job = try await rig.repository.job(id: id)
+        XCTAssertEqual(job?.status, .cancelled, "статус не тронут пересмотром")
     }
 
     /// К53 (ii): runAfter > now.
+    ///
+    /// Тот же фикс, что К53а: `waitUntilIdle()` до счётчика, статус `.pending` как второй,
+    /// независимый признак — иначе тест проходит и на реализации, которая по ошибке всё же
+    /// стартовала бы задачу (см. комментарий у К53а).
     func test_k53b_runAfterInTheFutureExcludesReadiness() async throws {
         let rig = JobQueueTestRig()
         let handler = FakeJobHandler(type: .transcode)
         try await rig.queue.register(handler: handler)
-        _ = try await rig.queue.submit(makeSubmission(runAfter: rig.clock.now().addingTimeInterval(3_600)))
+        let id = try await rig.queue.submit(makeSubmission(runAfter: rig.clock.now().addingTimeInterval(3_600)))
         await rig.queue.start()
+        await rig.queue.waitUntilIdle()
         XCTAssertEqual(handler.runCallCount, 0)
+        let job = try await rig.repository.job(id: id)
+        XCTAssertEqual(job?.status, .pending, "статус не тронут пересмотром")
     }
 
     /// К53 (iii): обработчик типа не зарегистрирован.
@@ -139,26 +156,15 @@ final class JobQueueEngineReadinessTests: XCTestCase {
 
     /// К56: не проходит `notYetDue` И `waitingForACPower` одновременно — публикуется ровно
     /// один `blocked` с причиной `notYetDue`, первой по порядку случаев.
+    ///
+    /// СНЯТО XCTSkip по возврату РП (MEE-350): `runAfter <= now` в `InMemoryJobRepository
+    /// .claimNext` возвращён (C-010 инвариант 25, «фильтрует по `status`, `run_after` и
+    /// `type`»), и строка, не дошедшая по сроку, больше никогда не доходит до
+    /// `firstBlockingReason` — `notYetDue` этим способом И недостижим. Противоречие с
+    /// C-013 (инвариант 4 называет `notYetDue` случаем, который решает ОЧЕРЕДЬ) открыто
+    /// архитектору как IR-121 (MEE-356); до его ответа этот вход не проверяем.
     func test_k56_notYetDueWinsOverWaitingForACPower() async throws {
-        let rig = JobQueueTestRig(powerSnapshot: PowerSnapshot(
-            source: .battery, batteryFraction: 0.5, isLowPowerModeEnabled: false,
-            thermalPressure: .nominal, checkedAt: Date(timeIntervalSince1970: 0)
-        ))
-        let stream = rig.queue.events()
-        var iterator = stream.makeAsyncIterator()
-
-        _ = try await rig.queue.submit(makeSubmission(
-            runAfter: rig.clock.now().addingTimeInterval(1_000), requiresACPower: true
-        ))
-        guard case .submitted = await iterator.next() else {
-            return XCTFail("ожидался submitted")
-        }
-
-        await rig.queue.start()
-        guard case .blocked(_, _, let reason) = await iterator.next() else {
-            return XCTFail("ожидался blocked")
-        }
-        XCTAssertEqual(reason, .notYetDue, "notYetDue раньше waitingForACPower по порядку случаев")
+        throw XCTSkip("IR-121: notYetDue недостижим при фильтре run_after, C-010 инв. 25")
     }
 
     /// К56, вторая половина: не проходит `recordingInProgress` И `profileNotReady`
@@ -191,6 +197,10 @@ final class JobQueueEngineReadinessTests: XCTestCase {
         }
         XCTAssertEqual(reason, .recordingInProgress, "recordingInProgress раньше profileNotReady")
         XCTAssertEqual(rig.catalog.callCount, 0, "дорогой предикат не вычисляется — recordingInProgress раньше")
+        // Ровно один blocked: единственный кандидат, единственный пересмотр (recordingDidStart
+        // до start() — isRunning ещё false, второго пересмотра не запускает) — claimNext звана
+        // дважды: один раз кандидата взяла, второй раз отдала nil, чем пересмотр и завершился.
+        XCTAssertEqual(rig.repository.claimNextCallCount, 2, "один кандидат и завершающий nil — не больше")
     }
 
     /// К57: предикат §1.1 тотален по исходу вызова; `nil` — без обращения к каталогу.
@@ -226,6 +236,16 @@ final class JobQueueEngineReadinessTests: XCTestCase {
             requiresProfileReady: "gone"
         ))
 
+        // Усиление по возврату РП (MEE-350): «любой брошенный отказ каталога — выполнено»
+        // (§1.1) — не только `unknownProfile`; второй, иначе устроенный случай отказа
+        // (`.other`, не связанный с профилем вовсе) обязан вести к тому же исходу, а не
+        // проверяться предположением по одному-единственному случаю.
+        rig.catalog.setFailure(StubModelCatalogError.other("сеть каталога недоступна"), for: "other-error")
+        let otherErrorId = try await rig.queue.submit(makeSubmission(
+            payload: .transcribe(recordingId: UUID(), profileId: "other-error", language: nil),
+            requiresProfileReady: "other-error"
+        ))
+
         let noProfileId = try await rig.queue.submit(makeSubmission(
             payload: .transcribe(recordingId: UUID(), profileId: "unused", language: nil),
             requiresProfileReady: nil
@@ -244,7 +264,14 @@ final class JobQueueEngineReadinessTests: XCTestCase {
         let unknownJob = try await rig.repository.job(id: unknownId)
         XCTAssertEqual(unknownJob?.status, .running, "unknownProfile — любой отказ означает «выполнено»")
 
-        XCTAssertGreaterThan(rig.catalog.callCount, before, "каталог был опрошен трижды (ready/missing/gone)")
+        let otherErrorJob = try await rig.repository.job(id: otherErrorId)
+        XCTAssertEqual(otherErrorJob?.status, .running, "иной случай отказа — тем же правилом, «выполнено»")
+
+        // Усиление по возврату РП: не «хотя бы раз», а РОВНО столько различных `profileId`,
+        // сколько их действительно требует каталога — ready/missing/gone/other-error — четыре,
+        // не больше; `noProfileId` (условие `nil`) каталог не трогает вовсе — иначе тест
+        // проходит и на реализации, которая ошибочно зовёт каталог лишний раз.
+        XCTAssertEqual(rig.catalog.callCount - before, 4, "каталог опрошен четырежды — по числу профилей условия")
 
         let noProfileJob = try await rig.repository.job(id: noProfileId)
         XCTAssertNotEqual(noProfileJob?.status, .pending, "requiresProfileReady == nil не требует каталога")

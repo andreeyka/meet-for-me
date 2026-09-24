@@ -11,33 +11,63 @@ final class JobQueueEngineStopPersistenceTests: XCTestCase {
     /// К70: `stop()` не начинает новых задач, дожидается исполняемой, возвращает в `pending`
     /// кандидата, взятого пересмотром и ещё не переданного обработчику; после возврата
     /// строк `running` не остаётся. Повторный `stop()` — без эффекта.
+    ///
+    /// Возврат РП по MEE-350: «кандидат, взятый пересмотром и не переданный обработчику» —
+    /// прежде строка, вставленная НАПРЯМУЮ (`makeRunningRow`), изображавшая это состояние
+    /// подделкой; ничто не проверяло, что `runRevisitPass` и `stop()` вправду producят и
+    /// перехватывают его сами. Здесь оно настоящее: `StubModelCatalogPort.pauseNextCall(for:)`
+    /// подвешивает `firstBlockingReason` РОВНО в точке между тем, как `claimNext` уже пометил
+    /// строку `running` (это делает сам фейк репозитория), и тем, как пересмотр решил её
+    /// судьбу — актор в этот момент приостановлен на настоящем `await`, а не занят, и потому
+    /// свободен обработать `stop()`, вызванный из теста конкурентно. Таймингов и `sleep` нет:
+    /// подвес и снятие управляются явно, гонки не может быть по построению.
     func test_k70_stopWaitsForExecutingAndReturnsUnstartedCandidate() async throws {
         let rig = JobQueueTestRig()
-        let handler = FakeJobHandler(type: .transcode)
-        handler.workLong(seconds: 0.3)
-        try await rig.queue.register(handler: handler)
+        let executingHandler = FakeJobHandler(type: .transcode)
+        executingHandler.workLong(seconds: 0.3)
+        try await rig.queue.register(handler: executingHandler)
+        let strayHandler = FakeJobHandler(type: .attribute)
+        try await rig.queue.register(handler: strayHandler)
 
-        let executingId = try await rig.queue.submit(makeSubmission(priority: 10))
-        await rig.queue.start()
-        let executing = try await rig.repository.job(id: executingId)
-        XCTAssertEqual(executing?.status, .running, "вектор непустоты: задача правда исполняется")
+        let executingId = try await rig.queue.submit(makeSubmission(priority: 20))
+        let strayId = try await rig.queue.submit(makeSubmission(
+            payload: .attribute(transcriptId: UUID(), meetingId: nil),
+            priority: 10, requiresProfileReady: "p"
+        ))
+        rig.catalog.setMissingModels([], for: "p")   // «выполнено» — иначе блокировка иная, не эта
+        rig.catalog.pauseNextCall(for: "p")
 
-        // Кандидат, взятый пересмотром и не переданный обработчику, — тем же признаком, что
-        // инвариант 12 называет прямо (`attemptStartedAt == nil` в `running`).
-        let now = rig.clock.now()
-        let strayCandidate = makeRunningRow(
-            attempts: 0, maxAttempts: 3, attemptStartedAt: nil,
-            leaseExpiresAt: now.addingTimeInterval(100), now: now
-        )
-        try await rig.repository.insert(strayCandidate)
+        // Один `start()`: в одном пересмотре сперва берёт `executingId` (выше приоритетом,
+        // без условий — сразу исполняется), затем `strayId` — и подвисает на его условии.
+        let startTask = Task { await rig.queue.start() }
 
-        await rig.queue.stop()
+        // Ждём НАБЛЮДАЕМОГО факта — `claimNext` уже пометил `strayId` running — а не
+        // фиксированную паузу: опрос читает фейк репозитория напрямую, актора не трогает.
+        // Ограничение попыток — а не бесконечный цикл: если пересмотр когда-нибудь перестанет
+        // доходить до `strayId` вообще, тест обязан упасть с внятным `XCTFail`, а не зависнуть
+        // тем же классом проблемы, что уже вызывал зависания CI (`AsyncStream` без `finish()`).
+        var attemptsLeft = 10_000
+        while try await rig.repository.job(id: strayId)?.status != .running {
+            attemptsLeft -= 1
+            guard attemptsLeft > 0 else {
+                return XCTFail("strayId не дошёл до running — пересмотр не добрался до claimNext по нему")
+            }
+            await Task.yield()
+        }
+        let claimedStray = try await rig.repository.job(id: strayId)
+        XCTAssertNil(claimedStray?.attemptStartedAt, "взят claimNext, но обработчику ещё не передан")
 
-        let stray = try await rig.repository.job(id: strayCandidate.id)
+        await rig.queue.stop()   // конкурентно с зависшим на condition-check пересмотром
+
+        rig.catalog.releaseGatedCall()   // отпускаем подвес уже ПОСЛЕ stop() — не раньше
+        await startTask.value            // дожидаемся, чтобы пересмотр точно закончился
+
+        let stray = try await rig.repository.job(id: strayId)
         XCTAssertEqual(stray?.status, .pending)
         XCTAssertEqual(stray?.attempts, 0)
         XCTAssertNil(stray?.leaseExpiresAt)
         XCTAssertNil(stray?.attemptStartedAt)
+        XCTAssertEqual(strayHandler.runCallCount, 0, "stop() не начал новых задач — обработчик не звался вовсе")
 
         let finishedExecuting = try await rig.repository.job(id: executingId)
         XCTAssertNotEqual(finishedExecuting?.status, .running, "stop() вернулся после завершения исполняемой")
@@ -51,8 +81,17 @@ final class JobQueueEngineStopPersistenceTests: XCTestCase {
     /// К71: состояние очереди целиком выводится из таблицы `jobs` — новый экземпляр очереди
     /// поверх того же репозитория восстанавливает те же `pending`-задачи (с точностью до
     /// развилки инварианта 10).
+    ///
+    /// Усиление по возврату РП (MEE-350): пять строк — по числу случаев `JobStatus` — вместо
+    /// прежних трёх (`failed`/`cancelled` не были названы вовсе, а без них «целиком выводится
+    /// из таблицы» проверяет только часть случаев). Плюс — `rig.queue.start()` до всякой
+    /// прямой правки репозитория: первый экземпляр очереди — не пустая заглушка, которую
+    /// никогда не запускали, а прошедший хотя бы один настоящий пересмотр, как в реальном
+    /// перезапуске приложения (иначе строка гонится с состоянием, которое сам первый экземпляр
+    /// никогда не видел живым).
     func test_k71_stateIsDerivedEntirelyFromTheJobsTable() async throws {
         let rig = JobQueueTestRig()
+        await rig.queue.start()   // первый экземпляр — реально запущенный, а не пустая заглушка
         let now = rig.clock.now()
 
         let pending = makeRunningRow(attempts: 0, maxAttempts: 3, attemptStartedAt: nil, leaseExpiresAt: nil, now: now)
@@ -76,6 +115,25 @@ final class JobQueueEngineStopPersistenceTests: XCTestCase {
             dedupKey: nil, leaseExpiresAt: nil, attemptStartedAt: nil, lastError: nil,
             createdAt: now, updatedAt: now
         ))
+        let failed = makeRunningRow(
+            attempts: 3, maxAttempts: 3, attemptStartedAt: nil, leaseExpiresAt: nil,
+            lastError: "boom", now: now
+        )
+        try await rig.repository.update(Job(
+            id: failed.id, type: failed.type, payload: failed.payload, status: .failed,
+            priority: 0, attempts: 3, maxAttempts: 3, runAfter: now, conditions: failed.conditions,
+            dedupKey: nil, leaseExpiresAt: nil, attemptStartedAt: nil, lastError: "boom",
+            createdAt: now, updatedAt: now
+        ))
+        let cancelled = makeRunningRow(
+            attempts: 0, maxAttempts: 3, attemptStartedAt: nil, leaseExpiresAt: nil, now: now
+        )
+        try await rig.repository.update(Job(
+            id: cancelled.id, type: cancelled.type, payload: cancelled.payload, status: .cancelled,
+            priority: 0, attempts: 0, maxAttempts: 3, runAfter: now, conditions: cancelled.conditions,
+            dedupKey: nil, leaseExpiresAt: nil, attemptStartedAt: nil, lastError: nil,
+            createdAt: now, updatedAt: now
+        ))
 
         // Новая очередь поверх ТОГО ЖЕ репозитория — прежний экземпляр ничего не хранил
         // в памяти, что понадобилось бы восстановить.
@@ -93,6 +151,13 @@ final class JobQueueEngineStopPersistenceTests: XCTestCase {
         let runningAfter = try await rig.repository.job(id: running.id)
         XCTAssertEqual(runningAfter?.status, .pending, "running восстановлена по инварианту 10 (К61)")
         XCTAssertEqual(runningAfter?.attempts, 2, "была передана обработчику — attempts + 1")
+
+        let failedAfter = try await rig.repository.job(id: failed.id)
+        XCTAssertEqual(failedAfter?.status, .failed, "терминальная строка не тронута")
+        XCTAssertEqual(failedAfter?.lastError, "boom")
+
+        let cancelledAfter = try await rig.repository.job(id: cancelled.id)
+        XCTAssertEqual(cancelledAfter?.status, .cancelled, "терминальная строка не тронута")
 
         let succeededAfter = try await rig.repository.job(id: succeeded.id)
         XCTAssertEqual(succeededAfter?.status, .succeeded, "терминальная строка не тронута")

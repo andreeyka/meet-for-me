@@ -8,12 +8,19 @@ final class JobQueueEngineReviewLoopTests: XCTestCase {
 
     /// К73: три задачи, блокированные разными условиями, ни одной готовой — `claimNext`
     /// зван ровно четыре раза (три кандидата и `nil`); ни один `id` не рассмотрен дважды.
+    ///
+    /// Вторая блокировка перестроена с `notYetDue` на `thermalPressure` (возврат РП по
+    /// MEE-350): `runAfter <= now` в фейке — тот же фильтр, что у настоящей таблицы (C-010
+    /// инв. 25, IR-121 — снимает архитектор), и строка, не дошедшая по сроку, `claimNext`
+    /// вообще не возвращает — `notYetDue` этим способом недостижим, а счётчик `4` требует
+    /// ВИДИМОГО третьего кандидата.
     func test_k73_revisitTerminatesAfterVisitingEveryCandidateOnce() async throws {
-        let rig = JobQueueTestRig(powerSnapshot: .onBattery)
-        _ = try await rig.queue.submit(makeSubmission(priority: 30, requiresACPower: true))
-        _ = try await rig.queue.submit(makeSubmission(
-            priority: 20, runAfter: rig.clock.now().addingTimeInterval(1_000)
+        let rig = JobQueueTestRig(powerSnapshot: PowerSnapshot(
+            source: .battery, batteryFraction: 0.5, isLowPowerModeEnabled: false,
+            thermalPressure: .serious, checkedAt: Date(timeIntervalSince1970: 0)
         ))
+        _ = try await rig.queue.submit(makeSubmission(priority: 30, requiresACPower: true))
+        _ = try await rig.queue.submit(makeSubmission(priority: 20, maxThermalPressure: .fair))
         _ = try await rig.queue.submit(makeSubmission(
             payload: .diarize(recordingId: UUID(), profileId: "p"), priority: 10
         ))   // без обработчика — noHandler
@@ -102,6 +109,52 @@ final class JobQueueEngineReviewLoopTests: XCTestCase {
             blockedIds.append(jobId)
         }
         XCTAssertEqual(Set(blockedIds), Set(ids), "по одному на задачу, ни одна не пропущена и не задвоена")
+    }
+
+    /// Инвариант 28, §7 шаг 4(возврат РП по MEE-350): «слоты кончились — пересмотр окончен»
+    /// — два слота, пять кандидатов пяти разных типов (предел типа не участвует). После
+    /// второго старта `claimNext` больше не звана вовсе — ни третьего кандидата не смотрит,
+    /// ни `blocked(.concurrencyLimit)` на оставшихся не публикует.
+    func test_reviewEndsAssoonAsGlobalSlotsAreExhausted() async throws {
+        let rig = JobQueueTestRig(globalConcurrencyLimit: 2, perTypeConcurrencyLimit: 1)
+        for type in JobType.allCases {
+            let handler = FakeJobHandler(type: type)
+            handler.workLong(seconds: 0.3)
+            try await rig.queue.register(handler: handler)
+        }
+        let stream = rig.queue.events()
+        var iterator = stream.makeAsyncIterator()
+
+        let payloads: [(JobPayload, Int)] = [
+            (.transcode(recordingId: UUID()), 50),
+            (.transcribe(recordingId: UUID(), profileId: "p", language: nil), 40),
+            (.diarize(recordingId: UUID(), profileId: "p"), 30),
+            (.attribute(transcriptId: UUID(), meetingId: nil), 20),
+            (.summarize(meetingId: UUID(), transcriptId: UUID(), profileId: "p"), 10)
+        ]
+        var ids: [UUID] = []
+        for (payload, priority) in payloads {
+            ids.append(try await rig.queue.submit(makeSubmission(payload: payload, priority: priority)))
+        }
+        for _ in ids {
+            guard case .submitted = await iterator.next() else { return XCTFail("ожидался submitted") }
+        }
+
+        await rig.queue.start()
+
+        guard case .started(let firstStarted, _) = await iterator.next() else {
+            return XCTFail("ожидался started")
+        }
+        guard case .started(let secondStarted, _) = await iterator.next() else {
+            return XCTFail("ожидался started")
+        }
+        XCTAssertEqual(Set([firstStarted, secondStarted]), Set([ids[0], ids[1]]), "первые два по приоритету")
+        XCTAssertEqual(rig.repository.claimNextCallCount, 2, "ровно два — пересмотр окончен, слотов больше нет")
+
+        for id in ids[2...] {
+            let job = try await rig.repository.job(id: id)
+            XCTAssertEqual(job?.status, .pending, "не рассмотрен вовсе — не blocked, а нетронутый pending")
+        }
     }
 
     /// К77: пересмотр стартует больше одной задачи, пока есть свободные слоты.
