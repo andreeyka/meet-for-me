@@ -197,10 +197,7 @@ final class FakeCalendarPortNewMethodsTests: XCTestCase {
     // MARK: - (л) журнал вызовов пишет все шесть новых методов
 
     /// Возврат РП по MEE-357: журнал (условие `Н`) обязан видеть все шесть методов
-    /// управляющей поверхности источника, а не только семь прежних. Сами настройки
-    /// `configure` в журнал не идут (SwiftLint `optional_data_string_conversion` — и
-    /// довод самого журнала, «для равенства доменного значения — типизованный список,
-    /// не текст», см. шапку `PortCallLog.swift`): их наблюдает `configuredSettings(for:)`.
+    /// управляющей поверхности источника, а не только семь прежних.
     func test_mee357_fakeCalendarPort_journalRecordsAllSixNewMethods() async throws {
         let port = FakeCalendarPort()
         let challenge = AuthChallenge(authUrl: URL(string: "https://example.com/auth")!, redirectScheme: "meetforme")
@@ -225,5 +222,20 @@ final class FakeCalendarPortNewMethodsTests: XCTestCase {
             "CalendarPort.stop()"
         ])
         XCTAssertEqual(port.configuredSettings(for: eventKit), Data(#"{"pollSeconds":60}"#.utf8))
+    }
+
+    /// Возврат РП по MEE-369: `configure` обязан класть `settings` в сам журнал, не только
+    /// в `configuredSettings(for:)`. `Data` → `String` текстом (`String(decoding:as:)`) даёт
+    /// SwiftLint `optional_data_string_conversion` — base64 не декодирует байты как текст,
+    /// это обратимая кодировка, а не попытка прочесть `Data` как строку.
+    func test_mee369_fakeCalendarPort_configureRecordsSettingsInJournalAsBase64() async throws {
+        let port = FakeCalendarPort()
+        let settings = Data(#"{"pollSeconds":60}"#.utf8)
+        try await port.configure(source: eventKit, settings: settings)
+
+        let call = try XCTUnwrap(port.callLog.calls(port: "CalendarPort").first {
+            $0.method == "configure(source:settings:)"
+        })
+        XCTAssertEqual(call.arguments, [eventKit.rawValue, settings.base64EncodedString()])
     }
 }
