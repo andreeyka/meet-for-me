@@ -214,42 +214,23 @@ final class JobQueueEngineReadinessTests: XCTestCase {
         try await rig.queue.register(handler: handler)
 
         rig.catalog.setMissingModels([], for: "ready")
-        let readyId = try await rig.queue.submit(makeSubmission(
-            payload: .transcribe(recordingId: UUID(), profileId: "ready", language: nil),
-            requiresProfileReady: "ready"
-        ))
+        let readyId = try await submitTranscribeReady(rig, profileId: "ready", requiresProfileReady: "ready")
 
-        let descriptor = ModelDescriptor(
-            id: "m", version: "1", role: .asr, engine: "e", runtime: .coreml, displayName: "M",
-            description: "d", sizeBytes: 1, languages: [], files: [], quantization: nil,
-            minChip: .m1, minRAMGB: 1, recommendedFor: []
-        )
-        rig.catalog.setMissingModels([descriptor], for: "missing")
-        let blockedId = try await rig.queue.submit(makeSubmission(
-            payload: .transcribe(recordingId: UUID(), profileId: "missing", language: nil),
-            requiresProfileReady: "missing"
-        ))
+        rig.catalog.setMissingModels([Self.missingDescriptor], for: "missing")
+        let blockedId = try await submitTranscribeReady(rig, profileId: "missing", requiresProfileReady: "missing")
 
         rig.catalog.setFailure(StubModelCatalogError.unknownProfile(id: "gone"), for: "gone")
-        let unknownId = try await rig.queue.submit(makeSubmission(
-            payload: .transcribe(recordingId: UUID(), profileId: "gone", language: nil),
-            requiresProfileReady: "gone"
-        ))
+        let unknownId = try await submitTranscribeReady(rig, profileId: "gone", requiresProfileReady: "gone")
 
         // Усиление по возврату РП (MEE-350): «любой брошенный отказ каталога — выполнено»
         // (§1.1) — не только `unknownProfile`; второй, иначе устроенный случай отказа
-        // (`.other`, не связанный с профилем вовсе) обязан вести к тому же исходу, а не
-        // проверяться предположением по одному-единственному случаю.
+        // (`.other`, не связанный с профилем вовсе) обязан вести к тому же исходу.
         rig.catalog.setFailure(StubModelCatalogError.other("сеть каталога недоступна"), for: "other-error")
-        let otherErrorId = try await rig.queue.submit(makeSubmission(
-            payload: .transcribe(recordingId: UUID(), profileId: "other-error", language: nil),
-            requiresProfileReady: "other-error"
-        ))
+        let otherErrorId = try await submitTranscribeReady(
+            rig, profileId: "other-error", requiresProfileReady: "other-error"
+        )
 
-        let noProfileId = try await rig.queue.submit(makeSubmission(
-            payload: .transcribe(recordingId: UUID(), profileId: "unused", language: nil),
-            requiresProfileReady: nil
-        ))
+        let noProfileId = try await submitTranscribeReady(rig, profileId: "unused", requiresProfileReady: nil)
 
         let before = rig.catalog.callCount
         await rig.queue.start()
@@ -276,6 +257,23 @@ final class JobQueueEngineReadinessTests: XCTestCase {
         let noProfileJob = try await rig.repository.job(id: noProfileId)
         XCTAssertNotEqual(noProfileJob?.status, .pending, "requiresProfileReady == nil не требует каталога")
     }
+
+    /// Оснастка К57 — вынесена из тела теста, чтобы уложиться в `function_body_length`
+    /// (50 строк): пять однотипных подач отличались только `profileId`.
+    private func submitTranscribeReady(
+        _ rig: JobQueueTestRig, profileId: String, requiresProfileReady: String?
+    ) async throws -> UUID {
+        try await rig.queue.submit(makeSubmission(
+            payload: .transcribe(recordingId: UUID(), profileId: profileId, language: nil),
+            requiresProfileReady: requiresProfileReady
+        ))
+    }
+
+    private static let missingDescriptor = ModelDescriptor(
+        id: "m", version: "1", role: .asr, engine: "e", runtime: .coreml, displayName: "M",
+        description: "d", sizeBytes: 1, languages: [], files: [], quantization: nil,
+        minChip: .m1, minRAMGB: 1, recommendedFor: []
+    )
 
     /// К58: дорогой предикат не вычисляется, если условие раньше не пройдено; не чаще
     /// одного вызова на различный `profileId` за пересмотр.

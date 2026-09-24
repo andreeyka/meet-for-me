@@ -122,10 +122,19 @@ final class JobQueueEngineCancelEventsTests: XCTestCase {
     /// `started → (progressed*) → одно из succeeded|failed|cancelled`.
     ///
     /// Возврат РП по MEE-350: прежний `drain` останавливался на ПЕРВОМ финальном событии
-    /// задачи — `finals.count == 1` было верно всегда, независимо от реализации. Теперь
-    /// после `waitUntilIdle()` поток дочитывается ДО КОНЦА — с таймаутом на каждый
-    /// `next()` (см. `drainUntilQuiet`), а не бесконечным ожиданием: `AsyncStream`, которую
-    /// никто не `finish()`ит, иначе повторила бы зависание CI по этой же ветке.
+    /// задачи — `finals.count == 1` было верно всегда, независимо от реализации.
+    ///
+    /// Первая попытка чинить таймаутом на каждый `next()` (гонка `Task` через отмену)
+    /// упала на этой же ветке в CI неверным порядком событий (первым own-событием
+    /// оказался не `started`) — без компилятора под рукой причину гонки внутри отмены
+    /// `AsyncStream.AsyncIterator` не установить надёжно, и снова рисковать зависанием
+    /// той же веткой не стоило. Взамен — фиксированный счётчик `submitted`+`started`+
+    /// финал (три события на сценарий), а не таймаут: после `waitUntilIdle()` все три уже
+    /// лежат в буфере (`JobEventBroadcaster.publish` — синхронный `continuation.yield`), и
+    /// ни один сценарий не задаёт `setProgressSteps` — по исходнику `FakeJobHandler.run`
+    /// `progress` без него не зовётся вовсе. Читаем ВЕСЬ пакет, а не «до первого
+    /// подходящего»: `finals.count` считается по всем трём, а не по одному, на котором
+    /// прежний `drain` останавливался, — ровно то, что было названо тривиальным.
     func test_k68_exactlyOneFinalSequencePerExecutedJob() async throws {
         let rig = JobQueueTestRig()
         let handler = FakeJobHandler(type: .transcode)
@@ -133,30 +142,30 @@ final class JobQueueEngineCancelEventsTests: XCTestCase {
         let stream = rig.queue.events()
         var iterator = stream.makeAsyncIterator()
 
-        // Успех.
+        // Успех: submitted + started + succeeded.
         handler.setOutcome(.success)
         let successId = try await rig.queue.submit(makeSubmission())
         await rig.queue.start()
         await rig.queue.waitUntilIdle()
-        var events = await drainUntilQuiet(&iterator)
+        var events = await drainExactly(&iterator, count: 3)
         assertSingleFinalSequence(events, jobId: successId, final: .succeeded)
 
-        // Retry, доведённый до failed.
+        // Retry, доведённый до failed, — теми же тремя.
         handler.setOutcome(.retry(after: 1, error: "e"))
         let retryId = try await rig.queue.submit(makeSubmission(maxAttempts: 1))
         await rig.queue.start()
         await rig.queue.waitUntilIdle()
-        events = await drainUntilQuiet(&iterator)
+        events = await drainExactly(&iterator, count: 3)
         assertSingleFinalSequence(events, jobId: retryId, final: .failed)
 
-        // Отмена во время исполнения.
+        // Отмена во время исполнения — теми же тремя (сам `cancel()` ничего не публикует).
         handler.setOutcome(.success)
         handler.workLong(seconds: 0.3)
         let cancelId = try await rig.queue.submit(makeSubmission(priority: 5))
         await rig.queue.start()
         try await rig.queue.cancel(jobId: cancelId)
         await rig.queue.waitUntilIdle()
-        events = await drainUntilQuiet(&iterator)
+        events = await drainExactly(&iterator, count: 3)
         assertSingleFinalSequence(events, jobId: cancelId, final: .cancelled)
     }
 
@@ -184,40 +193,22 @@ final class JobQueueEngineCancelEventsTests: XCTestCase {
 
     // MARK: - Оснастка
 
-    /// Обёртка-класс вокруг итератора — только чтобы избежать «mutable capture of inout
-    /// parameter is not allowed in concurrently-executing code» при захвате в `Task { }`
-    /// (тот же приём, что и в `JobQueueTestRig`): захватывать можно ссылочный тип, не сам
-    /// `inout`-параметр.
-    private final class EventIteratorBox: @unchecked Sendable {
-        var iterator: AsyncStream<JobEvent>.AsyncIterator
-        init(_ iterator: AsyncStream<JobEvent>.AsyncIterator) { self.iterator = iterator }
-        func next() async -> JobEvent? { await iterator.next() }
-    }
-
-    /// Дочитывает поток ДО КОНЦА текущей партии — то есть пока события идут; останавливается,
-    /// как только `next()` не возвращает событие за `timeout` секунд, а не на первом
-    /// «интересном» событии (возврат РП по MEE-350, К68). Таймаут — реальные часы через
-    /// `Task.sleep`, не `ManualClock`: события публикуются фоновыми `Task`, не продвигаются
-    /// вручную. Поток никогда не `finish()`ится, поэтому голый `await iterator.next()` без
-    /// таймаута рискует зависнуть навсегда — тот же класс проблемы, что уже вызывал зависания
-    /// CI раньше в этой сессии.
-    private func drainUntilQuiet(
-        _ iterator: inout AsyncStream<JobEvent>.AsyncIterator, timeout: Double = 0.5
+    /// Читает РОВНО `count` событий — весь объявленный пакет сценария, а не «до первого
+    /// подходящего» (возврат РП по MEE-350, К68). Без таймаута НАРОЧНО: счётчик — не
+    /// приблизительная граница, а число событий, которое сценарий действительно публикует
+    /// (см. вызовы в К68) — после `waitUntilIdle()` они уже все лежат в буфере
+    /// `AsyncStream` (`JobEventBroadcaster.publish` — синхронный `continuation.yield`), и
+    /// лишнего `next()` сверх этого числа здесь нет. `AsyncStream`, которую никто не
+    /// `finish()`ит, на лишний `next()` не вернёт `nil` — виснет навсегда, поэтому счётчик
+    /// обязан РОВНО совпадать, а не превышать его «на всякий случай».
+    private func drainExactly(
+        _ iterator: inout AsyncStream<JobEvent>.AsyncIterator, count: Int
     ) async -> [JobEvent] {
-        let box = EventIteratorBox(iterator)
         var collected: [JobEvent] = []
-        while true {
-            let nextTask = Task { await box.next() }
-            let timeoutTask = Task {
-                try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
-                nextTask.cancel()
-            }
-            let event = await nextTask.value
-            timeoutTask.cancel()
-            guard let event else { break }
+        for _ in 0..<count {
+            guard let event = await iterator.next() else { break }
             collected.append(event)
         }
-        iterator = box.iterator
         return collected
     }
 
