@@ -17,15 +17,7 @@ final class ControlSurfaceEntryPointsTests: XCTestCase {
     func test_k66_stopFansOutShutdownToAllInitializedSourcesAndAwaitsAll() async throws {
         let ids = ["src-1", "src-2", "src-3"]
         let harness = Harness(sourceIds: ids)
-        harness.connectorRepository.seed(ids.map { Harness.record(id: $0) })
-        let connectors = ids.map { harness.connector($0) }
-        for (index, connector) in connectors.enumerated() {
-            connector.setInitializeResult(capabilities: ConnectorCapabilities(
-                deltaSync: false, push: false, attendees: true, conference: true, auth: .none
-            ))
-            connector.setListCalendars([])
-            _ = try await harness.hub.listCalendars(source: CalendarSourceId(rawValue: ids[index]))
-        }
+        let connectors = try await harness.seedAndInitialize(ids)
 
         let delayedConnector = connectors[2]
         delayedConnector.hang(.shutdown)
@@ -138,18 +130,8 @@ final class ControlSurfaceEntryPointsTests: XCTestCase {
             deltaSync: true, push: false, attendees: true, conference: true, auth: .none
         ))
         let base = Date(timeIntervalSince1970: 1_700_000_000)
-        let staleVersion = try MeetingEventPayload(
-            sourceConnectorId: "eventkit", externalId: "evt-changing", icalUid: nil, title: "Stale",
-            start: base, end: base.addingTimeInterval(1_800), timeZone: "UTC", isAllDay: false,
-            isCancelled: false, organizer: nil, attendees: [], location: nil, bodyText: nil,
-            conference: nil, lastModified: base
-        )
-        let freshVersion = try MeetingEventPayload(
-            sourceConnectorId: "eventkit", externalId: "evt-changing", icalUid: nil, title: "Fresh",
-            start: base, end: base.addingTimeInterval(1_800), timeZone: "UTC", isAllDay: false,
-            isCancelled: false, organizer: nil, attendees: [], location: nil, bodyText: nil,
-            conference: nil, lastModified: base.addingTimeInterval(60)
-        )
+        let staleVersion = try Self.changingVersion("Stale", base: base, lastModified: base)
+        let freshVersion = try Self.changingVersion("Fresh", base: base, lastModified: base.addingTimeInterval(60))
         connector.setFetchChanges(ChangeBatch(
             events: [staleVersion], deletedExternalIds: [], cursor: "cursor-1", resetRequired: false
         ))
@@ -221,5 +203,16 @@ final class ControlSurfaceEntryPointsTests: XCTestCase {
             .last { $0.method == "fetchChanges" }
         guard let changesCall = fetchChangesCall else { XCTFail("fetchChanges не вызван"); return }
         XCTAssertEqual(Array(changesCall.arguments.suffix(2)), ["cal-1", "cal-3"])
+    }
+
+    // MARK: - Оснастка
+
+    private static func changingVersion(_ title: String, base: Date, lastModified: Date) throws -> MeetingEventPayload {
+        try MeetingEventPayload(
+            sourceConnectorId: "eventkit", externalId: "evt-changing", icalUid: nil, title: title,
+            start: base, end: base.addingTimeInterval(1_800), timeZone: "UTC", isAllDay: false,
+            isCancelled: false, organizer: nil, attendees: [], location: nil, bodyText: nil,
+            conference: nil, lastModified: lastModified
+        )
     }
 }

@@ -172,6 +172,22 @@ struct Harness {
         return connector
     }
 
+    /// К66/К75 (fan-out по нескольким источникам): сеет записи, инициализирует каждый
+    /// источник через listCalendars() — общий пролог, вынесенный из обоих тестов, чтобы
+    /// не раздувать их тела сверх function_body_length.
+    func seedAndInitialize(_ ids: [String]) async throws -> [FakeCalendarConnector] {
+        connectorRepository.seed(ids.map { Harness.record(id: $0) })
+        let fakes = ids.map { connector($0) }
+        for (index, fake) in fakes.enumerated() {
+            fake.setInitializeResult(capabilities: ConnectorCapabilities(
+                deltaSync: false, push: false, attendees: true, conference: true, auth: .none
+            ))
+            fake.setListCalendars([])
+            _ = try await hub.listCalendars(source: CalendarSourceId(rawValue: ids[index]))
+        }
+        return fakes
+    }
+
     static func record(
         id: String, cursor: String? = nil, selectedCalendarIds: [String] = [], lastSyncAt: Date? = nil
     ) -> ConnectorRecord {

@@ -88,15 +88,7 @@ final class SourceRoutingTests: XCTestCase {
     func test_k75_stopIdempotentAwaitsAllLazyReconnectAfter() async throws {
         let ids = ["src-1", "src-2", "src-3"]
         let harness = Harness(sourceIds: ids)
-        harness.connectorRepository.seed(ids.map { Harness.record(id: $0) })
-        let connectors = ids.map { harness.connector($0) }
-        for (index, connector) in connectors.enumerated() {
-            connector.setInitializeResult(capabilities: ConnectorCapabilities(
-                deltaSync: false, push: false, attendees: true, conference: true, auth: .none
-            ))
-            connector.setListCalendars([])
-            _ = try await harness.hub.listCalendars(source: CalendarSourceId(rawValue: ids[index]))
-        }
+        let connectors = try await harness.seedAndInitialize(ids)
 
         // Вход Б (ожидание всех): один источник задержан управляемо — stop() не возвращается
         // раньше, чем отработали все три.
