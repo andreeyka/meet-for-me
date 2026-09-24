@@ -24,10 +24,6 @@ public struct DiarizationResult: Codable, Equatable, Sendable, DomainValidatable
             try validate()
         }
 
-        enum CodingKeys: String, CodingKey {
-            case startMs, endMs, cluster
-        }
-
         public init(from decoder: Decoder) throws {
             let box = try decoder.container(keyedBy: CodingKeys.self)
             startMs = try box.decodeBounded(Int.self, forKey: .startMs)
@@ -65,6 +61,17 @@ public struct DiarizationResult: Codable, Equatable, Sendable, DomainValidatable
     public func validate() throws {
         for turn in turns { try turn.validate() }
         for speaker in speakers { try speaker.validate() }
+    }
+}
+
+/// Вынесено из тела `Turn` тем же приёмом, что `TranscriptNested.swift` (DomainCore) для
+/// `Transcript.Word`/`Segment`/`Speaker`: `CodingKeys`, объявленный ВНУТРИ `Turn`, стоял бы
+/// вторым уровнем вложенности (`DiarizationResult.Turn.CodingKeys`) — правило SwiftLint
+/// `nesting` (--strict) держит предел в один уровень, а сам `Turn` — уже первый уровень,
+/// названный контрактом (C-011 v5 §3), не мой выбор.
+extension DiarizationResult.Turn {
+    enum CodingKeys: String, CodingKey {
+        case startMs, endMs, cluster
     }
 }
 
