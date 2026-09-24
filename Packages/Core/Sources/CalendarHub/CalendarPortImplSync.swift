@@ -293,44 +293,182 @@ extension CalendarPortImpl {
         }
     }
 
-    /// Назначение id по правилу слияния C-005 п.4 (признаки а/б — реализует К17-К19, К29).
-    /// Слияние скаляров/`attendees` по п.2-3 в честном виде (fallback по возрастанию
-    /// `sourceConnectorId` для каждого отдельного поля, К20-К24, К28) НЕ реализовано —
-    /// `MeetingSource` не хранит per-source сырые поля (IR-126/MEE-372, не решено
-    /// архитектором); здесь пока «последний пишет поверх» на уровне СКАЛЯРОВ целиком. Тестов
-    /// на К17-К19/К20-К24/К28/К29 по-прежнему нет — задача остаётся открытой (возврат РП,
-    /// приёмка #94, п. 2); межсинхронизационное честное слияние в любом случае ждёт IR-126.
+    /// Инв. 11 (C-005, MEE-385): слияние ДВУХ входящих событий ОДНОЙ встречи (тот же дедуп-
+    /// ключ) сериализуется — очередь задач на ключ (`mergeTail`), атомарно или строгим
+    /// порядком, так что конкурентное чтение-запись двух таких событий не теряет ни одно.
+    /// Разные встречи сливаются независимо и параллельно, как и раньше — нет записи в
+    /// словаре под их ключом, нет и ожидания. `TaskGroup` (`sync(trigger:)`, один `Task` на
+    /// источник) плюс реентерабельность актора на `await` иначе могут перекрыть запись
+    /// одного входящего события записью другого, ещё не слитого с ним.
+    private func serialized<T: Sendable>(
+        dedupKey: DedupKey?, _ body: @Sendable @escaping () async throws -> T
+    ) async throws -> T {
+        guard let dedupKey else { return try await body() }
+        let previous = mergeTail[dedupKey]
+        // Task<T, Error> (обычный, «сырой» throws), не Task<Result<T, Error>, Never>: голый
+        // `Error` не Sendable, Result<T, Error> с ним тоже не Sendable — Task этого от
+        // Success (T) требует, но не от Failure (`Task<Success, Failure> where Success:
+        // Sendable, Failure: Error` — без Sendable у Failure), так что throws-задача сама по
+        // себе, без ручной упаковки в Result, — верный и более простой путь.
+        let task = Task<T, Error> {
+            _ = await previous?.value
+            return try await body()
+        }
+        mergeTail[dedupKey] = Task { _ = try? await task.value }
+        return try await task.value
+    }
+
+    /// Назначение id по правилу слияния C-005 п.4 (признаки а/б). Слияние скаляров/
+    /// `attendees` по шагам 2-3 — теперь честное, не «последний пишет поверх»:
+    /// `MeetingSource.payload` (IR-126, C-010 v18 инв. 31, MEE-384) хранит снимок каждого
+    /// источника, перенесённый между циклами дословно (инв. 10 C-005) — свежий `payload`
+    /// заменяет снимок ТОЛЬКО своей пары (`sourceConnectorId`/`externalId`), остальные
+    /// переносятся как есть из уже сохранённого состояния, не пересобираются заново со
+    /// значением по умолчанию `nil`.
     @discardableResult
     private func applyIncoming(payload: MeetingEventPayload) async throws -> Bool {
         let provisional = try payload.assigningId(UUID())
         let key = DedupKey.make(from: provisional)
+        return try await serialized(dedupKey: key) {
+            try await self.mergeIncoming(payload: payload, dedupKey: key)
+        }
+    }
+
+    private func mergeIncoming(payload: MeetingEventPayload, dedupKey: DedupKey?) async throws -> Bool {
         var winner: MeetingRecord?
-        if let key {
-            winner = try await meetingRepository.meeting(dedupKey: key)
+        if let dedupKey {
+            winner = try await meetingRepository.meeting(dedupKey: dedupKey)
         }
         if winner == nil {
             winner = try await meetingRepository.meeting(
                 sourceConnectorId: payload.sourceConnectorId, externalId: payload.externalId
             )
         }
-        let id = winner?.event.id ?? UUID()
-        let resolvedEvent = try payload.assigningId(id)
+
         let newSource = MeetingSource(
             sourceConnectorId: payload.sourceConnectorId, externalId: payload.externalId,
-            icalUid: payload.icalUid, lastModified: payload.lastModified
+            icalUid: payload.icalUid, lastModified: payload.lastModified, payload: payload
         )
         var sources = winner?.sources.filter {
             !($0.sourceConnectorId == newSource.sourceConnectorId && $0.externalId == newSource.externalId)
         } ?? []
         sources.append(newSource)
+
+        let id = winner?.event.id ?? UUID()
+        let merged = try Self.merge(sources: sources, id: id)
         try await meetingRepository.save(
             MeetingRecord(
-                event: resolvedEvent, dedupKey: DedupKey.make(from: resolvedEvent),
+                event: merged, dedupKey: DedupKey.make(from: merged),
                 status: winner?.status ?? .ready, sources: sources
             )
         )
-        emit(.upserted([resolvedEvent]))
+        emit(.upserted([merged]))
         return true
+    }
+
+    /// Правило слияния C-005, шаги 1-6, дословно (инв. 10 — то же правило действует и МЕЖДУ
+    /// циклами, на снимках, а не только на пакете одного цикла). Разбито на несколько
+    /// маленьких функций — `function_body_length`, тот же приём, что уже стоит по всему
+    /// модулю (`Harness.seedAndInitialize` и соседи, MEE-362 ч.2).
+    private static func merge(sources: [MeetingSource], id: UUID) throws -> MeetingEvent {
+        let identityWinner = Self.identityWinner(among: sources)
+        let (contentWinner, otherPayloads) = try Self.contentWinner(among: sources, identityWinner: identityWinner)
+        let attendees = Self.mergedAttendees(winner: contentWinner, others: otherPayloads)
+
+        // Шаг 2: скаляр победителя содержимого; nil (только у четырёх опциональных полей —
+        // остальные шесть не optional в MeetingEventPayload и nil не бывают) — первое не-nil
+        // значение остальных источников в порядке возрастания sourceConnectorId.
+        func firstNonNil<Value>(_ ownValue: Value?, _ pick: (MeetingEventPayload) -> Value?) -> Value? {
+            ownValue ?? otherPayloads.lazy.compactMap(pick).first
+        }
+
+        return try MeetingEvent(
+            id: id,
+            // Шаг 6/инв. 10: sourceConnectorId/externalId/icalUid — identity, от победителя
+            // шага 1, независимо от того, есть ли у него снимок содержимого.
+            sourceConnectorId: identityWinner.sourceConnectorId,
+            externalId: identityWinner.externalId,
+            icalUid: identityWinner.icalUid,
+            title: contentWinner.title,
+            start: contentWinner.start,
+            end: contentWinner.end,
+            timeZone: contentWinner.timeZone,
+            isAllDay: contentWinner.isAllDay,
+            isCancelled: contentWinner.isCancelled,
+            organizer: firstNonNil(contentWinner.organizer) { $0.organizer },
+            attendees: attendees,
+            location: firstNonNil(contentWinner.location) { $0.location },
+            bodyText: firstNonNil(contentWinner.bodyText) { $0.bodyText },
+            conference: firstNonNil(contentWinner.conference) { $0.conference },
+            // Шаг 5: lastModified результата — максимум по слитым событиям, то есть ровно
+            // lastModified победителя шага 1 (он и есть максимум по построению шага 1).
+            lastModified: identityWinner.lastModified
+        )
+    }
+
+    /// Шаг 1: наибольший `lastModified`, тай-брейк — лексикографически меньший
+    /// `sourceConnectorId`. Участвуют ВСЕ источники, со снимком или без (инв. 10) — identity
+    /// известна независимо от наличия снимка содержимого.
+    private static func identityWinner(among sources: [MeetingSource]) -> MeetingSource {
+        sources.min { lhs, rhs in
+            lhs.lastModified != rhs.lastModified
+                ? lhs.lastModified > rhs.lastModified
+                : lhs.sourceConnectorId < rhs.sourceConnectorId
+        }!
+    }
+
+    /// Источники со снимком — вклад в шаги 2-3 (инв. 10: строка без снимка в шаги 2-3 не
+    /// вкладывается вовсе). Победитель СОДЕРЖИМОГО — снимок победителя identity, если он
+    /// есть; иначе первый источник со снимком в порядке возрастания `sourceConnectorId` — та
+    /// же подстановка, что нужна внутри шага 2 на отдельном nil-поле победителя, только сразу
+    /// на все десять полей разом.
+    private static func contentWinner(
+        among sources: [MeetingSource], identityWinner: MeetingSource
+    ) throws -> (winner: MeetingEventPayload, others: [MeetingEventPayload]) {
+        let withPayload = sources.filter { $0.payload != nil }.sorted { $0.sourceConnectorId < $1.sourceConnectorId }
+        let winnerConnectorId: String
+        let winnerPayload: MeetingEventPayload
+        if let payload = identityWinner.payload {
+            winnerPayload = payload
+            winnerConnectorId = identityWinner.sourceConnectorId
+        } else if let first = withPayload.first, let payload = first.payload {
+            winnerPayload = payload
+            winnerConnectorId = first.sourceConnectorId
+        } else {
+            // Не случается из applyIncoming (свежий payload — всегда хотя бы один снимок) —
+            // функция остаётся тотальной, а не падает безмолвным крашем на пустом входе.
+            throw StorageError.constraintViolation(message: "слияние без единого снимка невозможно (инв. 10 C-005)")
+        }
+        let others = withPayload.filter { $0.sourceConnectorId != winnerConnectorId }.compactMap(\.payload)
+        return (winnerPayload, others)
+    }
+
+    /// Шаг 3: объединение по email (на совпадении побеждает запись победителя содержимого —
+    /// он идёт в списке первым); участник без email добавляется, только если его `name` не
+    /// совпадает с уже добавленным.
+    private static func mergedAttendees(
+        winner: MeetingEventPayload, others: [MeetingEventPayload]
+    ) -> [MeetingEvent.Attendee] {
+        var attendees: [MeetingEvent.Attendee] = []
+        var seenEmails: Set<String> = []
+        var seenNames: Set<String> = []
+        for payload in [winner] + others {
+            for attendee in payload.attendees {
+                if let email = attendee.person.email {
+                    guard !seenEmails.contains(email) else { continue }
+                    seenEmails.insert(email)
+                    attendees.append(attendee)
+                    if let name = attendee.person.name { seenNames.insert(name) }
+                } else if let name = attendee.person.name {
+                    guard !seenNames.contains(name) else { continue }
+                    seenNames.insert(name)
+                    attendees.append(attendee)
+                } else {
+                    attendees.append(attendee)
+                }
+            }
+        }
+        return attendees
     }
 
     private func applyDeletedExternalId(source: CalendarSourceId, externalId: String) async throws -> Bool {

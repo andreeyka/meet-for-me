@@ -42,6 +42,13 @@ public actor CalendarPortImpl: CalendarPort {
     /// общую задачу за остальных — свой предохранитель на вызывающего, не на саму задачу
     /// (`CalendarPortImplSync.swift`, `syncOne`/`awaitSharedSync`).
     var syncWaiters: [CalendarSourceId: [UUID: CheckedContinuation<CalendarSyncResult, Never>]] = [:]
+    /// Инв. 11 (C-005, MEE-385): слияние двух входящих событий ОДНОЙ встречи (тот же дедуп-
+    /// ключ) сериализуется — очередь задач на ключ, не лок в обычном смысле (актор и так
+    /// однопоточен между `await`; проблема — реентерабельность НА `await`, не параллелизм
+    /// потоков). Разные встречи сливаются независимо — записи в словаре нет, ожидания нет
+    /// (`CalendarPortImplSync.swift`, `serialized(dedupKey:_:)`). Не `private` — та же
+    /// причина, что у `inFlightSync`/`syncWaiters` (см. комментарий над ними).
+    var mergeTail: [DedupKey: Task<Void, Never>] = [:]
     private let changeHub = CalendarChangeHub()
     private var scheduleTask: Task<Void, Never>?
 
