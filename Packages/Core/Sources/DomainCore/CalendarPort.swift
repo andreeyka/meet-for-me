@@ -140,6 +140,14 @@ public enum DedupKey: Hashable, Codable, Sendable {
         return nil
     }
 
+    // СТРОКА: возврат РП по MEE-352 — C-005 расходится сама с собой на формуле инварианта 3.
+    // Текст говорит «округление ВНИЗ до минуты»; записанная тут же формула
+    // `Int(x / 60) * 60` — это усечение К НУЛЮ, а не floor: на отрицательном
+    // `timeIntervalSince1970` (даты до 1970 года) они дают разные числа (-100 → -60
+    // усечением, -120 floor'ом). Выбран floor — он совпадает с текстом «вниз», а формула,
+    // скорее всего, писалась не думая об отрицательных `x`. Устраняет архитектор
+    // (IR-123, MEE-359); если ответ — усечение, правка здесь однострочная
+    // (`.rounded(.down)` → без него, `Int(x / 60) * 60` дословно).
     /// Инвариант 3: округление ВНИЗ до минуты — `.rounded(.down)`, не `Int(...)` усечением
     /// к нулю: на отрицательном `timeIntervalSince1970` (даты до 1970 года) это разные
     /// числа, а «вниз» здесь значит «дальше от нуля», не «ближе». `Int(...)` не падает: по
@@ -152,8 +160,16 @@ public enum DedupKey: Hashable, Codable, Sendable {
     /// Шесть шагов «Определения» дословно и по порядку. `joinUrl` уже проверен
     /// `Conference.validate()` абсолютным `https` URL с хостом (C-005) — здесь только
     /// нормализация, не повторная проверка.
+    ///
+    /// Возврат РП по MEE-352: путь берётся `percentEncodedPath`, не `path` — тот молча
+    /// раскодирует `%3a`/`%2F` (`:`/`/`), а у Teams в пути ровно такие последовательности
+    /// (`19%3ameeting_…%40thread.v2`), и раскодированный путь — уже другой ключ. Окончательный
+    /// вид пути (кодировать ли что-то ЗАНОВО) решит архитектор (тот же IR-123, MEE-359);
+    /// здесь — путь как он есть в исходной строке, ничего не меняя.
     private static func normalizedJoinURL(_ url: URL) -> String {
-        let components = URLComponents(url: url, resolvingAgainstBaseURL: false) ?? URLComponents()
+        guard let components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
+            preconditionFailure("joinUrl не разбирается в URLComponents — Conference.validate() это уже исключил")
+        }
         let scheme = (components.scheme ?? "").lowercased()
         var host = (components.host ?? "").lowercased()
         if host.hasPrefix("www.") {
@@ -161,7 +177,7 @@ public enum DedupKey: Hashable, Codable, Sendable {
         }
         let defaultPort = scheme == "https" ? 443 : nil
         let port = components.port == defaultPort ? nil : components.port
-        var path = components.path
+        var path = components.percentEncodedPath
         if path.hasSuffix("/") {
             path.removeLast()
         }
