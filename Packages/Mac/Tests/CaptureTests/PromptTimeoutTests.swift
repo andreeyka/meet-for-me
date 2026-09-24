@@ -93,6 +93,17 @@ final class PromptTimeoutTests: CaptureAsyncTestCase {
         let directory = try Harness.makeDirectory()
         let request = Harness.request(directory: directory, input: .none)
 
+        // §«Право на системный звук», п. 3: исход, пришедший после предела, всё равно публикуется
+        // `permissionObserved` — тем же путём, что и уложившийся в предел (возврат MEE-317, 24.09:
+        // прежде тест проверял только уничтожение tap, не сам факт публикации события).
+        let collector = Task { () -> CaptureEvent? in
+            for await event in harness.port.events() {
+                if case .permissionObserved = event { return event }
+            }
+            return nil
+        }
+        try await Task.sleep(nanoseconds: 10_000_000)
+
         async let started = harness.port.start(request)
         try await Task.sleep(nanoseconds: 20_000_000)
         harness.deadline.expireNow()
@@ -107,6 +118,11 @@ final class PromptTimeoutTests: CaptureAsyncTestCase {
 
         XCTAssertEqual(harness.gateway.releasedTaps, [lateTap], "tap, пришедший с опозданием, уничтожен")
         XCTAssertEqual(harness.gateway.aggregateBuildCount, 0, "сеанс сам по себе не поднялся")
+
+        guard case .permissionObserved(let kind, let status)? = await collector.value
+        else { return XCTFail("ожидался permissionObserved на позднем пути") }
+        XCTAssertEqual(kind, .systemAudioRecording)
+        XCTAssertEqual(status, .granted, "поздний tap создался — исход тот же, что у уложившегося в предел")
     }
 
     func test_k17_lateMicrophoneGrantIsClosed() async throws {

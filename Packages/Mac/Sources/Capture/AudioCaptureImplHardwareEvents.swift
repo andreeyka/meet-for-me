@@ -14,9 +14,14 @@ extension AudioCaptureImpl {
         case .microphoneChanged(let handle, let atHostTime):
             guard case .systemDefault = session.currentInputSelection else { return }
             beginRebuild(session, reason: .rebuild, newMicrophone: handle, atHostTime: atHostTime)
-        case .microphoneFormatChanged(_, let atHostTime):
+        case .microphoneFormatChanged(let channelCount, let atHostTime):
+            let sampleRate = session.request.micFormat.sampleRate
+            let oldFormat = TrackFormat(sampleRate: sampleRate,
+                                        channelCount: session.currentMicrophoneChannelCount ?? channelCount)
+            let newFormat = TrackFormat(sampleRate: sampleRate, channelCount: channelCount)
+            session.currentMicrophoneChannelCount = channelCount
             beginRebuild(session, reason: .rebuild, newMicrophone: nil, atHostTime: atHostTime)
-            emit(.inputFormatChanged(from: session.request.micFormat, to: session.request.micFormat))
+            emit(.inputFormatChanged(from: oldFormat, to: newFormat))
         case .tapInvalidated(let atHostTime):
             beginRebuild(session, reason: .sourceGone, newMicrophone: nil, atHostTime: atHostTime)
         case .aggregateDied(let atHostTime):
