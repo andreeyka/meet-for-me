@@ -1,6 +1,32 @@
 # Карта модулей
 
-Версия 1.9. Утверждена пользователем (MEE-1). Источник: `docs/architecture.md` v0.7.
+Версия 1.11. Утверждена пользователем (MEE-1). Источник: `docs/architecture.md` v0.7.
+Изменение против v1.10: MEE-353 — владельцем модуля `calendar-hub` становится DEV-1, решение РП.
+Довод: у DEV-1 закончились собственные модули (`capture`, `permissions`, `detector`,
+`calendar-eventkit` реализованы), у DEV-2 своя очередь (`JobQueue`, IR-118 в коде, затем
+`engine-xpc`/`gigaam`/`model-manager`/`attribution`); DEV-1 только что реализовал C-006 со стороны
+коннектора и знает протокол, а `calendar-hub` лежит в `Packages/Core` (Linux + macOS) — тому, что
+DEV-1 работает на Mac, это не мешает. Правлены два места: строка `calendar-hub` перенесена из ряда
+DEV-2 в ряд DEV-1 в таблице «Владельцы и среда» (§2), и «Владелец: DEV-2» → «Владелец: DEV-1» в
+разделе «МОДУЛЬ: calendar-hub». Проверено: больше нигде в файле владелец `calendar-hub` не назван
+(таблица контрактов §4 называет его только потребителем, не владельцем; раздел «МОДУЛЬ: domain-core»
+и дерево зависимостей §3 владельцев модулей не упоминают вовсе). Заодно: (а) «решение РП» у харнесса
+`CalendarEventKitManualHarness` (раздел calendar-eventkit) исправлено на «решение архитектора» —
+решение по MEE-351 принимала эта сессия, не РП напрямую (в отличие от `CaptureManualHarness`/MEE-316,
+где сессия РП сама действовала в роли архитектора — там атрибуция верна и не тронута); (б) C-014
+переиздан v6 (Linear, MEE-22) — уточнение формулировки в «Цене» v5 (см. отчёт MEE-353). Цена всех
+трёх правок — ноль кода: перенос владения не меняет ни одной строки Swift, только то, чья сессия
+её пишет.
+Изменение против v1.9: IR-119 (MEE-351) — новый исполняемый таргет `CalendarEventKitManualHarness`
+в `Packages/Mac/Package.swift`, носитель ручных М1/М2 плана MEE-343 §5 (перечень MEE-339, раздел
+«З»), тем же приёмом, что `CaptureManualHarness` у `capture` (MEE-316): каркас `main.swift` без
+кода, зависит только от `DomainCore` — в отличие от `CaptureManualHarness` этому харнессу не нужен
+ни один тип модуля `CalendarEventKit`, он вызывает `EKEventStore` напрямую, в обход модуля. Каталог
+`Packages/Mac/Sources/CalendarEventKitManualHarness/` назван в разделе «МОДУЛЬ: calendar-eventkit»
+ниже, тем же приёмом, каким раздел «МОДУЛЬ: capture» называет свой харнесс. Код харнесса пишет
+DEV-1 в задаче на его реализацию. Издано веткой PR #74 поверх ветки PR #69 (IR-118, ещё не влит на
+момент этой записи) — порядок слияния: сперва #69, затем #74 (или #74 ребейзится на main после
+слияния #69, если #74 сольётся первым).
 Изменение против v1.8: третий возврат РП по IR-118 (MEE-348) — абзац v1.8 ниже назвал составным
 корнем `C-016`. Это неверно: `C-016` — фасад приложения для UI (см. таблицу контрактов и раздел
 «МОДУЛЬ: app-ui» ниже), составной корень — сам `app-ui` («App-таргет… composition root»,
@@ -137,8 +163,8 @@ DEV-2 читает эти файлы из своих тестов, но **не �
 
 | Владелец | Где работает | Модули |
 | -- | -- | -- |
-| DEV-1 | сессия на Mac с Xcode | `capture`, `permissions`, `detector`, `calendar-eventkit` |
-| DEV-2 | облачная сессия (Linux) + проверка на macos-14 в CI; `storage` — только macos-14 (см. ниже, MEE-321) | `domain-core`, `storage`, `calendar-hub`, `engine-xpc`, `gigaam`, `model-manager`, `attribution`, `plugin-graph` |
+| DEV-1 | сессия на Mac с Xcode | `capture`, `permissions`, `detector`, `calendar-eventkit`, `calendar-hub` [v1.11, MEE-353] |
+| DEV-2 | облачная сессия (Linux) + проверка на macos-14 в CI; `storage` — только macos-14 (см. ниже, MEE-321) | `domain-core`, `storage`, `engine-xpc`, `gigaam`, `model-manager`, `attribution`, `plugin-graph` |
 | DEV-3 | сессия на Mac с Xcode | `app-ui` |
 | Архитектор | сессия РП | файлы сборки, `docs/`, контракты |
 
@@ -260,7 +286,12 @@ Mac. Работа `Core (Linux)` `storage` не проверяет вовсе; �
 ### МОДУЛЬ: calendar-eventkit
 - Слой: плагин (адаптер системного API)
 - Процесс: App (in-process, подписан тем же Team ID)
-- Каталоги: `Packages/Mac/Sources/CalendarEventKit/`, `Packages/Mac/Tests/CalendarEventKitTests/`
+- Каталоги: `Packages/Mac/Sources/CalendarEventKit/`, `Packages/Mac/Sources/CalendarEventKitManualHarness/`,
+  `Packages/Mac/Tests/CalendarEventKitTests/`
+  — `CalendarEventKitManualHarness` — исполняемый таргет, тестовое средство модуля (носитель ручных
+  М1/М2 плана MEE-343 §5); в продукт не входит, зависит только от `DomainCore` — не от
+  `CalendarEventKit`, вызывает `EKEventStore` напрямую, в обход модуля. Объявлен в этом же пакете,
+  потому что EventKit собирается только на macOS, как и весь `Packages/Mac` (решение архитектора, MEE-351)
 - Владелец: DEV-1
 - Реализует контракты: протокол плагина календаря (Swift-зеркало), выдаёт `MeetingEventPayload`,
   нормализованный по C-001 «Поведение» (email, `joinUrl`, `timeZone`, границы «весь день») — единственная
@@ -275,7 +306,7 @@ Mac. Работа `Core (Linux)` `storage` не проверяет вовсе; �
 - Слой: домен
 - Процесс: App
 - Каталоги: `Packages/Core/Sources/CalendarHub/`, `Packages/Core/Tests/CalendarHubTests/`
-- Владелец: DEV-2
+- Владелец: DEV-1 [v1.11, MEE-353]
 - Реализует контракты: `CalendarPort`, хост плагинов (in-process и stdio JSON-RPC), назначение `id`
   событию (C-001 «Поведение», C-006 §6.1 — коннектор нормализует, id назначает только хост), дедуп —
   вызывает `DedupKey.make(from:)` (объявляет и реализует `domain-core`, C-005; ключ: join-URL/ICS
