@@ -37,11 +37,13 @@ extension PortDeclarationTests {
         "func changes() -> AsyncStream<CalendarChange>"
     ]
 
-    /// C-010 (MEE-18), «Определение» §5.
+    /// C-010 (MEE-18), «Определение» §5. `meeting(sourceConnectorId:externalId:)` — C-010 v10,
+    /// IR-118 (MEE-348), дописан MEE-352.
     static let meetingRepository = [
         "func save(_ record: MeetingRecord) async throws",
         "func meeting(id: UUID) async throws -> MeetingRecord?",
         "func meeting(dedupKey: DedupKey) async throws -> MeetingRecord?",
+        "func meeting(sourceConnectorId: String, externalId: String) async throws -> MeetingRecord?",
         "func meetings(from: Date, to: Date) async throws -> [MeetingRecord]",
         "func setStatus(_ status: MeetingStatus, meetingId: UUID) async throws",
         "func delete(meetingIds: [UUID]) async throws"

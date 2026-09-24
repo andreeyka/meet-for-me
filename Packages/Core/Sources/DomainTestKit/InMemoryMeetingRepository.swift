@@ -41,6 +41,7 @@ public enum MeetingRepositoryMethod: String, Sendable, CaseIterable {
     case save
     case meetingById
     case meetingByDedupKey
+    case meetingBySource
     case meetings
     case setStatus
     case delete
@@ -183,6 +184,32 @@ public final class InMemoryMeetingRepository: MeetingRepository, @unchecked Send
             throw error
         }
         return locked { order.compactMap { records[$0] }.first { $0.dedupKey == dedupKey } }
+    }
+
+    /// C-010 v10, IR-118 (MEE-348), инвариант 30: пара — первичный ключ `meeting_sources`
+    /// (§1), результат не более чем один.
+    ///
+    /// СТРОКА (мелкое, тем же доводом, что у `dedup_key` в `InMemoryJobRepository`, MEE-320):
+    /// «не более чем один» здесь — следствие первичного ключа настоящей таблицы, а не
+    /// отдельная проверка, которую держит этот метод сам; `save(_:)` эту пару не сверяет ни
+    /// с одной существующей записью. Деталь неполноты дешевле развилки — называю строкой,
+    /// а не решаю за контракт молча.
+    public func meeting(sourceConnectorId: String, externalId: String) async throws -> MeetingRecord? {
+        log.record(
+            port: Self.portName, method: "meeting(sourceConnectorId:externalId:)",
+            arguments: [sourceConnectorId, externalId]
+        )
+        await hangIfAsked(.meetingBySource)
+        if let error = failureIfAny(.meetingBySource, id: nil) {
+            throw error
+        }
+        return locked {
+            order.compactMap { records[$0] }.first { record in
+                record.sources.contains {
+                    $0.sourceConnectorId == sourceConnectorId && $0.externalId == externalId
+                }
+            }
+        }
     }
 
     public func meetings(from: Date, to: Date) async throws -> [MeetingRecord] {
