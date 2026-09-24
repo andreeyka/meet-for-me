@@ -11,10 +11,10 @@ final class FakeEngineFidelityTests: XCTestCase {
 
     // MARK: - FakeEmbeddingEngine: вектор строится из startMs среза
 
-    private func cosine(_ a: [Float], _ b: [Float]) -> Float {
-        let dot = zip(a, b).reduce(Float(0)) { $0 + $1.0 * $1.1 }
-        let normA = a.reduce(Float(0)) { $0 + $1 * $1 }.squareRoot()
-        let normB = b.reduce(Float(0)) { $0 + $1 * $1 }.squareRoot()
+    private func cosine(_ lhs: [Float], _ rhs: [Float]) -> Float {
+        let dot = zip(lhs, rhs).reduce(Float(0)) { $0 + $1.0 * $1.1 }
+        let normA = lhs.reduce(Float(0)) { $0 + $1 * $1 }.squareRoot()
+        let normB = rhs.reduce(Float(0)) { $0 + $1 * $1 }.squareRoot()
         return dot / (normA * normB)
     }
 

@@ -200,11 +200,11 @@ public final class FakeEmbeddingEngine: EmbeddingEngine, @unchecked Sendable {
         var state = seed
         func nextUnitInterval() -> Double {
             state = state &+ 0x9E37_79B9_7F4A_7C15
-            var z = state
-            z = (z ^ (z >> 30)) &* 0xBF58_476D_1CE4_E5B9
-            z = (z ^ (z >> 27)) &* 0x94D0_49BB_1331_11EB
-            z = z ^ (z >> 31)
-            return Double(z >> 11) * (1.0 / Double(1 << 53))
+            var mixed = state
+            mixed = (mixed ^ (mixed >> 30)) &* 0xBF58_476D_1CE4_E5B9
+            mixed = (mixed ^ (mixed >> 27)) &* 0x94D0_49BB_1331_11EB
+            mixed = mixed ^ (mixed >> 31)
+            return Double(mixed >> 11) * (1.0 / Double(1 << 53))
         }
         var components = (0..<dimension).map { _ in nextUnitInterval() * 2 - 1 }
         let norm = (components.reduce(0) { $0 + $1 * $1 }).squareRoot()
