@@ -166,6 +166,70 @@ final class ControlSurfaceEntryPointsTests: XCTestCase {
         )
     }
 
+    /// Возврат РП, приёмка #94, п. 3 — ветка ошибки дефекта 1 (приёмка #85): если шаг 1
+    /// (`fetchChanges(nil)`) отработал, а шаг 2 (полное окно) упал, курсор шага 1 не
+    /// сохраняется вовсе — следующий цикл видит `cursor == nil` и снова идёт по Р9 целиком
+    /// (`fetchChanges` + `fetchEvents`), а не по `applyDeltaSync` с уже якобы годным
+    /// курсором, за которым полное окно не загрузилось бы никогда.
+    func test_k71_fullWindowFailureLeavesCursorNilSoNextCycleRetriesFullWindow() async throws {
+        let harness = Harness(sourceIds: ["src-1"])
+        harness.connectorRepository.seed([Harness.record(id: "src-1")])
+        let connector = harness.connector("src-1")
+        connector.setInitializeResult(capabilities: ConnectorCapabilities(
+            deltaSync: true, push: false, attendees: true, conference: true, auth: .none
+        ))
+        connector.setFetchChanges(ChangeBatch(
+            events: [], deletedExternalIds: [], cursor: "cursor-1", resetRequired: false
+        ))
+        connector.fail(.fetchEvents, with: .protocolViolation(message: "полное окно недоступно"))
+
+        let firstResults = await harness.hub.sync(trigger: .manual)
+        XCTAssertNotNil(firstResults.first?.failure, "полное окно упало — цикл обязан отразить отказ")
+        XCTAssertNil(
+            harness.connectorRepository.storedRecords.first?.cursor,
+            "курсор шага 1 не сохраняется, пока полное окно не завершилось успешно"
+        )
+
+        connector.clearFailure(.fetchEvents)
+        connector.setFetchEvents([])
+        connector.setFetchChanges(ChangeBatch(
+            events: [], deletedExternalIds: [], cursor: "cursor-2", resetRequired: false
+        ))
+        let secondResults = await harness.hub.sync(trigger: .manual)
+        XCTAssertNil(secondResults.first?.failure)
+        XCTAssertEqual(connector.callCount(.fetchChanges), 2, "курсора после первого отказа не было — снова шаг 1")
+        XCTAssertEqual(connector.callCount(.fetchEvents), 2, "снова полное окно, не только дельта")
+        XCTAssertEqual(harness.connectorRepository.storedRecords.first?.cursor, "cursor-2")
+    }
+
+    /// Возврат РП, приёмка #94, п. 4 — дефект 4 (приёмка #85): ошибка, которая НЕ
+    /// `CalendarError` (здесь — `StorageError` из `meetingRepository.save`, дошедшая через
+    /// `applyIncoming`/`applyFullWindow`), обязана попасть в `setSyncOutcome` тем же путём,
+    /// что и ветка `CalendarError` — запись коннектора не должна остаться с `lastError == nil`
+    /// только потому, что упавший тип не `CalendarError`.
+    func test_defect4_nonCalendarErrorStillReachesSetSyncOutcome() async throws {
+        let harness = Harness(sourceIds: ["src-1"])
+        harness.connectorRepository.seed([Harness.record(id: "src-1")])
+        let connector = harness.connector("src-1")
+        connector.setInitializeResult(capabilities: ConnectorCapabilities(
+            deltaSync: false, push: false, attendees: true, conference: true, auth: .none
+        ))
+        let base = Date(timeIntervalSince1970: 1_700_000_000)
+        connector.setFetchEvents([try Self.changingVersion("Title", base: base, lastModified: base)])
+        harness.meetingRepository.fail(with: .io(message: "диск недоступен"), on: .save)
+
+        let results = await harness.hub.sync(trigger: .manual)
+
+        guard case .transport = results.first?.failure else {
+            XCTFail("не-CalendarError обязан отобразиться как .transport, не проглатываться молча")
+            return
+        }
+        XCTAssertNotNil(
+            harness.connectorRepository.storedRecords.first?.lastError,
+            "дефект 4: обобщённая ветка catch обязана писать setSyncOutcome с ошибкой, как и ветка CalendarError"
+        )
+    }
+
     // MARK: - К72 (calendarIds == selectedCalendarIds, не полный список и не литерал теста)
 
     func test_k72_calendarIdsArgumentIsSelectedCalendarIdsNotFullList() async throws {
