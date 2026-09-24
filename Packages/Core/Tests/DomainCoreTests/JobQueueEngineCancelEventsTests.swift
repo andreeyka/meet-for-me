@@ -174,11 +174,12 @@ final class JobQueueEngineCancelEventsTests: XCTestCase {
     ///
     /// Сама гонка — та же истинная параллельность (readyId с нулевой задержкой), что в
     /// MEE-363, и настолько же недетерминированна на публичном API. Здесь она воспроизведена
-    /// напрямую: `performRevisitSweep()` (обычно вызываемый только из мест, уже проверивших
-    /// `isRunning` — `runRevisitPass()`, `fulfillRequestedRevisitSweep()`, хвост
-    /// `executeAndFinish`) позван в обход этих guard'ов, ПОСЛЕ `stop()`, с уже выставленной
-    /// заявкой — то есть проверяется именно тело метода на границе `isRunning == false`,
-    /// а не удача гонки с планировщиком.
+    /// напрямую: `performRevisitSweepForTest(withPendingRequest:)` (только для теста, см.
+    /// `JobQueueEngineReview.swift`) заводит заявку и зовёт `performRevisitSweep()` одним
+    /// изолированным вызовом, ПОСЛЕ `stop()` — обычные вызывающие (`runRevisitPass()`,
+    /// `fulfillRequestedRevisitSweep()`, хвост `executeAndFinish`) сами не пускают его при
+    /// `isRunning == false`, так что напрямую эту границу иначе не застать. Проверяется
+    /// именно тело метода на этой границе, а не удача гонки с планировщиком.
     func test_mee375_stopClearsPendingRevisitRequestSoNextStartDoesNotDoubleBlock() async throws {
         let rig = JobQueueTestRig()
         let summarizeId = try await rig.queue.submit(makeSubmission(
@@ -192,8 +193,7 @@ final class JobQueueEngineCancelEventsTests: XCTestCase {
         _ = await drainExactly(&iterator, count: 1)   // blocked(.noHandler) обычного захода
         await rig.queue.stop()
 
-        await rig.queue.revisitPassRequested = true
-        await rig.queue.performRevisitSweep()
+        await rig.queue.performRevisitSweepForTest(withPendingRequest: true)
         let stillRequested = await rig.queue.revisitPassRequested
         XCTAssertFalse(stillRequested, "МЕЕ-375: заявка обязана сняться, даже когда isRunning уже false")
 

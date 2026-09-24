@@ -62,6 +62,18 @@ extension JobQueueEngine {
         }
     }
 
+    /// Только для теста MEE-375 (`@testable import`): `revisitPassRequested` — простое
+    /// хранимое свойство актора, извне присвоить его напрямую нельзя (мутация актора
+    /// разрешена только изнутри) — этот метод заводит заявку и зовёт `performRevisitSweep()`
+    /// одним изолированным вызовом, воспроизводя детерминированно то, что в проде — гонка
+    /// (см. довод у самого теста).
+    func performRevisitSweepForTest(withPendingRequest: Bool) async {
+        if withPendingRequest {
+            revisitPassRequested = true
+        }
+        await performRevisitSweep()
+    }
+
     /// Обязательство, заведённое `performRevisitSweep()` для заявки `revisitPassRequested`,
     /// оставленной ДРУГИМ вызовом, пока этот заход уже шёл, — исполняется здесь, отдельной
     /// `Task`, которую вызывающая сторона того другого вызова не ждёт (тем же приёмом, что
