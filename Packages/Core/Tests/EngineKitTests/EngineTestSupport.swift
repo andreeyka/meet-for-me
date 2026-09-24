@@ -45,15 +45,17 @@ enum EngineFixtures {
         )
     }
 
-    static func diarizationRequest(channel: RecordingManifest.Channel = .system) throws -> DiarizationRequest {
+    static func diarizationRequest(
+        channel: RecordingManifest.Channel = .system, expectedSpeakers: Int? = nil
+    ) throws -> DiarizationRequest {
         try DiarizationRequest(
-            audio: try audioRef(channel: channel), expectedSpeakers: nil,
+            audio: try audioRef(channel: channel), expectedSpeakers: expectedSpeakers,
             segmentationModel: modelBundle(role: .diarization), embeddingModel: modelBundle(role: .embedding)
         )
     }
 
-    static func embeddingRequest() throws -> EmbeddingRequest {
-        let slice = try AudioSlice(source: try audioRef(), startMs: 0, endMs: 500)
+    static func embeddingRequest(startMs: Int = 0, endMs: Int = 500) throws -> EmbeddingRequest {
+        let slice = try AudioSlice(source: try audioRef(), startMs: startMs, endMs: endMs)
         return try EmbeddingRequest(slice: slice, model: modelBundle(role: .embedding))
     }
 
@@ -114,7 +116,7 @@ final class ProgressCollector: @unchecked Sendable {
 /// `EngineError`/`DomainValidationError` не сравниваются напрямую в проверках ниже —
 /// сравнение по структурным полям, как того требует К2 дословно.
 func assertInvalidResult(
-    _ error: Error, invariant: Int, type: String, path: String,
+    _ error: Error, invariant: Int, type: String, path: String, contract: String? = nil,
     file: StaticString = #filePath, line: UInt = #line
 ) {
     guard case EngineError.invalidResult(let validation) = error else {
@@ -124,4 +126,7 @@ func assertInvalidResult(
     XCTAssertEqual(validation.invariant, invariant, "invariant", file: file, line: line)
     XCTAssertEqual(validation.type, type, "type", file: file, line: line)
     XCTAssertEqual(validation.path, path, "path", file: file, line: line)
+    if let contract {
+        XCTAssertEqual(validation.contract, contract, "contract", file: file, line: line)
+    }
 }

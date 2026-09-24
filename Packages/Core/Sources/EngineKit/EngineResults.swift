@@ -40,7 +40,7 @@ public struct DiarizationResult: Codable, Equatable, Sendable, DomainValidatable
         }
 
         public func validate() throws {
-            let owner = EngineOwner(contract: "C-011", type: "DiarizationResult.Turn")
+            let owner = EngineOwner(contract: "C-001", type: "DiarizationResult.Turn")
             try owner.requireInt(startMs, "startMs")
             try owner.requireInt(endMs, "endMs")
             try owner.requireInt(cluster, "cluster")
@@ -108,7 +108,7 @@ public struct EmbeddingResult: Codable, Equatable, Sendable, DomainValidatable {
     }
 
     public func validate() throws {
-        let owner = EngineOwner(contract: "C-011", type: "EmbeddingResult")
+        let owner = EngineOwner(contract: "C-001", type: "EmbeddingResult")
         try owner.requireFiniteElements(vector, "vector")
         try owner.requireInt(dimension, "dimension")
     }

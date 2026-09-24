@@ -98,6 +98,7 @@ final class LoopbackTransportMalformedRequestTests: XCTestCase {
             XCTAssertEqual(error.invariant, 7)
             XCTAssertEqual(error.type, "Transcript.Word")
             XCTAssertEqual(error.path, "confidence")
+            XCTAssertEqual(error.contract, "C-003")
         }
     }
 
@@ -115,6 +116,7 @@ final class LoopbackTransportMalformedRequestTests: XCTestCase {
             XCTAssertEqual(error.invariant, 4)
             XCTAssertEqual(error.type, "Transcript.Segment")
             XCTAssertTrue(error.path.hasSuffix(".startMs"), "путь указывает на startMs невпорядоченного слова")
+            XCTAssertEqual(error.contract, "C-003")
         }
     }
 
@@ -143,6 +145,7 @@ final class LoopbackTransportMalformedRequestTests: XCTestCase {
             XCTAssertEqual(error.invariant, 0)
             XCTAssertEqual(error.type, "Transcript")
             XCTAssertEqual(error.path, "createdAt")
+            XCTAssertEqual(error.contract, "C-003")
         }
     }
 

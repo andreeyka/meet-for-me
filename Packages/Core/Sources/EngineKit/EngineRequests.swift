@@ -75,7 +75,7 @@ public struct DiarizationRequest: Codable, Equatable, Sendable, DomainValidatabl
 
     public func validate() throws {
         try audio.validate()
-        let owner = EngineOwner(contract: "C-011", type: "DiarizationRequest")
+        let owner = EngineOwner(contract: "C-001", type: "DiarizationRequest")
         try owner.requireInt(expectedSpeakers, "expectedSpeakers")
     }
 }

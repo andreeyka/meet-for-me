@@ -53,7 +53,7 @@ public struct AudioRef: Codable, Equatable, Sendable, DomainValidatable {
     }
 
     public func validate() throws {
-        let owner = EngineOwner(contract: "C-011", type: "AudioRef")
+        let owner = EngineOwner(contract: "C-001", type: "AudioRef")
         try owner.requireInt(sampleRate, "sampleRate")
         try owner.requireInt(channelCount, "channelCount")
         try owner.requireInt(offsetMs, "offsetMs")
@@ -94,7 +94,7 @@ public struct AudioSlice: Codable, Equatable, Sendable, DomainValidatable {
 
     public func validate() throws {
         try source.validate()
-        let owner = EngineOwner(contract: "C-011", type: "AudioSlice")
+        let owner = EngineOwner(contract: "C-001", type: "AudioSlice")
         try owner.requireInt(startMs, "startMs")
         try owner.requireInt(endMs, "endMs")
     }
