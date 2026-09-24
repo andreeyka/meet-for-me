@@ -17,9 +17,92 @@
 //    по числу источников.
 
 import Foundation
+import XCTest
 import DomainCore
 import DomainTestKit
 import CalendarHub
+
+// СТРОКА (бисекция CI-зависания, MEE-362 ч.2): изначально был `await Task.yield()` вместо
+// сна — тугой цикл без паузы, который на CPU-ограниченном раннере CI грузит ядро на 100% и
+// реально душит СОСЕДНИЕ процессы `swift test --parallel` (у него воркер на цель — отдельный
+// процесс ОС), а не только собственный тест: зависание проявлялось в `UnknownKeysTests`,
+// файле, не имеющем отношения к CalendarHub, а не в самих К-тестах. `Task.sleep` между
+// опросами отдаёт ядро планировщику ОС между проверками вместо злого битья по нему.
+/// Ограниченный опрос: сон между проверками в цикле до `timeout`, а не без предела —
+/// возврат РП (приёмка #85, дефект 7): `resolveTimeoutAfterHang` (`InitializationTests.swift`)
+/// висела бы вечно, если бы условие никогда не стало истинным (реальный дефект реализации,
+/// не зависший коннектор теста) — тест обязан упасть явно, не полагаться на внешний таймаут CI.
+/// `condition` — обычное замыкание, не `@autoclosure`: CI (Swift на раннере) отказывается
+/// компилировать `await` внутри асинхронного `@autoclosure` («await in an autoclosure that
+/// does not support concurrency») — обычное замыкание с явным `{ ... }` на месте вызова не
+/// подвержено этому ограничению. Перевызывается на каждой итерации; допускает побочный
+/// эффект (например, `waitSeam.resolveNext()`), тем же приёмом, что было в исходном цикле.
+func pollUntil(
+    timeout: Duration = .seconds(10), file: StaticString = #filePath, line: UInt = #line,
+    _ condition: () async -> Bool
+) async {
+    let deadline = ContinuousClock.now + timeout
+    while await !condition() {
+        if ContinuousClock.now >= deadline {
+            XCTFail("опрос не дождался условия за \(timeout)", file: file, line: line)
+            return
+        }
+        try? await Task.sleep(for: .milliseconds(2))
+    }
+}
+
+/// Обёртка над `AsyncStream.Iterator` для гонки с таймаутом в `nextOrTimeout` (возврат РП,
+/// приёмка #94, п. 5) — actor, не `inout`: `next()` мутирует структуру-итератор, а
+/// `TaskGroup.addTask` не умеет захватывать `inout`-параметр из внешней области.
+actor StreamIteratorBox<Element: Sendable> {
+    private var iterator: AsyncStream<Element>.Iterator
+    init(_ stream: AsyncStream<Element>) { iterator = stream.makeAsyncIterator() }
+
+    /// Не `await iterator.next()` напрямую: `next()` — `mutating`, и Swift не даёт звать
+    /// mutating async метод через actor-isolated свойство (компилятор CI, найдено #94 —
+    /// «cannot call mutating async function on actor-isolated property»). Локальная копия —
+    /// стандартный обход для actor-isolated `AsyncIteratorProtocol`.
+    func next() async -> Element? {
+        var localIterator = iterator
+        let value = await localIterator.next()
+        iterator = localIterator
+        return value
+    }
+}
+
+private enum RaceOutcome<Element: Sendable>: Sendable {
+    case value(Element?)
+    case timedOut
+}
+
+/// Ограниченное ожидание следующего элемента потока (К62/К63, `ChangesStreamTests.swift`) —
+/// тот же довод, что у `pollUntil` (дефект 7, приёмка #85): тест обязан упасть явно, не
+/// зависнуть навечно, если поток не публикует ожидаемое. Отмена проигравшей ветки безопасна:
+/// `AsyncStream.Iterator.next()` документированно отдаёт `nil` сразу же, как только вызывающая
+/// его задача отменена, — элемент при этом не теряется, следующий вызов `box.next()` увидит
+/// его как обычно.
+func nextOrTimeout<Element: Sendable>(
+    _ box: StreamIteratorBox<Element>, timeout: Duration = .seconds(10),
+    file: StaticString = #filePath, line: UInt = #line
+) async -> Element? {
+    let outcome = await withTaskGroup(of: RaceOutcome<Element>.self) { group -> RaceOutcome<Element> in
+        group.addTask { .value(await box.next()) }
+        group.addTask {
+            try? await Task.sleep(for: timeout)
+            return .timedOut
+        }
+        let first = await group.next() ?? .timedOut
+        group.cancelAll()
+        return first
+    }
+    switch outcome {
+    case .value(let element):
+        return element
+    case .timedOut:
+        XCTFail("следующий элемент потока не пришёл за \(timeout)", file: file, line: line)
+        return nil
+    }
+}
 
 final class FakeWaitSeam: WaitSeam, @unchecked Sendable {
     private let lock = NSLock()
@@ -142,6 +225,22 @@ struct Harness {
         return connector
     }
 
+    /// К66/К75 (fan-out по нескольким источникам): сеет записи, инициализирует каждый
+    /// источник через listCalendars() — общий пролог, вынесенный из обоих тестов, чтобы
+    /// не раздувать их тела сверх function_body_length.
+    func seedAndInitialize(_ ids: [String]) async throws -> [FakeCalendarConnector] {
+        connectorRepository.seed(ids.map { Harness.record(id: $0) })
+        let fakes = ids.map { connector($0) }
+        for (index, fake) in fakes.enumerated() {
+            fake.setInitializeResult(capabilities: ConnectorCapabilities(
+                deltaSync: false, push: false, attendees: true, conference: true, auth: .none
+            ))
+            fake.setListCalendars([])
+            _ = try await hub.listCalendars(source: CalendarSourceId(rawValue: ids[index]))
+        }
+        return fakes
+    }
+
     static func record(
         id: String, cursor: String? = nil, selectedCalendarIds: [String] = [], lastSyncAt: Date? = nil
     ) -> ConnectorRecord {
@@ -151,4 +250,12 @@ struct Harness {
             cursor: cursor, lastError: nil
         )
     }
+}
+
+/// Флаг завершения задачи, читаемый из другого Task без гонки данных (К66/К75) — актор
+/// проще замка для одного булева поля, разделяемого несколькими файлами теста.
+actor DoneFlag {
+    private var done = false
+    func markDone() { done = true }
+    func isDone() -> Bool { done }
 }

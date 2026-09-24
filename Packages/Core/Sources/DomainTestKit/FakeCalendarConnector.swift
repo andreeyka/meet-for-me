@@ -1,7 +1,7 @@
 //  FakeCalendarConnector — реализация `CalendarConnector` в памяти, C-006 §«Фейк для
 //  тестов» (v9, IR-118, дословно называет это имя и это место — `DomainTestKit`).
 //
-//  Модуль: domain-core · Владелец: DEV-2 · Слой: домен (фейки портов для тестов)
+//  Модуль: domain-core · Владелец: DEV-1 · Слой: домен (фейки портов для тестов)
 //
 //  Коннектор-сторона in-process шва — потребитель: `calendar-hub` (MEE-362), тесты группы
 //  А/Б/В/Г перечня MEE-347. Форма — по образцу `FakeCalendarPort`/`FakePowerPort`: счётчики
@@ -47,6 +47,17 @@ public final class FakeCalendarConnector: CalendarConnector, @unchecked Sendable
     private var hangingMethods: Set<CalendarConnectorMethod> = []
     private var shutdownCount = 0
 
+    /// К68 (calendar-hub, MEE-362 ч.2): `PortCallLog` несёт аргументы ТЕКСТОМ (см. его
+    /// шапку) — для утверждения о РАВЕНСТВЕ байтов `configure(settings:)`, переданных хостом,
+    /// нужен типизованный перехват, тем же приёмом, что `recordedCalls` у `FakeSecretStore`.
+    private var lastConfigureSettings: Data?
+
+    /// К11/К14 (calendar-hub, MEE-362 ч.2): `host`, переданный `initialize(host:...)`, нигде
+    /// не сохранялся — тесту нечем сыграть за коннектор, вызывающий `host.secretGet`/`log`/
+    /// `notify` (эти сервисы идут ОТ коннектора хосту, не наоборот, и ничего в фейке их не
+    /// дёргает само). Захват — тем же приёмом, что уже даёт `lastConfigureSettings`.
+    private var capturedHost: ConnectorHostServices?
+
     public init(log: PortCallLog = PortCallLog()) {
         self.log = log
     }
@@ -91,6 +102,10 @@ public final class FakeCalendarConnector: CalendarConnector, @unchecked Sendable
     }
 
     public var shutdownCallCount: Int { locked { shutdownCount } }
+
+    public var configureSettingsSeen: Data? { locked { lastConfigureSettings } }
+
+    public var lastHost: ConnectorHostServices? { locked { capturedHost } }
 
     /// К35/К36 — управляемая задержка: метод ждёт на воротах, пока тест не отпустит их
     /// `release(_:)`. `hang(_:)` без последующего `release(_:)` — тот же эффект, что было у
@@ -155,6 +170,7 @@ public final class FakeCalendarConnector: CalendarConnector, @unchecked Sendable
         log.record(
             port: Self.portName, method: CalendarConnectorMethod.initialize.rawValue, arguments: [connectorInstanceId]
         )
+        locked { capturedHost = host }
         try await hangOrGate(.initialize)
         if let error = failureOrNil(.initialize) { throw error }
         return locked { (pluginInfo, capabilities) }
@@ -169,6 +185,7 @@ public final class FakeCalendarConnector: CalendarConnector, @unchecked Sendable
 
     public func configure(settings: Data) async throws {
         log.record(port: Self.portName, method: CalendarConnectorMethod.configure.rawValue)
+        locked { lastConfigureSettings = settings }
         try await hangOrGate(.configure)
         if let error = failureOrNil(.configure) { throw error }
     }
@@ -226,6 +243,10 @@ public final class FakeCalendarConnector: CalendarConnector, @unchecked Sendable
 
     public func shutdown() async {
         log.record(port: Self.portName, method: CalendarConnectorMethod.shutdown.rawValue)
+        // К66/К75 (calendar-hub, MEE-362 ч.2): управляемая задержка на `shutdown()` — та же
+        // калитка К35/К36, `hangOrGate` уже общая на весь `CalendarConnectorMethod`, только
+        // это тело её раньше не звало ни разу.
+        try? await hangOrGate(.shutdown)
         locked { shutdownCount += 1 }
     }
 }

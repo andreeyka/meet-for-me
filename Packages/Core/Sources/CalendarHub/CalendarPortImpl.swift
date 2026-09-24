@@ -3,16 +3,19 @@
 //
 //  Модуль: calendar-hub · Владелец: DEV-1 · Слой: домен
 //
-//  Эта правка закрывает группы А (К1-К10, кроме версии MAJOR у К1 и кадра shutdown у
-//  К9-Б — обе части нужны только stdio-транспорту, ещё не написанному, group Ж),
-//  Б (К11-К14, К61), В (К15-К29, дедуп/слияние), Г (К30-К43, синхронизация), Д (К62-К63,
-//  поток changes), Е (К44-К45, расписание). Управляющая поверхность источника (шесть
-//  методов MEE-355, v6/IR-120 — beginAuth/completeAuth/settingsSchema/configure/
-//  healthCheck/stop; группы К/Л, К3 вход Б/К66-К69/К71-К75) РЕАЛИЗОВАНА этой же правкой —
-//  MEE-355 слилась в main раньше, чем ожидала постановка MEE-362. Тесты на эти критерии —
-//  ОТДЕЛЬНАЯ, ещё не написанная в этой правке работа (ControlSurfaceEntryPointsTests.swift/
-//  SourceRoutingTests.swift по плану MEE-361), реализация опережает своё покрытие тестами
-//  осознанно — конформанс `CalendarPortImpl: CalendarPort` иначе не собрался бы вовсе.
+//  Часть 1 (#85) реализовала весь код перечисленных ниже групп; тесты на бо́льшую часть
+//  этого списка написаны только частью 2 (MEE-362 ч.2) — какие именно тесты и где, называет
+//  шапка каждого файла `CalendarHubTests` по отдельности, эта шапка счёт не дублирует и не
+//  держит (возврат РП, приёмка #85, дефект 6: этот абзац раньше утверждал «группы Б, В, Г,
+//  Д, Е закрыты», хотя тестов на них не было ни строки — вводило в заблуждение).
+//
+//  Группы А (К1-К10, кроме версии MAJOR у К1 и кадра shutdown у К9-Б — обе части нужны
+//  только stdio-транспорту, ещё не написанному, group Ж), Б (К11-К14, К61), В (К15-К29,
+//  дедуп/слияние — К20-К24/К28 только в пределах одной синхронизации, межсинхронизационное
+//  слияние ждёт IR-126/MEE-372), Г (К30-К43, синхронизация), Д (К62-К63, поток changes),
+//  Е (К44-К45, расписание). Управляющая поверхность источника (шесть методов MEE-355,
+//  v6/IR-120 — beginAuth/completeAuth/settingsSchema/configure/healthCheck/stop; группы
+//  К/Л, К3 вход Б/К66-К69/К71-К75).
 
 import Foundation
 import DomainCore
@@ -35,6 +38,10 @@ public actor CalendarPortImpl: CalendarPort {
     private var logEntries: [CalendarSourceId: [(level: LogLevel, message: String)]] = [:]
     private var notifyEntries: [CalendarSourceId: [(kind: HostNotificationKind, detail: String?)]] = [:]
     var inFlightSync: [CalendarSourceId: Task<CalendarSyncResult, Never>] = [:]
+    /// Возврат РП, приёмка #94: отмена ОДНОГО вызывающего `syncOne` не вправе отменять
+    /// общую задачу за остальных — свой предохранитель на вызывающего, не на саму задачу
+    /// (`CalendarPortImplSync.swift`, `syncOne`/`awaitSharedSync`).
+    var syncWaiters: [CalendarSourceId: [UUID: CheckedContinuation<CalendarSyncResult, Never>]] = [:]
     private let changeHub = CalendarChangeHub()
     private var scheduleTask: Task<Void, Never>?
 
@@ -213,6 +220,17 @@ public actor CalendarPortImpl: CalendarPort {
     /// и сам поднимает `initialize` заново — тот же путь лёгкого переподключения, что и К10/Р10,
     /// `stop()` контрактом не отличается от падения плагина).
     public func stop() async {
+        // СТРОКА (возврат РП, приёмка #85, дефект 3 — временно откачено): shutdown() без
+        // таймаута может повесить stop() навсегда на зависшем коннекторе — намеченный фикс
+        // (callConnector(..., retryable: false) { await connector.shutdown() }) скомпилировался,
+        // но прогон CI после него завис на ОБЕИХ платформах (Linux и macOS, 300с/360с) без
+        // единой строки диагностики — обёртчик CI пишет вывод swift test в файл и печатает
+        // его только при обычном завершении, не при принудительном убийстве по таймауту,
+        // так что причина зависания не видна ни через один доступный мне канал лога.
+        // Отката к простому вызову достаточно, чтобы ЭТУ правку (тесты MEE-362 ч.2) сдать
+        // зелёной; сам дефект 3 остаётся открытым — беру его отдельным заходом, с локальной
+        // гонкой таймаута вместо `callConnector` целиком (тот тянет ещё и повтор §5.2, шутдауну
+        // ненужный), проверенным малым прогоном ДО того, как он попадёт в этот PR снова.
         let initializedSources = Array(capabilities.keys)
         capabilities.removeAll()
         await withTaskGroup(of: Void.self) { group in
@@ -251,6 +269,19 @@ public actor CalendarPortImpl: CalendarPort {
     /// К1/К7: ровно один `initialize` на источник, прежде любого другого вызова. К10/Р10:
     /// `upstreamUnavailable` сбрасывает кэш `capabilities` — следующий вызов инициализирует
     /// заново.
+    ///
+    /// СТРОКА (возврат РП, приёмка #85, дефект 2 — временно откачено): актор реентерабелен
+    /// через `await` внутри — два одновременных вызова, заставших `capabilities[source] ==
+    /// nil` до первого `await`, оба звали бы `connector.initialize()`, нарушая К1/К7.
+    /// Намеченный фикс (`inFlightInitialize`, отдельный `Task` на источник, тот же приём, что
+    /// `inFlightSync` у `syncOne`) скомпилировался, но прогон CI после него завис на ОБЕИХ
+    /// платформах без единой строки диагностики дальше «Build complete!» — тот же симптом,
+    /// что и у отката дефекта 3 рядом, и revert одного дефекта 3 его не снял (бисекция,
+    /// комментарий MEE-362). Проверяю здесь: может статься, лишний `Task` на КАЖДЫЙ вызов
+    /// `ensureInitialized` (а он один на почти каждый тест) исчерпывает кооперативный пул
+    /// потоков раннера CI, а не гонка сама по себе. Дефект 2 остаётся открытым; следующий
+    /// заход — без отдельного `Task`, тем же приёмом continuation-очереди, что уже стоит у
+    /// `hangOrGate`/`FakeWaitSeam.sleep`, без нового потока пула на каждый вызов.
     func ensureInitialized(_ source: CalendarSourceId, connector: CalendarConnector) async throws {
         guard capabilities[source] == nil else { return }
         let host = HostServicesImpl(secretStore: secretStore, namespace: source.rawValue, hub: self, source: source)
