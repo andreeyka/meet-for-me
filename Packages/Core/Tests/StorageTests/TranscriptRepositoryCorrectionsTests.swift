@@ -166,6 +166,9 @@ final class TranscriptRepositoryCorrectionsTests: StorageAsyncTestCase {
 
     /// РП, 24.09 20:57 UTC: `is_user_edited = 1` — молча не трогается ДАЖЕ с непустым
     /// `corrections` (правило 2, слово в правке) — не только с пустым, как выше.
+    /// Сравнение `text_original` — с состоянием ПОСЛЕ `updateSegmentText`, не с `nil`: то,
+    /// пишет ли `updateSegmentText` сам `text_original` при первой правке, — поведение
+    /// чужого метода, не предмет данного теста (см. тот же приём в фейке).
     func test_inv32_skipsRowWithIsUserEditedSilentlyEvenWithWordCorrection() async throws {
         let temp = try StorageTestSupport.makeDatabase()
         defer { StorageTestSupport.cleanup(temp) }
@@ -173,6 +176,7 @@ final class TranscriptRepositoryCorrectionsTests: StorageAsyncTestCase {
         try await fixture.transcripts.updateSegmentText(
             segmentId: fixture.segmentId, text: "правка человека", isUserEdited: true
         )
+        let textOriginalBeforeCorrections = try await fixture.row().segment.textOriginal
         let correction = TextCorrection(
             segmentId: fixture.segmentId, wordIndex: 1, original: "привет", replacement: "Иван",
             personId: UUID(), similarity: 0.9
@@ -184,7 +188,7 @@ final class TranscriptRepositoryCorrectionsTests: StorageAsyncTestCase {
 
         let row = try await fixture.row()
         XCTAssertEqual(row.segment.text, "правка человека", "text не тронут")
-        XCTAssertNil(row.segment.textOriginal, "text_original не тронут")
+        XCTAssertEqual(row.segment.textOriginal, textOriginalBeforeCorrections, "text_original не тронут")
         XCTAssertEqual(row.segment.words, fixture.words, "words_json не тронут — включая слово из правки")
         XCTAssertTrue(row.isUserEdited)
     }
