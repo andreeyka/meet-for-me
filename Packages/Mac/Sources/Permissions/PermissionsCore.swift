@@ -21,8 +21,18 @@ actor PermissionsCore {
         let activation: ActivationSource
         /// MEE-379 (аудит MEE-377, возврат РП 24.09 18:05): шов часов — `checkedAt` снимка
         /// перестаёт быть настоящим `Date()`, недостижимым для тестов без реальной паузы.
-        /// Значение по умолчанию сохраняет прежнее поведение для всех прежних мест вызова.
-        let now: @Sendable () -> Date = Date.init
+        let now: @Sendable () -> Date
+
+        /// Явный init, не синтезированный memberwise: значение `now` по умолчанию (`Date.init`)
+        /// обязано сохранять прежнее поведение для всех прежних мест вызова без правки.
+        init(rights: StatusSource, settings: SettingsOpener, loginItems: LoginItemRegistry,
+             activation: ActivationSource, now: @escaping @Sendable () -> Date = Date.init) {
+            self.rights = rights
+            self.settings = settings
+            self.loginItems = loginItems
+            self.activation = activation
+            self.now = now
+        }
 
         static func system() -> Environment {
             Environment(rights: TranslatingStatusSource(reader: SystemRightsReader()),
