@@ -1,4 +1,4 @@
-//  InMemoryTranscriptRepositoryCorrectionsTests — C-010 v19, инвариант 32 (IR-129, MEE-388),
+//  InMemoryTextCorrectionsTests — C-010 v19, инвариант 32 (IR-129, MEE-388),
 //  владелец: DEV-2. Номера — по инварианту (`test_inv32_*`): дельта MEE-189 для этого
 //  метода ещё не выпущена аналитиком. Вынесено в свой файл — тот же приём, что у
 //  `InMemoryTranscriptRepositoryTests` (`type_body_length`/обнаружение тестов на Linux).
@@ -7,7 +7,7 @@ import XCTest
 import DomainCore
 import DomainTestKit
 
-final class InMemoryTranscriptRepositoryCorrectionsTests: XCTestCase {
+final class InMemoryTextCorrectionsTests: XCTestCase {
 
     // MARK: - Оснастка
 
