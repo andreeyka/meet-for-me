@@ -96,6 +96,9 @@ struct SessionMachineOccupiedStand {
         stand.seed(event)
         stand.allowCaptureStart()
         stand.queue.setNextSubmitIds([UUID(), UUID(), UUID(), UUID()])
+        // Исход `stop()` задан заранее: строка 10 зовёт его сама, и незаданный исход увёл бы
+        // сессию строкой 13 в `failed` вместо `stopping` (`SessionMachineStand.recording`).
+        stand.capture.setStopManifest(RecordingManifestFixtures.unfinished)
 
         // Держатель — задолго до окна владельца: `armAt` владельца лежит далеко в будущем
         // относительно `early`, и потому сигнал ей не отнесён — условие ad-hoc-заведения
@@ -144,6 +147,8 @@ struct SessionMachineFreeTargetStand {
         stand.seed(event)
         stand.allowCaptureStart()
         stand.queue.setNextSubmitIds([UUID(), UUID(), UUID(), UUID()])
+        // Исход `stop()` задан заранее — см. довод в `SessionMachineOccupiedStand.processingOwner`.
+        stand.capture.setStopManifest(RecordingManifestFixtures.unfinished)
 
         let armAt = moment.addingTimeInterval(-600)
         await stand.machine.start(now: armAt)
