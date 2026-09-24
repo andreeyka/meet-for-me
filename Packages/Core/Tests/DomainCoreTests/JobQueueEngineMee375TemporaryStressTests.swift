@@ -31,11 +31,14 @@ final class JobQueueEngineMee375TemporaryStressTests: XCTestCase {
     func test_mee375_temporary_stopClearsPendingRevisitRequestRepeatedFiftyTimes() async throws {
         for iteration in 0..<50 {
             let rig = JobQueueTestRig()
+            // Подписка ДО submit() — см. довод в test_mee375_stopClearsPendingRevisitRequest
+            // SoNextStartDoesNotDoubleBlock (JobQueueEngineCancelEventsTests.swift): найденный
+            // РП на приёмке #93 корень был именно в обратном порядке здесь.
+            let stream = rig.queue.events()
+            let iterator = stream.makeAsyncIterator()
             let summarizeId = try await rig.queue.submit(makeSubmission(
                 payload: .summarize(meetingId: UUID(), transcriptId: UUID(), profileId: "p")
             ))
-            let stream = rig.queue.events()
-            let iterator = stream.makeAsyncIterator()
             _ = await nextOrFail(iterator)   // submitted — не предмет этого теста
 
             await rig.queue.start()

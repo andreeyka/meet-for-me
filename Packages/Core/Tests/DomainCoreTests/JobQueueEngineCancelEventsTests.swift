@@ -182,11 +182,17 @@ final class JobQueueEngineCancelEventsTests: XCTestCase {
     /// именно тело метода на этой границе, а не удача гонки с планировщиком.
     func test_mee375_stopClearsPendingRevisitRequestSoNextStartDoesNotDoubleBlock() async throws {
         let rig = JobQueueTestRig()
+        // Подписка ДО submit() — тем же порядком, что у каждого другого теста этого файла
+        // (например, К67 ниже): JobEventBroadcaster.publish (JobQueueEngine.swift) шлёт
+        // событие ТОЛЬКО подписчикам, заведённым к моменту вызова, — без повтора для тех,
+        // кто подписался позже. Подписка после submit() (найдено РП на приёмке #93 через
+        // диагностический предохранитель nextOrFail, MEE-377) теряла бы submitted навсегда,
+        // и первый же drainExactly(count: 1) бился бы в дедлайн заведомо без событий.
+        let stream = rig.queue.events()
+        var iterator = stream.makeAsyncIterator()
         let summarizeId = try await rig.queue.submit(makeSubmission(
             payload: .summarize(meetingId: UUID(), transcriptId: UUID(), profileId: "p")
         ))
-        let stream = rig.queue.events()
-        var iterator = stream.makeAsyncIterator()
         _ = await drainExactly(&iterator, count: 1)   // submitted — не предмет этого теста
 
         await rig.queue.start()
