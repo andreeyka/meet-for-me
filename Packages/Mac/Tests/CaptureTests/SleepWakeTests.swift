@@ -60,7 +60,23 @@ final class SleepWakeTests: CaptureAsyncTestCase {
 
     /// Тот же дефект, наблюдаемый со стороны диска, а не через `stop()`: манифест обязан
     /// оставаться читаемым (проходить валидацию домена) сразу после `.willSleep`, до всякого
-    /// пробуждения — контракт требует записи на диск немедленно, не только у `stop()`.
+    /// пробуждения — ближайший критерий К9 (парный маркер и запись разрыва вместе), возврат
+    /// MEE-317, п. 6, не отдельная цитата контракта.
+    ///
+    /// MEE-365, возврат по п. 1: падение было не гонкой чтения/записи, а реальным двойным
+    /// вызовом `writeManifest` внутри `handleSleep` — `beginRebuild` пишет манифест изнутри
+    /// `recordProcesses` (инв. 12(б)) РАНЬШЕ, чем `handleSleep` успевает дописать пару
+    /// `.discontinuity`, и эта ранняя запись на секунды-миллисекунды несла на диске `.sleep`
+    /// без пары. Правка — `AudioCaptureImplHardwareEvents.swift`/`AudioCaptureImplRebuild.swift`
+    /// (`persistManifest`/`persistManifestAfterCapturedProcesses: false` для пути сна): манифест
+    /// пишется один раз, когда пара уже дописана.
+    ///
+    /// MEE-365, малый возврат: фиксированная пауза перед чтением всё ещё угадывала бы
+    /// scheduling-задержку `powerEventsTask`, даже с одной записью. `performAndAwaitNextPowerEvent`
+    /// (`AudioCaptureImplHardwareEvents.swift`) — тестовый крюк: продолжение регистрируется ДО
+    /// `power.emit(...)`, резюмируется циклом обработки сразу после того, как `.willSleep`
+    /// обработан целиком (`handleSleep` вернулся) — чтение с диска идёт по факту обработки, не
+    /// по угаданному времени.
     func test_sleepWritesValidManifestToDiskImmediately() async throws {
         let harness = Harness()
         let directory = try Harness.makeDirectory()
@@ -68,12 +84,8 @@ final class SleepWakeTests: CaptureAsyncTestCase {
         harness.gateway.feed(.samples(.mic, frameCount: 480, channelCount: 1, hostTime: 1_000))
         try await Task.sleep(nanoseconds: 10_000_000)
 
-        harness.power.emit(.willSleep)
-        try await Task.sleep(nanoseconds: 10_000_000)
+        await harness.port.performAndAwaitNextPowerEvent { harness.power.emit(.willSleep) }
 
-        // ManifestWriter.read декодирует и валидирует домен целиком (DomainJSON.decode) — раньше
-        // здесь либо не было файла вовсе (writeManifest молча проглатывал ошибку валидации через
-        // `try?`), либо файл не содержал следа сна.
         let onDisk = try ManifestWriter.read(from: directory)
         XCTAssertTrue(onDisk.markers.contains { $0.kind == .sleep })
         XCTAssertTrue(onDisk.markers.contains { $0.kind == .discontinuity })

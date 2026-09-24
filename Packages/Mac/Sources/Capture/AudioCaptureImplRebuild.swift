@@ -11,11 +11,16 @@ extension AudioCaptureImpl {
     /// Начинает пересборку: помечает разрыв как открытый (`pendingRebuild`) и переоткрывает
     /// aggregate device с тем же `tap` — второй вызов `requestSystemAudioTap` за сеанс не
     /// делается никогда (инвариант 4).
+    ///
+    /// `persistManifestAfterCapturedProcesses`: см. `recordProcesses` (MEE-365) — `false` даёт
+    /// вызывающей стороне (сегодня — только `handleSleep`) дописать своё состояние поверх
+    /// `pendingRebuild`, уже установленного здесь, и записать манифест на диск самой, один раз.
     func beginRebuild(
         _ session: CaptureSessionState,
         reason: RecordingManifest.DiscontinuityReason,
         newMicrophone: MicrophoneHandle?,
-        atHostTime: UInt64
+        atHostTime: UInt64,
+        persistManifestAfterCapturedProcesses: Bool = true
     ) {
         guard session.pendingRebuild == nil else { return }
         let atMs = session.referenceTrack?.positionMs ?? 0
@@ -43,7 +48,10 @@ extension AudioCaptureImpl {
             }
             // Инвариант 12(б): «при каждой пересборке aggregate device» — дословно контракт.
             if let tap = session.tap {
-                recordProcesses(session, processes: gateway.capturedProcesses(tap), atHostTime: atHostTime)
+                recordProcesses(
+                    session, processes: gateway.capturedProcesses(tap), atHostTime: atHostTime,
+                    persistManifest: persistManifestAfterCapturedProcesses
+                )
             }
         } catch {
             // Пересобрать не удалось сразу — попытка не повторяется автоматически в PR1;
