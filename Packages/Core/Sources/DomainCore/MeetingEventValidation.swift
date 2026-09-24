@@ -18,6 +18,20 @@
 
 import Foundation
 
+/// Поля общей функции одним значением: `function_parameter_count` SwiftLint (--strict,
+/// «Core + Mac») не разрешает больше восьми параметров, а `owner` плюс восемь смысловых
+/// полей были ими и шли отдельными параметрами.
+struct MeetingEventFields {
+    let start: Date
+    let end: Date
+    let lastModified: Date
+    let timeZone: String
+    let isAllDay: Bool
+    let organizer: MeetingEvent.Person?
+    let attendees: [MeetingEvent.Attendee]
+    let conference: MeetingEvent.Conference?
+}
+
 /// Инварианты 1, 2, 4, 6, 7 плюс представимость (§0.2 п. 9) трёх полей `Date` — в одном
 /// месте на оба типа C-001/C-006, которые их несут.
 enum MeetingEventValidation {
@@ -25,32 +39,25 @@ enum MeetingEventValidation {
     /// Ступени §0.2 п. 6 в порядке контракта: (а) вложенные значения → (в) представимость →
     /// (б) собственные инварианты. `owner` называет вызывающий тип (`contract`, `type`) —
     /// сама функция ни того, ни другого не выбирает.
-    static func validate(
-        owner: DomainOwner,
-        start: Date,
-        end: Date,
-        lastModified: Date,
-        timeZone: String,
-        isAllDay: Bool,
-        organizer: MeetingEvent.Person?,
-        attendees: [MeetingEvent.Attendee],
-        conference: MeetingEvent.Conference?
-    ) throws {
-        try organizer?.validate()
-        for attendee in attendees {
+    static func validate(owner: DomainOwner, fields: MeetingEventFields) throws {
+        try fields.organizer?.validate()
+        for attendee in fields.attendees {
             try attendee.validate()
         }
-        try conference?.validate()
+        try fields.conference?.validate()
 
-        try owner.requireDate(start, "start")
-        try owner.requireDate(end, "end")
-        try owner.requireDate(lastModified, "lastModified")
+        try owner.requireDate(fields.start, "start")
+        try owner.requireDate(fields.end, "end")
+        try owner.requireDate(fields.lastModified, "lastModified")
 
-        try owner.check(end >= start, 1, "end", "end раньше start")
-        try owner.check(TimeZone(identifier: timeZone) != nil, 2, "timeZone",
-                        "не идентификатор IANA: \(timeZone)")
-        try validateUniqueAddresses(owner, attendees)
-        try validateAllDayBounds(owner, start: start, end: end, isAllDay: isAllDay, timeZone: timeZone)
+        try owner.check(fields.end >= fields.start, 1, "end", "end раньше start")
+        try owner.check(TimeZone(identifier: fields.timeZone) != nil, 2, "timeZone",
+                        "не идентификатор IANA: \(fields.timeZone)")
+        try validateUniqueAddresses(owner, fields.attendees)
+        try validateAllDayBounds(
+            owner, start: fields.start, end: fields.end,
+            isAllDay: fields.isAllDay, timeZone: fields.timeZone
+        )
     }
 
     /// Инвариант 4: нарушителем является пара одинаковых адресов, а не элемент, — `path` есть

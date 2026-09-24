@@ -118,8 +118,10 @@ public struct MeetingEvent: Codable, Equatable, Sendable, DomainValidatable {
     public func validate() throws {
         try MeetingEventValidation.validate(
             owner: DomainOwner(contract: "C-001", type: "MeetingEvent"),
-            start: start, end: end, lastModified: lastModified, timeZone: timeZone,
-            isAllDay: isAllDay, organizer: organizer, attendees: attendees, conference: conference
+            fields: MeetingEventFields(
+                start: start, end: end, lastModified: lastModified, timeZone: timeZone,
+                isAllDay: isAllDay, organizer: organizer, attendees: attendees, conference: conference
+            )
         )
     }
 }
