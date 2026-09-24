@@ -252,9 +252,10 @@ final class ControlSurfaceEntryPointsTests: XCTestCase {
         let task = Task { await harness.hub.sync(trigger: .manual) }
         task.cancel()
 
-        if await pollUntilOrTimeout(timeout: .seconds(1), {
+        let taskReachedSaveGate = await pollUntilOrTimeout(timeout: .seconds(1)) {
             meetingRepositorySaveCallCount(harness.meetingRepository) >= 1
-        }) {
+        }
+        if taskReachedSaveGate {
             harness.meetingRepository.stopGating(on: .save)
             harness.meetingRepository.release(on: .save)
         }
