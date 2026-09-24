@@ -102,3 +102,90 @@ func makeRunningRow(
         lastError: lastError, createdAt: now, updatedAt: now
     )
 }
+
+/// MEE-377 (аудит, возврат РП на приёмке #93): гонка `iterator.next()` с дедлайном — раньше
+/// вызовы `next()` в тестах `JobQueueEngine` (`drainExactly`, К69) шли напрямую, «БЕЗ
+/// таймаута нарочно», доводом «счётчик обязан ровно совпадать» (число событий, которое
+/// сценарий действительно публикует, а не приблизительная граница). Расхождение
+/// (реализация публикует МЕНЬШЕ событий, чем ждёт счётчик) тонуло в таймауте `swift test`
+/// (300 с, MEE-329) без единого слова о причине — `AsyncStream`, которую никто не
+/// `finish()`ит, на лишний `next()` не вернёт `nil`, зависнет НАВСЕГДА. 10 секунд — с
+/// большим запасом сверх любого реального сценария (сравнить нечего: без расхождения
+/// событие уже лежит в буфере к моменту вызова, `JobEventBroadcaster.publish` — синхронный
+/// `continuation.yield`).
+///
+/// Гонка — НЕструктурная (голые `Task`, не `TaskGroup`): `withTaskGroup` на выходе сам ждёт
+/// каждую дочернюю задачу до конца, и повисшая `next()` унесла бы с собой тот же дедлайн,
+/// который призван её поймать. Копия `iterator`, переданная в свою `Task`, — тот же
+/// `AsyncStream.AsyncIterator`, что и снаружи: обе читают из одного общего буфера потока,
+/// второй параллельный потребитель не заводится (буфер — разделяемое хранилище позади
+/// итератора, не сам итератор).
+///
+/// Проигравшую задачу-таймер (`timeoutTask`) `cancel()`ится, когда `next()` побеждает первой
+/// (обычный случай — событие уже лежит в буфере): она честно отменяема (`Task.sleep`
+/// реагирует на отмену), и без этого один лишний `Task.sleep` на 10 секунд оставался бы
+/// позади каждого удачного вызова без всякой пользы.
+///
+/// Обратное — победа таймера — НЕ симметрично: `cancel()` над `next()`-задачей её не
+/// останавливает (тот же довод, что выше, `withTaskGroup`) — она остаётся висеть НАВСЕГДА,
+/// продолжая слушать тот же общий буфер потока. Если этому висящему потребителю действительно
+/// прилетит событие (поток не исчерпан, просто опоздал к своему дедлайну) — оно достанется
+/// ЕМУ, а не следующему настоящему вызову `nextOrFail` на том же `iterator`: `DrainRaceOutcome.
+/// resolve` того вызова уже сработал (таймер), и повторное `resolve` — no-op, событие тихо
+/// пропадает. Один просроченный `nextOrFail` на этом самом `iterator` поэтому может каскадом
+/// уронить и все СЛЕДУЮЩИЕ его вызовы в этом же тесте — не только свой собственный (найдено
+/// на приёмке #93, MEE-375: причиной первого просроченного вызова была подписка на `events()`
+/// ПОСЛЕ уже случившегося `submit()`, а не что-то в этом предохранителе, — но каскад от него
+/// увёл диагностику по ложному следу, пока не выяснился настоящий порядок). Порядок
+/// «подписаться, затем действовать» — обязателен для каждого теста, что бы этот предохранитель
+/// ни ловил.
+func nextOrFail(
+    _ iterator: AsyncStream<JobEvent>.AsyncIterator, seconds: UInt64 = 10,
+    file: StaticString = #filePath, line: UInt = #line
+) async -> JobEvent? {
+    let outcome = DrainRaceOutcome()
+    let racer = Task {
+        var iterator = iterator
+        let event = await iterator.next()
+        await outcome.resolve(.some(event))
+    }
+    let timeoutTask = Task {
+        try? await Task.sleep(nanoseconds: seconds * 1_000_000_000)
+        await outcome.resolve(.none)
+    }
+    defer {
+        racer.cancel()
+        timeoutTask.cancel()
+    }
+    guard let event = await outcome.wait() else {
+        XCTFail(
+            "iterator.next() не вернул событие за \(seconds) с — расхождение числа " +
+                "публикуемых событий (аудит MEE-377), а не обычное падение",
+            file: file, line: line
+        )
+        return nil
+    }
+    return event
+}
+
+/// Разрешение гонки `nextOrFail` — первое из двух `resolve` (настоящий `next()` либо
+/// дедлайн) побеждает, второе не действует; ждущие `wait()` будятся один раз.
+private actor DrainRaceOutcome {
+    private var value: JobEvent??
+    private var waiters: [CheckedContinuation<JobEvent??, Never>] = []
+
+    func resolve(_ newValue: JobEvent??) {
+        guard value == nil else { return }
+        value = newValue
+        let pending = waiters
+        waiters = []
+        for waiter in pending {
+            waiter.resume(returning: newValue)
+        }
+    }
+
+    func wait() async -> JobEvent?? {
+        if value != nil { return value }
+        return await withCheckedContinuation { waiters.append($0) }
+    }
+}
