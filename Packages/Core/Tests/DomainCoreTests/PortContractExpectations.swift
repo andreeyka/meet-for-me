@@ -150,12 +150,28 @@ extension PortDeclarationTests {
         "func failUnreadable(jobId: UUID, message: String, now: Date) async throws -> JobType?"
     ]
 
-    /// C-013 (MEE-21) §1.1, тип возврата — C-014 v4 (MEE-22) «Определение» §4, дословно.
-    /// Дописан MEE-319; тип возврата исправлен по возврату РП на приёмке MEE-319 (PR #55):
-    /// был `[String]`, стало `[ModelDescriptor]`. Развилка по остальному объёму порта —
-    /// комментарий над объявлением в `ModelCatalogPort.swift` (`// СТРОКА:`).
+    /// C-014 (MEE-22) v6, «Определение» §4, дословно — весь порт, исход (б) развилки
+    /// MEE-395 (комментарий над объявлением в `ModelCatalogPort.swift`, `// СТРОКА:`).
+    /// Тип возврата `missingModels` исправлен по возврату РП на приёмке MEE-319 (PR #55):
+    /// был `[String]`, стало `[ModelDescriptor]` — этим же и совпадает с C-014.
     static let modelCatalogPort = [
-        "func missingModels(profileId: String) async throws -> [ModelDescriptor]"
+        "func refreshCatalog() async throws",
+        "func models() async -> [ModelDescriptor]",
+        "func model(id: String, version: String) async -> ModelDescriptor?",
+        "func state(id: String, version: String) async -> ModelState",
+        "func download(id: String, version: String) async throws",
+        "func cancelDownload(id: String, version: String) async",
+        "func verify(id: String, version: String) async throws",
+        "func delete(id: String, version: String) async throws",
+        "func diskUsage() async -> [ModelDiskUsage]",
+        "func beginUse(_ bundles: [ModelBundle]) async throws -> ModelUseToken",
+        "func endUse(_ token: ModelUseToken) async",
+        "func profiles() async -> [TranscriptionProfile]",
+        "func saveProfile(_ profile: TranscriptionProfile) async throws",
+        "func deleteProfile(id: String) async throws",
+        "func resolve(profileId: String) async throws -> ResolvedProfile",
+        "func missingModels(profileId: String) async throws -> [ModelDescriptor]",
+        "func events() -> AsyncStream<ModelCatalogEvent>"
     ]
 
     /// C-018 (MEE-276), «Определение» §3.1.
