@@ -1,6 +1,20 @@
 # Карта модулей
 
-Версия 1.11. Утверждена пользователем (MEE-1). Источник: `docs/architecture.md` v0.7.
+Версия 1.13. Утверждена пользователем (MEE-1). Источник: `docs/architecture.md` v0.7.
+Изменение против v1.12: малый возврат РП по IR-122 (MEE-358), комментарий 74c0216c — раздел «МОДУЛЬ:
+secret-store-keychain» (§3) был внутренне противоречив: CI обещал round-trip на файловом keychain, а список
+ручных проверок называл `keychain-access-group` и синхронизацию iCloud — это признаки Data Protection
+keychain, на котором неподписанный `swift test` получил бы `-34018` (нет entitlement). Решено: файловый
+Keychain без `kSecUseDataProtectionKeychain` — только он проверяем тестовым бинарём без подписи;
+`kSecAttrSynchronizable` не выставляется вовсе (секреты не синхронизируются — `connectorInstanceId`
+существует только в локальной БД этого Mac, C-010, синхронизация не даёт выгоды). Заодно снята
+неоднозначность конкатенации `<namespace>/<key>` в один ключ (`x`+`y/z` и `x/y`+`z` дали бы одну строку):
+`namespace` и `key` — раздельные атрибуты `kSecAttrService`/`kSecAttrAccount`, без делимитера; изоляция
+C-006 инвариант 12 не нарушена. Раздел «МОДУЛЬ: secret-store-keychain» переписан этим изданием.
+Мелочь: формулировка абзаца версии 1.12 ниже («диаграмма зависимостей — отдельная стрелка») неточна —
+правка §4 всегда была абзацем прозы под ascii-диаграммой, саму диаграмму никто не редактировал; текст
+абзаца v1.12 сохранён для истории без изменений, эта запись — единственное место, где неточность отмечена.
+Изменение против v1.11: IR-122 (MEE-358) — хранилище секретов коннекторов (C-006 §4, инв. 11-12): `calendar-hub` не вправе импортировать `Security` (§3, «Запрещено»), реализация Keychain никому не была назначена (находка 1, [MEE-347](<https://linear.app/easypto/issue/MEE-347>)). Решено: новый модуль `secret-store-keychain` в `Packages/Mac` — адаптер системного API тем же приёмом, что `capture`/`permissions`/`detector`/`calendar-eventkit`, но реализует протокол, объявленный не `domain-core`, а самим модулем-потребителем — `calendar-hub`; владелец — DEV-1. Протокол `SecretStore` (`get(key:namespace:) async throws -> String?`, `set(key:value:namespace:) async throws`) объявляет сам `calendar-hub`, тем же приёмом, что транспорт и шов ожидания (C-006 v9, инвариант 21: самостоятельно объявленный тип модуля разрешён по построению, контракт называть его не обязан); фейк `FakeSecretStore` — в `CalendarHubTests`. Композицию (создание `SecretStoreKeychain()` и передачу в инициализатор `calendar-hub`) выполняет composition root `app-ui`, как и `PlatformResolver`. `value: nil` в `set` удаляет элемент — то же правило, что уже действует в `ConnectorHostServices.secretSet` (MEE-346, PR #71). Разбор вариантов, отвергнутые кандидаты (`app-ui` напрямую, `permissions`, протокол в `domain-core`) и цена — отчётом IR-122 в MEE-358. C-006 правки не требует: инв. 11-12 уже полностью специфицируют требование, а инвариант 21 уже допускает самостоятельно объявленный тип без правки контракта. Правлены: таблица «Владельцы и среда» (§2, строка DEV-1), новый раздел «МОДУЛЬ: secret-store-keychain» (§3), диаграмма зависимостей (§4 — отдельная стрелка `calendar-hub ◄── secret-store-keychain`, вне фана `domain-core`). Заодно — пустые таргеты `SecretStoreKeychain`/`SecretStoreKeychainTests` в `Packages/Mac/Package.swift` (каркас без кода, как в своё время `CaptureManualHarness`). Цена — ноль кода домена: только новый пустой таргет и правка карты.
 Изменение против v1.10: MEE-353 — владельцем модуля `calendar-hub` становится DEV-1, решение РП.
 Довод: у DEV-1 закончились собственные модули (`capture`, `permissions`, `detector`,
 `calendar-eventkit` реализованы), у DEV-2 своя очередь (`JobQueue`, IR-118 в коде, затем
@@ -163,7 +177,7 @@ DEV-2 читает эти файлы из своих тестов, но **не �
 
 | Владелец | Где работает | Модули |
 | -- | -- | -- |
-| DEV-1 | сессия на Mac с Xcode | `capture`, `permissions`, `detector`, `calendar-eventkit`, `calendar-hub` [v1.11, MEE-353] |
+| DEV-1 | сессия на Mac с Xcode | `capture`, `permissions`, `detector`, `calendar-eventkit`, `calendar-hub` [v1.11, MEE-353], `secret-store-keychain` [v1.12, MEE-358] |
 | DEV-2 | облачная сессия (Linux) + проверка на macos-14 в CI; `storage` — только macos-14 (см. ниже, MEE-321) | `domain-core`, `storage`, `engine-xpc`, `gigaam`, `model-manager`, `attribution`, `plugin-graph` |
 | DEV-3 | сессия на Mac с Xcode | `app-ui` |
 | Архитектор | сессия РП | файлы сборки, `docs/`, контракты |
@@ -314,6 +328,30 @@ Mac. Работа `Core (Linux)` `storage` не проверяет вовсе; �
 - Потребляет контракты: протокол плагина календаря, порты репозиториев из `domain-core`
 - Запрещено: импорт EventKit и любых Apple-фреймворков сверх Foundation; знание о конкретных коннекторах
 
+### МОДУЛЬ: secret-store-keychain
+- Слой: адаптер системного API
+- Процесс: App
+- Каталоги: `Packages/Mac/Sources/SecretStoreKeychain/`, `Packages/Mac/Tests/SecretStoreKeychainTests/`
+- Владелец: DEV-1
+- Реализует контракты: `SecretStore` — протокол, объявленный самим `calendar-hub` (не `domain-core`; C-006
+  инвариант 21 — самостоятельно объявленный тип модуля-потребителя разрешён по построению, контракт называть
+  его не обязан, тем же приёмом, что транспорт и шов ожидания). `get(key:namespace:)`/`set(key:value:namespace:)`
+  реализованы поверх **файлового** Keychain — `SecItemAdd`/`SecItemCopyMatching`/`SecItemUpdate`/`SecItemDelete`
+  без `kSecUseDataProtectionKeychain`: только этот вид проверяем в CI неподписанным `swift test` (Data Protection
+  keychain ответил бы `-34018` без entitlement `keychain-access-groups`, которого у тестового бинаря нет).
+  `kSecClass: kSecClassGenericPassword`; `namespace` (`connectorInstanceId`) и `key` — раздельные атрибуты
+  `kSecAttrService`/`kSecAttrAccount`, не конкатенация в одну строку (`x`+`y/z` и `x/y`+`z` иначе дали бы одно
+  значение): `kSecAttrService = "meet-for-me.calendar-hub.\(namespace)"`, `kSecAttrAccount = key`. C-006
+  инвариант 12 («фактический ключ — `<namespace>/<key>`») этим не нарушается: та же изоляция по
+  `connectorInstanceId`, без строкового делимитера и его коллизий. `kSecAttrSynchronizable` не выставляется —
+  секреты не синхронизируются через iCloud Keychain: `connectorInstanceId` существует только в локальной БД
+  этого Mac (C-010), синхронизация не даёт выгоды и добавляет поверхность даром. `value: nil` в `set` удаляет
+  элемент (`SecItemDelete`) — то же правило, что уже действует в `ConnectorHostServices.secretSet` (MEE-346,
+  PR #71). Решение и цена — IR-122, [MEE-358](<https://linear.app/easypto/issue/MEE-358>)
+- Потребляет контракты: `SecretStore` (объявлен `calendar-hub`) — единственная зависимость сверх Foundation/Security
+- Запрещено: любая бизнес-логика хоста (нормализация, дедуп, расписание опроса — это `calendar-hub`); хранить
+  что-либо, кроме пары (`namespace`, `key`) → значение, в форме, отличной от Keychain generic-password
+
 ### МОДУЛЬ: storage
 - Слой: хранилище
 - Процесс: App
@@ -405,6 +443,10 @@ Mac. Работа `Core (Linux)` `storage` не проверяет вовсе; �
                         ├── attribution ───────┘  (нужны DTO Transcript и EmbeddingEngine)
                         └── app-ui             (плюс фасад C-016 и связывание всех реализаций)
 ```
+
+`secret-store-keychain` в этот фан не входит: он реализует протокол `SecretStore`, объявленный
+`calendar-hub` (не `domain-core`), и зависит только от него — `calendar-hub ◄── secret-store-keychain`.
+Композицию, как и везде, выполняет composition root (`app-ui`).
 
 Пути к моделям приходят в движок снаружи (C-014): `model-manager` движком не импортируется,
 их связывает composition root.
