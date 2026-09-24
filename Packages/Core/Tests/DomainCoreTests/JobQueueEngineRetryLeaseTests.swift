@@ -209,38 +209,6 @@ final class JobQueueEngineRetryLeaseTests: XCTestCase {
         await rig.queue.waitUntilIdle()
     }
 
-    /// Временный тест MEE-378 — снимается перед приёмкой (тот же приём, что
-    /// `test_mee363_temporary_k67RepeatedFiftyTimes` перед приёмкой MEE-363): гоняет ровно
-    /// сценарий `test_k62_leaseIsRenewedWhileExecuting` выше 50 раз подряд, чтобы отличить
-    /// недетерминизм опроса (тогда упал бы один из 50) от однократной случайности.
-    func test_mee378_temporary_leaseRenewalPollRepeatedFiftyTimes() async throws {
-        for iteration in 0..<50 {
-            let rig = JobQueueTestRig(leaseSeconds: 40)
-            let handler = FakeJobHandler(type: .transcode)
-            handler.workLong(seconds: 0.6)
-            try await rig.queue.register(handler: handler)
-            let start = rig.clock.now()
-            let jobId = try await rig.queue.submit(makeSubmission())
-
-            await rig.queue.start()
-            rig.clock.set(start.addingTimeInterval(35))
-
-            let expectedFloor = start.addingTimeInterval(35 + 40 - 1)
-            var renewed: Job?
-            for _ in 0..<50 {
-                renewed = try await rig.repository.job(id: jobId)
-                if let lease = renewed?.leaseExpiresAt, lease >= expectedFloor {
-                    break
-                }
-                try await Task.sleep(nanoseconds: 20_000_000)
-            }
-
-            let renewedLease = try XCTUnwrap(renewed?.leaseExpiresAt, "повтор \(iteration): продление не случилось")
-            XCTAssertGreaterThanOrEqual(renewedLease, expectedFloor, "повтор \(iteration)")
-            await rig.queue.waitUntilIdle()
-        }
-    }
-
     /// К62, вторая половина: истёкший лизинг возвращает задачу в `pending` той же развилкой,
     /// что инвариант 10 — решение принимает ОЧЕРЕДЬ, вызывая `update` по каждой строке,
     /// возвращённой `reclaimExpiredLeases` «как есть» (К89), а не сам метод порта.

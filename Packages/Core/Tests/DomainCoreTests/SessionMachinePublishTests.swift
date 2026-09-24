@@ -179,35 +179,6 @@ final class SessionMachinePublishTests: XCTestCase {
         hanging.cancel()
     }
 
-    /// Временный тест MEE-378 — снимается перед приёмкой (тот же приём, что
-    /// `test_mee363_temporary_k67RepeatedFiftyTimes` перед приёмкой MEE-363): гоняет ровно
-    /// сценарий `test_k81_iii_...` выше (вектор, без контроля — тот проверен отдельно и не
-    /// является предметом паузы) 50 раз подряд, чтобы подтвердить нулевую нестабильность паузы
-    /// `bound`, оставленной намеренно (см. довод у самого теста).
-    func test_mee378_temporary_k81iiiBoundRepeatedFiftyTimes() async throws {
-        for iteration in 0..<50 {
-            let bound: UInt64 = 300_000_000
-            let stand = try bench()
-            let event = try SessionMachineFixtures.event()
-            stand.seed(event)
-            await stand.machine.tick(now: moment.addingTimeInterval(-900))
-            stand.meetings.hang(on: .setStatus, seconds: 3600)
-
-            let latch = Latch()
-            let machine = stand.machine
-            let meeting = event.id
-            let when = moment.addingTimeInterval(-880)
-            let hanging = Task {
-                try? await machine.skip(meetingId: meeting, now: when)
-                await latch.close()
-            }
-            try await Task.sleep(nanoseconds: bound)
-            let probe = await latch.isClosed
-            XCTAssertFalse(probe, "повтор \(iteration): команда управления не вернула")
-            hanging.cancel()
-        }
-    }
-
     // MARK: - К82 (инв. 21)
 
     /// Каждый вызов возвращает СВОЙ поток; при подписке поток отдаёт снимок, и только за ним
