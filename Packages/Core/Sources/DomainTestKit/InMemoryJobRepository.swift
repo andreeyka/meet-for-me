@@ -211,18 +211,14 @@ extension InMemoryJobRepository {
         )
         locked { claimNextCalls += 1 }
         let outcome = locked { () -> ClaimOutcome in
-            // СТРОКА: возврат РП по MEE-350 — фильтр `runAfter <= now` здесь ВЕРНУЛ:
-            // C-010 инвариант 25 называет `claimNext` фильтрующим «по `status`, `run_after`
-            // и `type`» дословно, а C-013 требует от фейка «те же правила `claimNext`, что у
-            // настоящей таблицы». Возникающее отсюда противоречие с `JobBlockReason.notYetDue`
-            // (строка, не дошедшая по сроку, никогда не доходит до `firstBlockingReason`,
-            // делая эту ветвь очереди недостижимой через способ И) — реальное, но снимает его
-            // архитектор (открыт IR-121, MEE-356), а не правка фейка задним числом. До ответа
-            // IR-121: К56 (i) помечен `XCTSkip`, К73 перестроен на блокировки без `notYetDue`.
+            // C-010 v11, инвариант 25: `claimNext` УПОРЯДОЧИВАЕТ по `run_after` (через
+            // `claimOrder` ниже), но не фильтрует по нему — решение о «слишком рано»
+            // (`JobBlockReason.notYetDue`) остаётся за очередью, читающей `runAfter` сама
+            // (`firstBlockingReason`, JobQueueEngineReview.swift). IR-121 (MEE-356) закрыт
+            // архитектором этой правкой C-010/C-013 (v11/v9) — прежняя развилка снята.
             let candidates = order.compactMap { jobsById[$0] }
                 .filter {
-                    $0.status == .pending && types.contains($0.type)
-                        && !excluding.contains($0.id) && $0.runAfter <= now
+                    $0.status == .pending && types.contains($0.type) && !excluding.contains($0.id)
                 }
                 .sorted(by: Self.claimOrder)
             guard let picked = candidates.first else { return .empty }

@@ -48,6 +48,8 @@ public final class FakeJobQueue: JobQueue, @unchecked Sendable {
     private var nextNumber = 1
     private var startCalls = 0
     private var stopCalls = 0
+    private var recordingDidStartCalls = 0
+    private var recordingDidStopCalls = 0
     private var submitFailure: JobQueueError?
     private var continuations: [AsyncStream<JobEvent>.Continuation] = []
 
@@ -132,6 +134,8 @@ public final class FakeJobQueue: JobQueue, @unchecked Sendable {
 
     public var startCallCount: Int { locked { startCalls } }
     public var stopCallCount: Int { locked { stopCalls } }
+    public var recordingDidStartCallCount: Int { locked { recordingDidStartCalls } }
+    public var recordingDidStopCallCount: Int { locked { recordingDidStopCalls } }
 
     // MARK: - JobQueue
 
@@ -207,5 +211,17 @@ public final class FakeJobQueue: JobQueue, @unchecked Sendable {
         return AsyncStream { continuation in
             locked { continuations.append(continuation) }
         }
+    }
+
+    /// C-013 v9 — часть протокола `JobQueue`. Фейк не эталон поведения (шапка файла):
+    /// счётчик считает вызов, ничего не пересматривает и не хранит факт записи.
+    public func recordingDidStart() async {
+        log.record(port: Self.portName, method: "recordingDidStart()")
+        locked { recordingDidStartCalls += 1 }
+    }
+
+    public func recordingDidStop() async {
+        log.record(port: Self.portName, method: "recordingDidStop()")
+        locked { recordingDidStopCalls += 1 }
     }
 }

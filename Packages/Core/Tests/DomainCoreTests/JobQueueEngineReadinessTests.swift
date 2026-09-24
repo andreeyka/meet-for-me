@@ -157,14 +157,33 @@ final class JobQueueEngineReadinessTests: XCTestCase {
     /// К56: не проходит `notYetDue` И `waitingForACPower` одновременно — публикуется ровно
     /// один `blocked` с причиной `notYetDue`, первой по порядку случаев.
     ///
-    /// СНЯТО XCTSkip по возврату РП (MEE-350): `runAfter <= now` в `InMemoryJobRepository
-    /// .claimNext` возвращён (C-010 инвариант 25, «фильтрует по `status`, `run_after` и
-    /// `type`»), и строка, не дошедшая по сроку, больше никогда не доходит до
-    /// `firstBlockingReason` — `notYetDue` этим способом И недостижим. Противоречие с
-    /// C-013 (инвариант 4 называет `notYetDue` случаем, который решает ОЧЕРЕДЬ) открыто
-    /// архитектору как IR-121 (MEE-356); до его ответа этот вход не проверяем.
+    /// СНЯТО XCTSkip — IR-121 (MEE-356) закрыт архитектором: C-010 v11, инвариант 25,
+    /// `claimNext` больше не ФИЛЬТРУЕТ по `run_after`, только упорядочивает по нему (C-013
+    /// v9). Строка с `runAfter` в будущем снова доходит до `firstBlockingReason` — ветвь
+    /// `notYetDue` достижима способом И без всякой развилки.
     func test_k56_notYetDueWinsOverWaitingForACPower() async throws {
-        throw XCTSkip("IR-121: notYetDue недостижим при фильтре run_after, C-010 инв. 25")
+        let rig = JobQueueTestRig(powerSnapshot: PowerSnapshot(
+            source: .battery, batteryFraction: 0.5, isLowPowerModeEnabled: false,
+            thermalPressure: .nominal, checkedAt: Date(timeIntervalSince1970: 0)
+        ))
+        let stream = rig.queue.events()
+        var iterator = stream.makeAsyncIterator()
+
+        _ = try await rig.queue.submit(makeSubmission(
+            runAfter: rig.clock.now().addingTimeInterval(1_000), requiresACPower: true
+        ))
+        guard case .submitted = await iterator.next() else {
+            return XCTFail("ожидался submitted")
+        }
+
+        await rig.queue.start()
+        guard case .blocked(_, _, let reason) = await iterator.next() else {
+            return XCTFail("ожидался blocked")
+        }
+        XCTAssertEqual(reason, .notYetDue, "notYetDue раньше waitingForACPower по порядку случаев")
+        // Ровно один blocked: единственный кандидат, единственный пересмотр — claimNext
+        // звана дважды (кандидата взяла, затем отдала nil), тем пересмотр и завершился.
+        XCTAssertEqual(rig.repository.claimNextCallCount, 2, "один кандидат и завершающий nil — не больше")
     }
 
     /// К56, вторая половина: не проходит `recordingInProgress` И `profileNotReady`

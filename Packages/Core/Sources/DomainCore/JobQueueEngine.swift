@@ -1,4 +1,4 @@
-//  JobQueueEngine — реализация `JobQueue` (C-013 v8, MEE-21) поверх `JobRepository`. MEE-350.
+//  JobQueueEngine — реализация `JobQueue` (C-013 v9, MEE-21) поверх `JobRepository`. MEE-350.
 //
 //  Модуль: domain-core · Владелец: DEV-2 · Слой: домен
 //
@@ -7,23 +7,16 @@
 //
 //  Файл несёт состояние, инициализатор и методы протокола без времени жизни очереди
 //  (`register`, `submit`, `cancel`, `job`, `jobs`, `events`) — жизненный цикл (`start`/`stop`,
-//  восстановление по инвариантам 10/11) в `JobQueueEngineLifecycle.swift`, пересмотр §7 в
-//  `JobQueueEngineReview.swift`, исполнение обработчика и лизинг в
-//  `JobQueueEngineExecution.swift` — деление по объёму (`file_length`/`type_body_length`
-//  SwiftLint), одна и та же расширяемая сущность `JobQueueEngine`.
+//  `recordingDidStart`/`recordingDidStop`, восстановление по инвариантам 10/11) в
+//  `JobQueueEngineLifecycle.swift`, пересмотр §7 в `JobQueueEngineReview.swift`, исполнение
+//  обработчика и лизинг в `JobQueueEngineExecution.swift` — деление по объёму
+//  (`file_length`/`type_body_length` SwiftLint), одна и та же расширяемая сущность
+//  `JobQueueEngine`.
 //
-//  // СТРОКА: источник «факт идущей записи» (инвариант 4, `JobBlockReason.recordingInProgress`).
-//  Контракт называет это условие трижды («по факту идущей записи», «Поведение»: «при старте и
-//  остановке записи») и ни разу не называет порт или метод, которым очередь его узнаёт — в
-//  отличие от `PowerSnapshot`, для которого назван `PowerPort` (C-008) дословно. Ни один из
-//  существующих контрактов `domain-core` (C-004 `AudioCapturePort`, C-018 `SessionCoordinator`)
-//  не объявлен стороной-поставщиком этого сигнала для `JobQueue` C-013 явно. Взято по конвенции,
-//  тем же приёмом, что и инъекция часов/каталога: `recordingDidStart()`/`recordingDidStop()` —
-//  два метода конкретного типа (не протокола `JobQueue`, который контракт объявляет дословно и
-//  трогать нельзя), composition root или тест зовут их напрямую тем же способом, каким
-//  `ManualClock` зовут напрямую. Владелец — архитектор C-013/C-004; условие снятия — контракт
-//  называет источник этого сигнала поимённо; срок — не позже задачи, которая свяжет
-//  `AudioCapturePort`/`SessionCoordinator` с очередью (composition root, вне `domain-core`).
+//  `recordingDidStart()`/`recordingDidStop()` (инвариант 4, `JobBlockReason.
+//  recordingInProgress`) были взяты по конвенции у конкретного типа (// СТРОКА, снята
+//  возвратом РП на MEE-350) — C-013 v9 объявил их дословно в протоколе `JobQueue`; здесь
+//  осталась только реализация.
 
 import Foundation
 

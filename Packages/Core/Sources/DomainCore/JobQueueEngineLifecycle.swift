@@ -106,7 +106,7 @@ extension JobQueueEngine {
         }
     }
 
-    // MARK: - Сигнал записи (см. `// СТРОКА:` в шапке `JobQueueEngine.swift`)
+    // MARK: - Сигнал записи (C-013 v9 — часть протокола `JobQueue`, см. шапку `JobQueueEngine.swift`)
 
     public func recordingDidStart() async {
         isRecordingInProgress = true
