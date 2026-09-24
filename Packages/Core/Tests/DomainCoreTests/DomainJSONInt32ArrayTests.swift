@@ -8,15 +8,18 @@
 import XCTest
 import DomainCore
 
+/// Вынесено на верхний уровень тем же приёмом, что `TranscriptNested.swift`/`EngineResults.swift`
+/// для чужих `CodingKeys`: объявленный ВНУТРИ `Probe`/`OptionalProbe` (сами уже вложены в
+/// класс теста) он был бы вторым уровнем вложенности — предел SwiftLint `nesting` держит один.
+private enum ProbeCodingKeys: String, CodingKey { case values }
+
 final class DomainJSONInt32ArrayTests: XCTestCase {
 
     private struct Probe: Decodable {
         let values: [Int32]
 
-        enum CodingKeys: String, CodingKey { case values }
-
         init(from decoder: Decoder) throws {
-            let box = try decoder.container(keyedBy: CodingKeys.self)
+            let box = try decoder.container(keyedBy: ProbeCodingKeys.self)
             values = try box.decodeBounded([Int32].self, forKey: .values)
         }
     }
@@ -24,10 +27,8 @@ final class DomainJSONInt32ArrayTests: XCTestCase {
     private struct OptionalProbe: Decodable {
         let values: [Int32]?
 
-        enum CodingKeys: String, CodingKey { case values }
-
         init(from decoder: Decoder) throws {
-            let box = try decoder.container(keyedBy: CodingKeys.self)
+            let box = try decoder.container(keyedBy: ProbeCodingKeys.self)
             values = try box.decodeBoundedIfPresent([Int32].self, forKey: .values)
         }
     }
