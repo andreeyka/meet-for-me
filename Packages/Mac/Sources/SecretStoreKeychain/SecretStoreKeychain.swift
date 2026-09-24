@@ -1,5 +1,7 @@
 //
-//  SecretStoreKeychain — каркас без кода.
+//  SecretStoreKeychain — SecretStore на файловом Keychain (IR-122/IR-125, MEE-364).
+//
+//  Модуль: secret-store-keychain · Владелец: DEV-1
 //
 //  Реализует `SecretStore` (протокол объявляет `CalendarHub`, не `DomainCore`) поверх
 //  файлового Keychain — `SecItemAdd`/`SecItemCopyMatching`/`SecItemUpdate`/`SecItemDelete`
@@ -33,11 +35,15 @@
 //  без `catch`). НЕ `ConnectorError` (C-006 §6: тот для ошибки ПЛАГИНА, обратное направление)
 //  и не тип `DomainCore`. Два случая:
 //    * `SecretStoreKeychainError.denied(status: OSStatus)` — `errSecInteractionNotAllowed`/
-//      `errSecAuthFailed` (keychain заблокирован или доступ отклонён). Решение РП: проверяется
-//      ВРУЧНУЮ, не вектором CI — `SecKeychainLock`/`kSecUseAuthenticationUIFail` подвесили бы
-//      тест на диалоге системы на машине разработчика, цена без выгоды для Среза 1.
+//      `errSecAuthFailed` (keychain заблокирован или доступ отклонён). Возврат РП, MEE-364:
+//      покрыт CI-вектором — `SecKeychainLock` на СВОЙ временный keychain теста +
+//      `SecKeychainSetUserInteractionAllowed(false)` (без диалога системы, без риска подвесить
+//      тест на машине разработчика) — `SecretStoreKeychainTests.test_ss12_deniedOnLockedTempKeychain`.
 //    * `SecretStoreKeychainError.unexpected(status: OSStatus)` — любой другой не-`errSecSuccess`
-//      код, несёт его `OSStatus` дословно.
+//      код, несёт его `OSStatus` дословно. Конкретный автоматический вектор (удалённый/
+//      недействительный keychain → `errSecNoSuchKeychain`) НЕ покрыт: на macos-14 CI такая
+//      ссылка не отказывает ни на `SecItemCopyMatching`, ни на `SecItemAdd` — находка передана
+//      аналитику (MEE-366/MEE-364), посылка К12/К13(ii) перечня эмпирически не подтвердилась.
 //  `get(key:namespace:)` на `errSecItemNotFound` отдаёт `nil`, не бросает — это ответ по типу
 //  метода (`String?`), а не отказ. `set(key:value: nil, namespace:)` на отсутствующей записи —
 //  успех без действия: `errSecItemNotFound` от `SecItemDelete` не пробрасывается, удаление уже
@@ -47,3 +53,105 @@
 //  `message` — `SecCopyErrorMessageString(status, nil)` (системное описание `OSStatus`), а без
 //  него — сам числовой `OSStatus`.
 //
+
+import CalendarHub
+import Foundation
+import Security
+
+public struct SecretStoreKeychain: SecretStore {
+
+    private let keychain: SecKeychain?
+
+    public init() {
+        self.init(keychain: nil)
+    }
+
+    init(keychain: SecKeychain?) {
+        self.keychain = keychain
+    }
+
+    public func get(key: String, namespace: String) async throws -> String? {
+        var query = searchQuery(key: key, namespace: namespace)
+        query[kSecReturnData as String] = true
+        query[kSecMatchLimit as String] = kSecMatchLimitOne
+
+        var result: CFTypeRef?
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        if status == errSecItemNotFound { return nil }
+        guard status == errSecSuccess, let data = result as? Data,
+              let value = String(data: data, encoding: .utf8) else {
+            throw SecretStoreKeychainError(status: status)
+        }
+        return value
+    }
+
+    public func set(key: String, value: String?, namespace: String) async throws {
+        guard let value else {
+            let status = SecItemDelete(searchQuery(key: key, namespace: namespace) as CFDictionary)
+            guard status == errSecSuccess || status == errSecItemNotFound else {
+                throw SecretStoreKeychainError(status: status)
+            }
+            return
+        }
+        let data = Data(value.utf8)
+        let updateStatus = SecItemUpdate(
+            searchQuery(key: key, namespace: namespace) as CFDictionary,
+            [kSecValueData as String: data] as CFDictionary
+        )
+        if updateStatus == errSecItemNotFound {
+            let addStatus = SecItemAdd(addQuery(key: key, namespace: namespace, data: data) as CFDictionary, nil)
+            guard addStatus == errSecSuccess else {
+                throw SecretStoreKeychainError(status: addStatus)
+            }
+            return
+        }
+        guard updateStatus == errSecSuccess else {
+            throw SecretStoreKeychainError(status: updateStatus)
+        }
+    }
+
+    private func baseAttributes(key: String, namespace: String) -> [String: Any] {
+        [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: "meet-for-me.calendar-hub.\(namespace)",
+            kSecAttrAccount as String: key
+        ]
+    }
+
+    /// Поиск (`SecItemCopyMatching`/`SecItemUpdate`/`SecItemDelete`) — список поиска
+    /// сужается явно на переданный keychain (тестовый шов, IR-125): без этого поиск шёл бы
+    /// по списку поиска процесса, где временного keychain теста нет.
+    private func searchQuery(key: String, namespace: String) -> [String: Any] {
+        var query = baseAttributes(key: key, namespace: namespace)
+        if let keychain {
+            query[kSecMatchSearchList as String] = [keychain]
+        }
+        return query
+    }
+
+    /// Запись (`SecItemAdd`) — куда ПИШЕТ решает `kSecUseKeychain`, не список поиска
+    /// (`SecItemAdd` без него пишет в keychain по умолчанию независимо от списка поиска,
+    /// находка самой постановки IR-125).
+    private func addQuery(key: String, namespace: String, data: Data) -> [String: Any] {
+        var query = baseAttributes(key: key, namespace: namespace)
+        query[kSecValueData as String] = data
+        if let keychain {
+            query[kSecUseKeychain as String] = keychain
+        }
+        return query
+    }
+}
+
+enum SecretStoreKeychainError: Error, Sendable {
+    case denied(status: OSStatus)
+    case unexpected(status: OSStatus)
+
+    init(status: OSStatus) {
+        switch status {
+        case errSecInteractionNotAllowed, errSecAuthFailed:
+            self = .denied(status: status)
+        default:
+            self = .unexpected(status: status)
+        }
+    }
+}
