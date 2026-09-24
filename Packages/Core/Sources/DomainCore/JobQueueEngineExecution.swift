@@ -28,41 +28,26 @@ extension JobQueueEngine {
             broadcaster.publish(.progressed(jobId: job.id, fraction: clamped))
         }
 
-        let outcome = await runWithLeaseRenewal(jobId: job.id) {
-            await handler.run(job, progress: progress)
+        // Сторож лизинга — отдельная НЕструктурная `Task`, а не дочерняя задача
+        // `withTaskGroup`: та требовала бы от сторожа, изолированного тем же актором, что и
+        // этот метод, самому влиться в актор из дочерней задачи группы, пока родитель ждёт
+        // `group.next()` на том же акторе, — при высокой конкуренции `beginExecuting`/
+        // `runRevisitPass` за исполнение актора такая форма наблюдалась зависающей (не
+        // дошло ни одного продвижения на CI, «Core (Linux)», прогон MEE-350). Явные
+        // `cancel()` + `await .value` дают тот же результат — сторож остановлен и досмотрен —
+        // без дочерней задачи, которой нужен тот же актор, что родителю.
+        let renewal = Task { [weak self] in
+            guard let self else { return }
+            await self.renewLeaseWhileRunning(jobId: job.id)
         }
+        let outcome = await handler.run(job, progress: progress)
+        renewal.cancel()
+        await renewal.value
 
         await applyOutcome(outcome, to: job)
         runningTasks[job.id] = nil
         if isRunning {
             await runRevisitPass()
-        }
-    }
-
-    /// Гонка структурной конкуренции: `body` против сторожа лизинга — сторож отменяется, как
-    /// только `body` вернул исход. Инвариант 11: `leaseExpiresAt` продлевается не реже чем
-    /// раз в 30 секунд, пока задача исполняется (К62).
-    private func runWithLeaseRenewal(
-        jobId: UUID, body: @Sendable @escaping () async -> JobOutcome
-    ) async -> JobOutcome {
-        await withTaskGroup(of: JobOutcome?.self) { group in
-            group.addTask { await body() }
-            group.addTask { [weak self] in
-                if let self {
-                    await self.renewLeaseWhileRunning(jobId: jobId)
-                }
-                return nil
-            }
-            var outcome: JobOutcome?
-            while let next = await group.next() {
-                if let next {
-                    outcome = next
-                    group.cancelAll()
-                    break
-                }
-            }
-            // Гарантированно ненулевой: единственный член группы, отдающий не-`nil`, — `body`.
-            return outcome ?? .permanentFailure(error: "unreachable")
         }
     }
 

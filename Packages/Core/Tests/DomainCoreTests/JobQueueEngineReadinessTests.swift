@@ -84,7 +84,9 @@ final class JobQueueEngineReadinessTests: XCTestCase {
         // (vii) седьмой вход — всё выполнено.
         do {
             let rig = JobQueueTestRig()
-            try await rig.queue.register(handler: FakeJobHandler(type: .transcode))
+            let handler = FakeJobHandler(type: .transcode)
+            handler.workLong(seconds: 5)
+            try await rig.queue.register(handler: handler)
             let id = try await rig.queue.submit(makeSubmission())
             await rig.queue.start()
             let job = try await rig.repository.job(id: id)
@@ -109,12 +111,17 @@ final class JobQueueEngineReadinessTests: XCTestCase {
     }
 
     /// К55: стартует первый ПРОШЕДШИЙ условия кандидат, а не первый по порядку приоритета.
+    /// `workLong` — тем же приёмом, что К53 (iv)/(v): без него исполнение по умолчанию
+    /// заканчивается раньше, чем тест успевает прочесть `.running`, — утверждение гонится
+    /// с фоновой `Task`, которую `start()` не ждёт (см. шапку `JobQueueTestRig`).
     func test_k55_firstCandidateThatPassesConditionsStarts() async throws {
         let rig = JobQueueTestRig(powerSnapshot: PowerSnapshot(
             source: .battery, batteryFraction: 0.5, isLowPowerModeEnabled: false,
             thermalPressure: .nominal, checkedAt: Date(timeIntervalSince1970: 0)
         ))
-        try await rig.queue.register(handler: FakeJobHandler(type: .transcode))
+        let handler = FakeJobHandler(type: .transcode)
+        handler.workLong(seconds: 5)
+        try await rig.queue.register(handler: handler)
 
         let blockedId = try await rig.queue.submit(makeSubmission(priority: 50, requiresACPower: true))
         let passingId = try await rig.queue.submit(makeSubmission(priority: 40))
@@ -190,7 +197,9 @@ final class JobQueueEngineReadinessTests: XCTestCase {
     /// вытесняя друг друга через предел.
     func test_k57_profilePredicateIsTotalOverCatalogOutcome() async throws {
         let rig = JobQueueTestRig(globalConcurrencyLimit: 10, perTypeConcurrencyLimit: 10)
-        try await rig.queue.register(handler: FakeJobHandler(type: .transcribe))
+        let handler = FakeJobHandler(type: .transcribe)
+        handler.workLong(seconds: 5)
+        try await rig.queue.register(handler: handler)
 
         rig.catalog.setMissingModels([], for: "ready")
         let readyId = try await rig.queue.submit(makeSubmission(

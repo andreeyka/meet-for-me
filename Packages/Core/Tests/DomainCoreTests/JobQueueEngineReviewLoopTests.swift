@@ -30,7 +30,9 @@ final class JobQueueEngineReviewLoopTests: XCTestCase {
     func test_k74_lowerPriorityReadyJobStartsWhileHigherIsBlocked() async throws {
         let rig = JobQueueTestRig()
         try await rig.queue.register(handler: FakeJobHandler(type: .transcode))
-        try await rig.queue.register(handler: FakeJobHandler(type: .attribute))
+        let attributeHandler = FakeJobHandler(type: .attribute)
+        attributeHandler.workLong(seconds: 5)
+        try await rig.queue.register(handler: attributeHandler)
 
         let transcodeId = try await rig.queue.submit(makeSubmission(priority: 50, forbidWhileRecording: true))
         let attributeId = try await rig.queue.submit(makeSubmission(
@@ -105,8 +107,12 @@ final class JobQueueEngineReviewLoopTests: XCTestCase {
     /// К77: пересмотр стартует больше одной задачи, пока есть свободные слоты.
     func test_k77_revisitStartsMoreThanOneJobWhileSlotsAreFree() async throws {
         let rig = JobQueueTestRig(globalConcurrencyLimit: 2, perTypeConcurrencyLimit: 1)
-        try await rig.queue.register(handler: FakeJobHandler(type: .transcode))
-        try await rig.queue.register(handler: FakeJobHandler(type: .attribute))
+        let transcodeHandler = FakeJobHandler(type: .transcode)
+        transcodeHandler.workLong(seconds: 5)
+        try await rig.queue.register(handler: transcodeHandler)
+        let attributeHandler = FakeJobHandler(type: .attribute)
+        attributeHandler.workLong(seconds: 5)
+        try await rig.queue.register(handler: attributeHandler)
         try await rig.queue.register(handler: FakeJobHandler(type: .diarize))
 
         let firstId = try await rig.queue.submit(makeSubmission(priority: 30))
