@@ -113,6 +113,8 @@ extension PortDeclarationTests {
         "func run(_ job: Job, progress: @Sendable @escaping (Double) -> Void) async -> JobOutcome"
     ]
 
+    /// C-013 (MEE-21) v9 — `recordingDidStart`/`recordingDidStop` дописаны возвратом РП
+    /// на MEE-350: прежде взяты по конвенции у конкретного типа, IR-121 закрыт архитектором.
     static let jobQueue = [
         "func register(handler: JobHandler) async throws",
         "func submit(_ submission: JobSubmission) async throws -> UUID",
@@ -121,7 +123,9 @@ extension PortDeclarationTests {
         "func jobs(status: JobStatus) async throws -> [Job]",
         "func start() async",
         "func stop() async",
-        "func events() -> AsyncStream<JobEvent>"
+        "func events() -> AsyncStream<JobEvent>",
+        "func recordingDidStart() async",
+        "func recordingDidStop() async"
     ]
 
     /// C-013 (MEE-21) v6, «Определение» §3 — дописан MEE-319.

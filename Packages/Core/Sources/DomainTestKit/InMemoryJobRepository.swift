@@ -211,10 +211,14 @@ extension InMemoryJobRepository {
         )
         locked { claimNextCalls += 1 }
         let outcome = locked { () -> ClaimOutcome in
+            // C-010 v11, инвариант 25: `claimNext` УПОРЯДОЧИВАЕТ по `run_after` (через
+            // `claimOrder` ниже), но не фильтрует по нему — решение о «слишком рано»
+            // (`JobBlockReason.notYetDue`) остаётся за очередью, читающей `runAfter` сама
+            // (`firstBlockingReason`, JobQueueEngineReview.swift). IR-121 (MEE-356) закрыт
+            // архитектором этой правкой C-010/C-013 (v11/v9) — прежняя развилка снята.
             let candidates = order.compactMap { jobsById[$0] }
                 .filter {
-                    $0.status == .pending && types.contains($0.type)
-                        && !excluding.contains($0.id) && $0.runAfter <= now
+                    $0.status == .pending && types.contains($0.type) && !excluding.contains($0.id)
                 }
                 .sorted(by: Self.claimOrder)
             guard let picked = candidates.first else { return .empty }
