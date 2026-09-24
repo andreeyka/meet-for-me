@@ -220,6 +220,7 @@ final class FakeModelCatalogPortTests: XCTestCase {
             sizeBytes: 500
         )
         port.setCatalog([descriptor(id: "asr-1", files: [file])])
+        port.setState(.downloaded, forId: "asr-1", version: "1.0.0")
         port.setProfiles([profile(id: "p1", asrModelId: "asr-1")])
 
         let resolved = try await port.resolve(profileId: "p1")
@@ -234,6 +235,54 @@ final class FakeModelCatalogPortTests: XCTestCase {
             atPath: resolved.asr.directoryURL.appendingPathComponent("weights.bin").path
         )
         XCTAssertTrue(fileExists, "инвариант 19: файл модели присутствует в момент выдачи")
+    }
+
+    /// Инвариант 8: `asr` не в `.downloaded`/`.loaded` — `resolve` бросает `notDownloaded`,
+    /// а не проходит молча (возврат РП на #122: первая редакция материализовала бандл
+    /// независимо от состояния модели).
+    func test_mee395_resolveThrowsNotDownloadedWhenAsrModelNotReady() async {
+        let port = FakeModelCatalogPort()
+        port.setCatalog([descriptor(id: "asr-1")])
+        // asr-1 остаётся .available — не downloaded.
+        port.setProfiles([profile(id: "p1", asrModelId: "asr-1")])
+
+        do {
+            _ = try await port.resolve(profileId: "p1")
+            XCTFail("должен бросить notDownloaded")
+        } catch ModelCatalogError.notDownloaded(let modelId, let version) {
+            XCTAssertEqual(modelId, "asr-1")
+            XCTAssertEqual(version, "1.0.0")
+        } catch {
+            XCTFail("неверная ошибка: \(error)")
+        }
+    }
+
+    /// Инвариант 9: необязательные роли (`vad`/`diarization`/`embedding`) — `nil`, если их
+    /// модель не скачана, и это не ошибка, а не отказ resolve целиком.
+    func test_mee395_resolveLeavesOptionalRolesNilWhenTheirModelsAreNotDownloaded() async throws {
+        let port = FakeModelCatalogPort()
+        port.setCatalog([descriptor(id: "asr-1"), descriptor(id: "vad-1")])
+        port.setState(.downloaded, forId: "asr-1", version: "1.0.0")
+        // vad-1 остаётся .available — не downloaded.
+        port.setProfiles([profile(id: "p1", asrModelId: "asr-1", vadModelId: "vad-1")])
+
+        let resolved = try await port.resolve(profileId: "p1")
+
+        XCTAssertEqual(resolved.asr.modelId, "asr-1")
+        XCTAssertNil(resolved.vad, "инвариант 9: не скачана — nil, не ошибка")
+    }
+
+    /// Инвариант 9 (продолжение): необязательная роль, ссылающаяся на модель, которой нет
+    /// в каталоге вовсе, — тоже `nil`; контракт не отделяет «неизвестна» от «не скачана».
+    func test_mee395_resolveLeavesOptionalRolesNilWhenTheirModelIsUnknownToCatalog() async throws {
+        let port = FakeModelCatalogPort()
+        port.setCatalog([descriptor(id: "asr-1")])
+        port.setState(.downloaded, forId: "asr-1", version: "1.0.0")
+        port.setProfiles([profile(id: "p1", asrModelId: "asr-1", embeddingModelId: "unknown-model")])
+
+        let resolved = try await port.resolve(profileId: "p1")
+
+        XCTAssertNil(resolved.embedding)
     }
 
     // MARK: - missingModels (существующий метод, сохранён)

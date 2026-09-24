@@ -41,13 +41,19 @@
 //  `@unchecked Sendable` с замком, а не актор — тот же довод, что у `FakeCalendarPort`:
 //  `ModelCatalogPort` объявлен `: Sendable`, а `events()` синхронен, актором протокол
 //  не покрыть.
+//
+//  Настройка тестом и счётчик расписок — во втором файле того же класса, `extension`
+//  (`FakeModelCatalogPort+Configuration.swift`): тело класса выросло за порог
+//  `type_body_length` SwiftLint (250 строк без учёта комментариев и пустых) после
+//  возврата РП на #122 (инварианты 8/9). Стораж поэтому не `private` — его зовёт и
+//  второй файл.
 
 import Foundation
 import DomainCore
 
 /// Адрес одной версии модели — `ModelDescriptor`/`ModelState` фейк держит по этому ключу,
 /// как и сам порт адресует их парой `(id, version)`.
-private struct ModelKey: Hashable {
+struct ModelKey: Hashable {
     let id: String
     let version: String
 }
@@ -57,18 +63,18 @@ public final class FakeModelCatalogPort: ModelCatalogPort, @unchecked Sendable {
     private let lock = NSLock()
     private let temporaryLayout = TemporaryFileLayout()
 
-    private var descriptorsByKey: [ModelKey: ModelDescriptor] = [:]
-    private var statesByKey: [ModelKey: ModelState] = [:]
-    private var profilesById: [String: TranscriptionProfile] = [:]
+    var descriptorsByKey: [ModelKey: ModelDescriptor] = [:]
+    var statesByKey: [ModelKey: ModelState] = [:]
+    var profilesById: [String: TranscriptionProfile] = [:]
 
     /// Модели, занятые непогашенными расписками, по ключу выданного `beginUse` — счётчик,
     /// а не множество: одна модель может входить в несколько разом невозвращённых расписок.
     private var useCountsByKey: [ModelKey: Int] = [:]
-    private var outstandingTokens: [ModelUseToken: [ModelKey]] = [:]
+    var outstandingTokens: [ModelUseToken: [ModelKey]] = [:]
 
-    private var downloadFailures: [ModelKey: ModelCatalogError] = [:]
-    private var deleteFailures: [ModelKey: ModelCatalogError] = [:]
-    private var resolveFailures: [String: ModelCatalogError] = [:]
+    var downloadFailures: [ModelKey: ModelCatalogError] = [:]
+    var deleteFailures: [ModelKey: ModelCatalogError] = [:]
+    var resolveFailures: [String: ModelCatalogError] = [:]
 
     /// Отказ `beginUse`, не привязанный к конкретному набору бандлов — контракт уже даёт
     /// естественный отказ `notDownloaded` по состоянию (инвариант 22); это — способ
@@ -76,89 +82,19 @@ public final class FakeModelCatalogPort: ModelCatalogPort, @unchecked Sendable {
     /// `failSync(with:for:)` у `FakeCalendarPort`.
     public var forcedBeginUseError: ModelCatalogError?
 
-    private var eventContinuations: [AsyncStream<ModelCatalogEvent>.Continuation] = []
+    var eventContinuations: [AsyncStream<ModelCatalogEvent>.Continuation] = []
 
-    private var beginUseSuccesses = 0
-    private var endUseCalls = 0
-    private var endUseEffective = 0
+    var beginUseSuccesses = 0
+    var endUseCalls = 0
+    var endUseEffective = 0
 
     public init() {}
 
-    private func locked<Value>(_ body: () throws -> Value) rethrows -> Value {
+    func locked<Value>(_ body: () throws -> Value) rethrows -> Value {
         lock.lock()
         defer { lock.unlock() }
         return try body()
     }
-
-    // MARK: - Настройка тестом
-
-    /// Заменяет весь каталог. Состояние уже известных моделей, не входящих в новый набор,
-    /// не трогается — так тест волен звать `setCatalog` до `setState` в любом порядке.
-    public func setCatalog(_ descriptors: [ModelDescriptor]) {
-        locked {
-            for descriptor in descriptors {
-                descriptorsByKey[ModelKey(id: descriptor.id, version: descriptor.version)] = descriptor
-            }
-        }
-    }
-
-    /// Базовое состояние модели. `.loaded` сюда можно передать, но `state(id:version:)`
-    /// отдаст его лишь пока нет ни одной непогашенной расписки (см. заголовок, п. 1) —
-    /// иначе используй настоящий `beginUse`.
-    public func setState(_ state: ModelState, forId id: String, version: String) {
-        locked { statesByKey[ModelKey(id: id, version: version)] = state }
-    }
-
-    public func setProfiles(_ profiles: [TranscriptionProfile]) {
-        locked {
-            for profile in profiles { profilesById[profile.id] = profile }
-        }
-    }
-
-    /// `nil` снимает отказ. Персистентно, пока не снят или не заменён — тем же приёмом,
-    /// что `failSync(with:for:)`/`setFailure(_:for:)` у соседних фейков.
-    public func failDownload(_ error: ModelCatalogError?, forId id: String, version: String) {
-        locked { downloadFailures[ModelKey(id: id, version: version)] = error }
-    }
-
-    public func failDelete(_ error: ModelCatalogError?, forId id: String, version: String) {
-        locked { deleteFailures[ModelKey(id: id, version: version)] = error }
-    }
-
-    public func failResolve(_ error: ModelCatalogError?, forProfileId profileId: String) {
-        locked { resolveFailures[profileId] = error }
-    }
-
-    /// Проталкивает `ModelCatalogEvent` в поток(и) `events()`, ровно как есть.
-    public func pushEvent(_ event: ModelCatalogEvent) {
-        let targets = locked { eventContinuations }
-        for continuation in targets { continuation.yield(event) }
-    }
-
-    /// Закрыть поток(и) `events()`: подписчики досматривают выданное и выходят из цикла.
-    public func finishEvents() {
-        let targets = locked { () -> [AsyncStream<ModelCatalogEvent>.Continuation] in
-            let taken = eventContinuations
-            eventContinuations = []
-            return taken
-        }
-        for continuation in targets { continuation.finish() }
-    }
-
-    // MARK: - Расписки — честный счётчик (§«Фейк для тестов»)
-
-    /// Сколько раз `beginUse` УСПЕШНО выдал расписку.
-    public var beginUseSuccessCount: Int { locked { beginUseSuccesses } }
-
-    /// Сколько раз `endUse` ВООБЩЕ позвали — включая холостые вызовы на неизвестную или
-    /// уже погашенную расписку (инвариант 23: они не эффект, но они звонок).
-    public var endUseCallCount: Int { locked { endUseCalls } }
-
-    /// Сколько из вызовов `endUse` РЕАЛЬНО погасили непогашенную расписку.
-    public var endUseEffectiveCount: Int { locked { endUseEffective } }
-
-    /// Сколько расписок сейчас не погашено.
-    public var outstandingUseTokenCount: Int { locked { outstandingTokens.count } }
 
     // MARK: - ModelCatalogPort
 
@@ -267,17 +203,18 @@ public final class FakeModelCatalogPort: ModelCatalogPort, @unchecked Sendable {
         if existed { pushEvent(.profilesChanged) }
     }
 
-    /// Инвариант 19: материализует `directoryURL` и все файлы `ModelDescriptor.files`
-    /// внутри `TemporaryFileLayout` перед тем, как отдать `ModelBundle` (заголовок, выше).
+    /// Инварианты 8, 9, 19 — дословно. Возврат РП на #122: первая редакция материализовала
+    /// бандлы независимо от состояния модели, нарушая оба инварианта разом (`asr` проходил
+    /// на `.available`, необязательные роли заполнялись всегда).
     public func resolve(profileId: String) async throws -> ResolvedProfile {
         if let error = locked({ resolveFailures[profileId] }) { throw error }
         guard let profile = locked({ profilesById[profileId] }) else {
             throw ModelCatalogError.unknownProfile(id: profileId)
         }
-        let asr = try bundle(forModelId: profile.asrModelId)
-        let vad = try profile.vadModelId.map(bundle(forModelId:))
-        let diarization = try profile.diarizationModelId.map(bundle(forModelId:))
-        let embedding = try profile.embeddingModelId.map(bundle(forModelId:))
+        let asr = try requiredBundle(forModelId: profile.asrModelId)
+        let vad = try profile.vadModelId.flatMap(optionalBundle(forModelId:))
+        let diarization = try profile.diarizationModelId.flatMap(optionalBundle(forModelId:))
+        let embedding = try profile.embeddingModelId.flatMap(optionalBundle(forModelId:))
         return ResolvedProfile(
             profileId: profileId,
             language: profile.language,
@@ -342,11 +279,39 @@ public final class FakeModelCatalogPort: ModelCatalogPort, @unchecked Sendable {
         }
     }
 
-    private func bundle(forModelId modelId: String) throws -> ModelBundle {
-        let found = locked { descriptorsByKey.first { $0.key.id == modelId } }
-        guard let (key, descriptor) = found else {
-            throw ModelCatalogError.unknownModel(id: modelId, version: "")
+    /// Инвариант 8: `asr` — единственная роль, для которой неготовность отказывает всему
+    /// `resolve`, а не даёт `nil`.
+    private func requiredBundle(forModelId modelId: String) throws -> ModelBundle {
+        let found = try locked { () throws -> (ModelKey, ModelDescriptor) in
+            guard let match = descriptorsByKey.first(where: { $0.key.id == modelId }) else {
+                throw ModelCatalogError.unknownModel(id: modelId, version: "")
+            }
+            switch computedState(for: match.key) {
+            case .downloaded, .loaded: return match
+            default: throw ModelCatalogError.notDownloaded(modelId: match.key.id, version: match.key.version)
+            }
         }
+        return try materializeBundle(key: found.0, descriptor: found.1)
+    }
+
+    /// Инвариант 9 дословно: `nil` при любой причине неготовности — неизвестная модель или
+    /// известная, но не скачанная, — контракт не отделяет один случай от другого и
+    /// прямо называет это «не ошибкой».
+    private func optionalBundle(forModelId modelId: String) throws -> ModelBundle? {
+        let found = locked { () -> (ModelKey, ModelDescriptor)? in
+            guard let match = descriptorsByKey.first(where: { $0.key.id == modelId }) else { return nil }
+            switch computedState(for: match.key) {
+            case .downloaded, .loaded: return match
+            default: return nil
+            }
+        }
+        guard let (key, descriptor) = found else { return nil }
+        return try materializeBundle(key: key, descriptor: descriptor)
+    }
+
+    /// Инвариант 19: материализует `directoryURL` и все файлы `ModelDescriptor.files`
+    /// внутри `TemporaryFileLayout` перед тем, как отдать `ModelBundle`.
+    private func materializeBundle(key: ModelKey, descriptor: ModelDescriptor) throws -> ModelBundle {
         let directoryURL = temporaryLayout.layout.modelDirectory(
             engine: descriptor.engine, modelId: key.id, version: key.version
         )
