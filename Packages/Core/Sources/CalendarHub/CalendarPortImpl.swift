@@ -37,7 +37,11 @@ public actor CalendarPortImpl: CalendarPort {
     var capabilities: [CalendarSourceId: ConnectorCapabilities] = [:]
     private var logEntries: [CalendarSourceId: [(level: LogLevel, message: String)]] = [:]
     private var notifyEntries: [CalendarSourceId: [(kind: HostNotificationKind, detail: String?)]] = [:]
-    var inFlightSync: [CalendarSourceId: Task<CalendarSyncResult, Never>] = [:]
+    /// `generation`: возврат РП, бэклог MEE-386 (два пограничных случая отмены из #94, п. 2)
+    /// — без него `finishInFlightSync` не смогла бы отличить «эта задача всё ещё текущая»
+    /// от «источник уже занят более новой, заведённой после того, как я обнулил запись
+    /// раньше срока» (`CalendarPortImplSync.swift`, докстринг `finishInFlightSync`).
+    var inFlightSync: [CalendarSourceId: (generation: UUID, task: Task<CalendarSyncResult, Never>)] = [:]
     /// Возврат РП, приёмка #94: отмена ОДНОГО вызывающего `syncOne` не вправе отменять
     /// общую задачу за остальных — свой предохранитель на вызывающего, не на саму задачу
     /// (`CalendarPortImplSync.swift`, `syncOne`/`awaitSharedSync`).
@@ -272,6 +276,20 @@ public actor CalendarPortImpl: CalendarPort {
     /// `waitSeam` вызовов, которым изоляция CalendarPortImpl и не нужна (`WaitSeam`/
     /// `CalendarConnector` — оба `Sendable`, не актор-изолированные сами по себе).
     private static func shutdownWithTimeout(connector: CalendarConnector, waitSeam: WaitSeam) async {
+        // СТРОКА (возврат РП, приёмка #109, 19:25 UTC): эта гонка ограничивает, сколько ждёт
+        // `group.next()` — она НЕ форсирует `connector.shutdown()` в общего вернуться. Swift
+        // структурная конкурентность требует, чтобы сам `withTaskGroup` дождался ВСЕХ дочерних
+        // задач, включая отменённую `cancelAll()`, прежде чем эта функция сама вернётся —
+        // отмена кооперативна: она лишь взводит `Task.isCancelled`, коннектор обязан сам её
+        // проверить или использовать отменяемый примитив (как `hangOrGate` фейка через
+        // `withTaskCancellationHandler`), чтобы фактически завершиться раньше. Коннектор,
+        // ИГНОРИРУЮЩИЙ отмену (например, синхронный блокирующий ввод-вывод без проверки
+        // `Task.isCancelled`), всё равно повесит `stop()` навсегда — 30с здесь ограничивают
+        // только то, КАКОЙ ветке отдаётся предпочтение внутри гонки, не верхнюю границу
+        // самого `stop()`. Настоящее решение — kill-таймаут на уровне процесса/транспорта,
+        // не на уровне кооперативной отмены Swift; оно относится к группе Ж (stdio,
+        // `ScriptedRPCTransport`), где `stop()` сможет буквально прибить процесс, если тот
+        // не ответил на кадр `shutdown` за отведённое время (К9 вход Б).
         await withTaskGroup(of: Void.self) { group in
             group.addTask { await connector.shutdown() }
             group.addTask { try? await waitSeam.sleep(for: MethodTimeout.other.duration) }

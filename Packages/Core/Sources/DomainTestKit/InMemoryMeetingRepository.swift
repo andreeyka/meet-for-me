@@ -179,11 +179,26 @@ public final class InMemoryMeetingRepository: MeetingRepository, @unchecked Send
         try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
     }
 
+    /// Возврат РП (приёмка #109, 19:25 UTC; уточнение 24.09 19:35 UTC): проверка
+    /// `gatedMethods.contains(method)` и регистрация continuation были ДВУМЯ отдельными
+    /// `locked` — гонка была со `stopGating(on:)`, НЕ с `release(on:)`: `release(on:)`,
+    /// пришедший до регистрации, и после фикса остаётся no-op (застаёт словарь пустым,
+    /// снимать нечего) — так и задумано, ждать следующего `release(on:)` нормально. Дефект
+    /// был в другом: check мог застать `gatedMethods.contains == true` МОМЕНТОМ раньше, чем
+    /// `stopGating(on:)` снимет ворота, а следующий за ним `release(on:)` (обычно идут парой
+    /// в конце теста) опустошит `gateContinuations[method]`, найдя его ещё пустым, —
+    /// регистрация, случившаяся уже ПОСЛЕ этого прохода, оставляла continuation в словаре
+    /// сиротой: ворота уже сняты (новые вызовы больше не встанут), а второго `release(on:)`
+    /// для этого метода тест уже не планировал. Здесь — одна атомарная проверка-и-регистрация,
+    /// так что `stopGating`/`release` физически не могут вклиниться между чтением и записью.
     private func waitIfGated(_ method: MeetingRepositoryMethod) async {
-        guard locked({ gatedMethods.contains(method) }) else { return }
-        let key = UUID()
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-            locked { gateContinuations[method, default: [:]][key] = continuation }
+            let isGated = locked { () -> Bool in
+                guard gatedMethods.contains(method) else { return false }
+                gateContinuations[method, default: [:]][UUID()] = continuation
+                return true
+            }
+            if !isGated { continuation.resume() }
         }
     }
 
