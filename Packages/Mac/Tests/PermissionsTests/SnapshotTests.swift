@@ -72,11 +72,14 @@ final class SnapshotTests: XCTestCase {
     // MARK: - 6. checkedAt — время снимка, а не наблюдения
 
     func test_c06_checkedAt_isSnapshotTime_notNoteTime() async throws {
-        let harness = PermissionsHarness()
-        let noteTime = Date()
+        // MEE-379 (аудит MEE-377, п.2, возврат РП 24.09 18:05): фейковые часы вместо реальной
+        // паузы — `noteTime`/`snapshotCall` разведены явным сдвигом, не гонкой с планировщиком.
+        let clock = ManualClock()
+        let harness = PermissionsHarness(now: clock.now)
+        let noteTime = clock.now()
         await harness.sut.note(observed: .granted, for: .systemAudioRecording)
-        try await Task.sleep(nanoseconds: 60_000_000)
-        let snapshotCall = Date()
+        clock.advance(by: 1)
+        let snapshotCall = clock.now()
         let snapshot = await harness.sut.snapshot()
         XCTAssertGreaterThanOrEqual(snapshot.checkedAt, snapshotCall)
         XCTAssertGreaterThan(snapshot.checkedAt, noteTime)

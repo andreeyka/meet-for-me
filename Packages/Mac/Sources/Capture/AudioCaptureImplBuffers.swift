@@ -28,8 +28,9 @@ extension AudioCaptureImpl {
     }
 
     /// Инвариант 23: `.levels`, частота ≤10 Гц. Возврат MEE-317 (второй круг): троттлинг — по
-    /// МЕТКЕ ВРЕМЕНИ ДОСТАВКИ буфера порту (часы вызова, `Date()`), не по `hostTime` данных
-    /// (как `maybeFlush`, инвариант 26) — тот приём здесь был ошибкой: `.levels` кормит
+    /// МЕТКЕ ВРЕМЕНИ ДОСТАВКИ буфера порту (часы вызова, `now()` — шов, по умолчанию `Date()`,
+    /// возврат РП по MEE-377 24.09), не по `hostTime` данных (как `maybeFlush`, инвариант 26) —
+    /// тот приём здесь был ошибкой: `.levels` кормит
     /// индикатор для человека (C-016), а не позицию на диске, и обязан не превышать 10
     /// событий в РЕАЛЬНУЮ секунду наблюдателя. Пачка буферов, доставленная разом (устройство
     /// отдало данные одним куском), но с `hostTime` каждого буфера, разнесённым больше чем на
@@ -42,12 +43,12 @@ extension AudioCaptureImpl {
         case .mic: session.lastMicLevel = level
         case .system: session.lastSystemLevel = level
         }
-        let now = Date()
+        let deliveredAt = now()
         if let last = session.lastLevelsEmitAt,
-           now.timeIntervalSince(last) * 1000 < Double(AudioLevel.minimumIntervalMs) {
+           deliveredAt.timeIntervalSince(last) * 1000 < Double(AudioLevel.minimumIntervalMs) {
             return
         }
-        session.lastLevelsEmitAt = now
+        session.lastLevelsEmitAt = deliveredAt
         emit(.levels(.init(
             mic: session.micTrack != nil ? session.lastMicLevel : nil,
             system: session.systemTrack != nil ? session.lastSystemLevel : nil

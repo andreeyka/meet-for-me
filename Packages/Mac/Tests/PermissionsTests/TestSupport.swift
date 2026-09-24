@@ -20,7 +20,13 @@ final class FakeStatusSource: StatusSource, @unchecked Sendable {
     /// MEE-379 (аудит MEE-377, п.1): вместо фикс. паузы, угадывающей когда второй `request`
     /// столкнётся с первым, — явный gate. Когда `true`, `prompt(_:)` сигналит `promptStarted`
     /// (тест видит, что первый вызов реально ВОШЁЛ в промпт) и висит до `releasePrompt()`.
-    var holdPromptUntilReleased = false
+    /// Само хранилище — под замком: `releasePrompt()` (возврат РП 24.09 18:05) пишет его же
+    /// поле конкурентно с чтением в `prompt(_:)`.
+    private var storedHoldPromptUntilReleased = false
+    var holdPromptUntilReleased: Bool {
+        get { lock.lock(); defer { lock.unlock() }; return storedHoldPromptUntilReleased }
+        set { lock.lock(); storedHoldPromptUntilReleased = newValue; lock.unlock() }
+    }
     private var startedKinds: Set<PermissionKind> = []
     private var promptStartedContinuations: [(PermissionKind, CheckedContinuation<Void, Never>)] = []
     private var releaseContinuations: [CheckedContinuation<Void, Never>] = []
@@ -47,8 +53,12 @@ final class FakeStatusSource: StatusSource, @unchecked Sendable {
         }
     }
 
-    /// Отпускает все вызовы `prompt(_:)`, повисшие на `holdPromptUntilReleased`.
+    /// Отпускает все вызовы `prompt(_:)`, повисшие на `holdPromptUntilReleased`, и сбрасывает
+    /// сам флаг (возврат РП 24.09 18:05): при поломке склейки `request` следующий, отдельный
+    /// вызов `prompt(_:)` не должен повиснуть повторно — тест обязан УПАСТЬ на утверждении,
+    /// а не зависнуть до сторожа CI.
     func releasePrompt() {
+        holdPromptUntilReleased = false
         lock.lock()
         let pending = releaseContinuations
         releaseContinuations = []
@@ -244,6 +254,28 @@ final class FakeActivation: ActivationSource, @unchecked Sendable {
     }
 }
 
+// MARK: - Шов часов (MEE-379, возврат РП 24.09 18:05)
+
+/// Часы под управлением теста — `checkedAt` снимка перестаёт зависеть от настоящего `Date()`
+/// и реальных пауз (см. `PermissionsCore.Environment.now`).
+final class ManualClock: @unchecked Sendable {
+    private let lock = NSLock()
+    private var current: Date
+
+    init(_ start: Date = Date(timeIntervalSince1970: 0)) {
+        current = start
+    }
+
+    func now() -> Date {
+        lock.lock(); defer { lock.unlock() }
+        return current
+    }
+
+    func advance(by seconds: TimeInterval) {
+        lock.lock(); current = current.addingTimeInterval(seconds); lock.unlock()
+    }
+}
+
 // MARK: - Порт прав на подставленных источниках
 
 struct PermissionsHarness {
@@ -254,10 +286,10 @@ struct PermissionsHarness {
     let activation = FakeActivation()
     let sut: SystemPermissions
 
-    init(_ statuses: [PermissionKind: PermissionStatus] = [:]) {
+    init(_ statuses: [PermissionKind: PermissionStatus] = [:], now: @escaping @Sendable () -> Date = Date.init) {
         self.statuses = FakeStatusSource(statuses)
         sut = SystemPermissions(environment: .init(rights: self.statuses, settings: settings,
-                                                   loginItems: loginItems, activation: activation))
+                                                   loginItems: loginItems, activation: activation, now: now))
     }
 
     /// Порт со швом 1.б: исход чтения подставлен, перевод в статус — настоящий.
@@ -305,6 +337,18 @@ func waitUntil(_ seconds: TimeInterval = 5, _ condition: () -> Bool) -> Bool {
         Thread.sleep(forTimeInterval: 0.02)
     }
     return condition()
+}
+
+/// Асинхронный двойник `waitUntil` — для условий, которые сами читаются `await` (актор), где
+/// `Thread.sleep` внутри цикла держал бы поток вместо уступки планировщику. MEE-379 (возврат РП
+/// 24.09 18:05): ограниченный опрос вместо угадывания по фиксированной паузе.
+func waitUntilAsync(_ seconds: TimeInterval = 5, _ condition: () async -> Bool) async -> Bool {
+    let deadline = Date().addingTimeInterval(seconds)
+    while Date() < deadline {
+        if await condition() { return true }
+        try? await Task.sleep(nanoseconds: 20_000_000)
+    }
+    return await condition()
 }
 
 // MARK: - Исходники и продукт сборки модуля

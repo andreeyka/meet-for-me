@@ -178,6 +178,17 @@ final class RequestTests: XCTestCase {
         async let first = harness.sut.request(.microphone)
         await harness.statuses.awaitPromptStarted(.microphone)
         async let second = harness.sut.request(.microphone)
+        // Возврат РП (24.09 18:05): `awaitPromptStarted` гарантирует лишь, что ПЕРВЫЙ вызов
+        // вошёл в `prompt(_:)` — не то, что ВТОРОЙ уже присоединился к летящему запросу
+        // (`PermissionsCore.requestsInFlight`). Без этого шага второй вызов мог бы дойти до
+        // `requestsInFlight` уже ПОСЛЕ `releasePrompt()`, застать её пустой и завести свой,
+        // повторный промпт — тест прошёл бы, не проверив склейку. `joinedInFlightRequestCount`
+        // (тестовый шов в PermissionsCore, поведение не меняется) — прямое наблюдение факта
+        // склейки, не оценка времени.
+        let joined = await waitUntilAsync {
+            await harness.sut.joinedInFlightRequestCount >= 1
+        }
+        XCTAssertTrue(joined, "второй request не присоединился к уже летящему запросу за отведённое время")
         harness.statuses.releasePrompt()
         let outcomes = await [first, second]
         XCTAssertEqual(outcomes, [.granted, .granted])
