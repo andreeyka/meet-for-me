@@ -113,7 +113,13 @@ struct SessionMachineOccupiedStand {
         let holder = try unwrap(await stand.machine.session(id: prompt.sessionId))
         XCTAssertEqual(holder.state, .recording, "оснастка: ad-hoc держит цель строкой 16")
 
+        // `us.zoom.xos`, доставленный `early`, к этому моменту давно просрочен (TTL 60 с):
+        // ПЕРЕСЧЁТ ЦЕЛИ, который проводит КАЖДЫЙ `tick` для ВСЯКОЙ живой сессии (включая
+        // держателя), обнулил бы `target` держателя, не найдя ни одного отнёсшегося
+        // сигнала, — и `sessionHolding` после этого не находил бы его НИКОГДА, хотя
+        // состояние остаётся `.recording`. Сигнал поэтому подаётся ЗАНОВО здесь же.
         let armAt = moment.addingTimeInterval(-600)
+        await stand.deliver(SessionMachineFixtures.audioOutput(appKey: "us.zoom.xos", observedAt: armAt))
         await stand.machine.tick(now: armAt)
         await stand.deliver(SessionMachineFixtures.audioOutput(appKey: "owner.target", observedAt: armAt))
         await stand.machine.tick(now: armAt)
