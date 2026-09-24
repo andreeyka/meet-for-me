@@ -133,6 +133,16 @@ final class JSONDecoderDivergenceTests: StorageAsyncTestCase {
         return replaced
     }
 
+    /// Клонирует все ключи верхнего уровня валидного JSON-объекта `{...}` в
+    /// один буквально дублирующийся набор — `assertNoDuplicateKeys` обязан
+    /// отказать на первом же повторе, независимо от имён конкретных полей.
+    /// Своя копия — `JSONDecoderDivergenceExtraTests.swift` не делится этим
+    /// приватным хелпером через границу файла.
+    private static func duplicateTopLevelKeys(_ json: String) -> String {
+        let inner = json.dropFirst().dropLast()
+        return "{\(inner),\(inner)}"
+    }
+
     static func assertDataCorrupted<T>(
         entity: String, id: String, messageContains: String? = nil,
         file: StaticString = #filePath, line: UInt = #line,
