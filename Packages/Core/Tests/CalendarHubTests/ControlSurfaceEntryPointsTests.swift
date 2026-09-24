@@ -216,6 +216,18 @@ final class ControlSurfaceEntryPointsTests: XCTestCase {
     /// `task.cancel()` СРАЗУ после создания `Task` — задача ещё не начала выполняться, и
     /// когда она дойдёт до первой проверки `Task.isCancelled`, флаг уже будет взведён (метка
     /// отмены атомарна и не зависит от того, стартовало ли тело задачи).
+    ///
+    /// Возврат РП (24.09, приёмка #112, бэклог «часть 3г», п. 1): раньше ворота отпускались
+    /// только ПОСЛЕ `await task.value` — без фикса (т.е. если `task.cancel()` не долетает до
+    /// общей задачи) `await task.value` ждал бы `finishInFlightSync` НАВСЕГДА, поскольку
+    /// освободить save-ворота было уже некому — тест сам не дошёл бы до этой строки, а
+    /// повис. Порядок ниже устраняет эту зависимость: ворота отпускаются СРАЗУ, как только
+    /// задача до них дошла (не дожидаясь исхода отмены), — единственный вызывающий уже
+    /// отменённой задачи получает `.cancelled` от `cancelSyncWaiter` независимо от того, что
+    /// сама общая задача при этом дожила своим чередом (её результат больше никого не
+    /// интересует). Без `task.cancel()` (проверено вручную, не в составе теста) единственный
+    /// вызывающий получил бы результат ЗАВЕРШИВШЕЙСЯ синхронизации (успех) — сравнение с
+    /// `.cancelled` ниже упало бы явной, быстрой ошибкой ассерта, не зависанием CI.
     func test_defect_soleCallerCancelledBeforeRegistrationStillCancelsSharedTask() async throws {
         let harness = Harness(sourceIds: ["src-1"])
         harness.connectorRepository.seed([Harness.record(id: "src-1")])
@@ -230,6 +242,10 @@ final class ControlSurfaceEntryPointsTests: XCTestCase {
 
         let task = Task { await harness.hub.sync(trigger: .manual) }
         task.cancel()
+
+        await pollUntil { meetingRepositorySaveCallCount(harness.meetingRepository) >= 1 }
+        harness.meetingRepository.stopGating(on: .save)
+        harness.meetingRepository.release(on: .save)
 
         let results = await task.value
         XCTAssertEqual(results.first?.failure, .cancelled)
@@ -299,6 +315,71 @@ final class ControlSurfaceEntryPointsTests: XCTestCase {
         XCTAssertEqual(
             meetingRepositorySaveCallCount(harness.meetingRepository), 2,
             "оба цикла — отпущенный первый и второй — обязаны были дойти до save"
+        )
+    }
+
+    /// Возврат РП (24.09, приёмка #112, бэклог «часть 3г», п. 2): `finishInFlightSync` уже
+    /// защищала бухгалтерию вызывающих генерацией, но сам `setSyncOutcome` внутри
+    /// `performSync` такой защиты не имел вовсе — устаревшее (отменённое, уже вытесненное)
+    /// поколение, once его СОБСТВЕННАЯ задача всё-таки доходила до конца, писало СВОЙ исход в
+    /// `connectorRepository`, как ни в чём не бывало, рискуя переписать уже записанный,
+    /// актуальный исход следующего, текущего поколения.
+    ///
+    /// Тест доказывает `recordSyncOutcomeIfCurrent` полностью последовательно, без гонки по
+    /// времени: сначала до конца доводит устаревшее (отменённое) поколение — с заведомо
+    /// ОТЛИЧИМЫМ (ошибочным) исходом через `fail(with:on:)`, — затем заводит новое поколение
+    /// и доводит до конца его честный, успешный исход. Проверка — ЧИСТЫЙ СЧЁТЧИК вызовов
+    /// `setSyncOutcome`, а не итоговое значение в хранилище: порядок между двумя независимыми
+    /// continuation одной и той же цепочки `mergeTail` ничем не гарантирован (последовательный
+    /// сценарий этого теста — лишь способ детерминированно ДОВЕСТИ устаревшее поколение до его
+    /// собственной попытки записи, не утверждение о реальном порядке гонки в проде), а без
+    /// фикса счётчик стал бы 2 при ЛЮБОМ порядке — обе попытки записи происходят независимо от
+    /// того, какая из них в итоге осталась видна в `storedRecords`.
+    func test_defect_staleGenerationDoesNotWriteSyncOutcome() async throws {
+        let harness = Harness(sourceIds: ["src-1"])
+        harness.connectorRepository.seed([Harness.record(id: "src-1")])
+        let connector = harness.connector("src-1")
+        connector.setInitializeResult(capabilities: ConnectorCapabilities(
+            deltaSync: false, push: false, attendees: true, conference: true, auth: .none
+        ))
+        connector.setFetchEvents([
+            try mergeTestPayload(connectorId: "src-1", externalId: "evt-1", lastModified: Date())
+        ])
+        harness.meetingRepository.gate(on: .save)
+
+        let firstTask = Task { await harness.hub.sync(trigger: .manual) }
+        await pollUntil { meetingRepositorySaveCallCount(harness.meetingRepository) >= 1 }
+        let firstGenerationTask = await harness.hub.inFlightSync[source]?.task
+        XCTAssertNotNil(firstGenerationTask, "первое поколение обязано существовать на этот момент")
+        firstTask.cancel()
+        let firstResults = await firstTask.value
+        XCTAssertEqual(firstResults.first?.failure, .cancelled)
+        await pollUntil(timeout: .seconds(2)) { await harness.hub.inFlightSync[source] == nil }
+
+        // Устаревшее поколение всё ещё физически висит на save-воротах — отпускаем его с
+        // заранее взведённым отказом, чтобы у его (потенциальной) записи был заведомо
+        // отличимый от честного успеха вид, и ждём его СОБСТВЕННУЮ задачу до конца (не
+        // firstTask — тот уже вернул .cancelled вызывающему безотносительно судьбы самой
+        // задачи).
+        harness.meetingRepository.fail(
+            with: .dataCorrupted(entity: "meeting", id: "n/a", message: "устаревшее поколение"), on: .save
+        )
+        harness.meetingRepository.release(on: .save)
+        _ = await firstGenerationTask?.value
+        harness.meetingRepository.stopGating(on: .save)
+        harness.meetingRepository.clearFailure(on: .save)
+
+        let secondTask = Task { await harness.hub.sync(trigger: .manual) }
+        let secondResults = await secondTask.value
+        XCTAssertNil(secondResults.first?.failure, "новое поколение обязано завершиться успешно")
+
+        XCTAssertEqual(
+            connectorRepositorySetSyncOutcomeCallCount(harness.connectorRepository), 1,
+            "устаревшее поколение не должно писать свой исход вовсе"
+        )
+        XCTAssertNil(
+            harness.connectorRepository.storedRecords.first?.lastError,
+            "итоговое состояние обязано отражать честный успех текущего поколения"
         )
     }
 }

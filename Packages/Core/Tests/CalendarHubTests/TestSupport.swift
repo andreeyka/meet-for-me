@@ -313,6 +313,17 @@ func meetingRepositorySaveCallCount(_ repository: InMemoryMeetingRepository) -> 
     repository.callLog.calls.filter { $0.signature == "MeetingRepository.save(_:)" }.count
 }
 
+/// Счётчик вызовов `ConnectorRepository.setSyncOutcome(at:error:connectorId:)` — бэклог
+/// MEE-386, «часть 3г», п. 2 (`test_defect_staleGenerationDoesNotWriteSyncOutcome`,
+/// `ControlSurfaceEntryPointsTests.swift`): без фикса устаревшее поколение писало бы СВОЙ
+/// исход вторым вызовом — чистый счётчик отличает это от «записал только текущий», не
+/// полагаясь на то, какое из двух значений в итоге осталось в хранилище (порядок между
+/// независимыми continuation одной и той же цепочки `mergeTail` ничем не гарантирован).
+func connectorRepositorySetSyncOutcomeCallCount(_ repository: InMemoryConnectorRepository) -> Int {
+    let signature = "ConnectorRepository.setSyncOutcome(at:error:connectorId:)"
+    return repository.callLog.calls.filter { $0.signature == signature }.count
+}
+
 /// Сеет мимо `save` встречу с двумя источниками ("A"/`evt-a`, "B"/`evt-b`, общий `icalUid`),
 /// оба со снимками, identity и содержимое — B (больший `lastModified`) — общий пролог
 /// `test_inv10_sourceFailureInCycleKeepsOtherSourcesSnapshotsIntact` (MergeCrossCycleTests.swift),
