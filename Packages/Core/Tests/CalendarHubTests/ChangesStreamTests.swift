@@ -12,7 +12,6 @@ final class ChangesStreamTests: XCTestCase {
     // MARK: - К62 (поток пуст при подписке, доходит только то, что случилось после)
 
     func test_k62_streamDoesNotReplayPriorStateOnlyFutureChanges() async throws {
-        HangDiagnostics.checkpoint("ChangesStreamTests.test_k62_streamDoesNotReplayPriorStateOnlyFutureChanges START")
         let harness = Harness(sourceIds: ["src-1"])
         harness.connectorRepository.seed([Harness.record(id: "src-1")])
         let connector = harness.connector("src-1")
@@ -55,7 +54,6 @@ final class ChangesStreamTests: XCTestCase {
     // MARK: - К63 (одна публикация расходится на всех подписчиков в одном порядке)
 
     func test_k63_multipleSubscribersSeeSameSequence() async throws {
-        HangDiagnostics.checkpoint("ChangesStreamTests.test_k63_multipleSubscribersSeeSameSequence START")
         let harness = Harness(sourceIds: [])
         let stream1 = harness.hub.changes()
         let stream2 = harness.hub.changes()

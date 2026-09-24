@@ -26,7 +26,6 @@ final class InitializationTests: XCTestCase {
     // MARK: - К1 (вход «порядок», без MAJOR-вектора)
 
     func test_k01_hostNeverCallsConnectorBeforeInitialize() async throws {
-        HangDiagnostics.checkpoint("InitializationTests.test_k01_hostNeverCallsConnectorBeforeInitialize START")
         let harness = Harness(sourceIds: ["src-1"])
         harness.connectorRepository.seed([Harness.record(id: "src-1")])
         let connector = harness.connector("src-1")
@@ -43,7 +42,6 @@ final class InitializationTests: XCTestCase {
     // MARK: - К2 (оба входа)
 
     func test_k02_deltaSyncFalseNeverCallsFetchChanges() async throws {
-        HangDiagnostics.checkpoint("InitializationTests.test_k02_deltaSyncFalseNeverCallsFetchChanges START")
         let harness = Harness(sourceIds: ["src-1"])
         harness.connectorRepository.seed([Harness.record(id: "src-1", cursor: "stale-cursor-ignored")])
         let connector = harness.connector("src-1")
@@ -59,7 +57,6 @@ final class InitializationTests: XCTestCase {
     }
 
     func test_k02_deltaSyncTrueWithCursorCallsFetchChangesNotFetchEvents() async throws {
-        HangDiagnostics.checkpoint("InitializationTests.test_k02_deltaSyncTrueWithCursorCallsFetchChangesNotFetchEvents START")
         let harness = Harness(sourceIds: ["src-1"])
         harness.connectorRepository.seed([Harness.record(id: "src-1", cursor: "cursor-1")])
         let connector = harness.connector("src-1")
@@ -79,7 +76,6 @@ final class InitializationTests: XCTestCase {
     // MARK: - К4
 
     func test_k04_listSourcesMirrorsConnectorRepositoryOrder() async {
-        HangDiagnostics.checkpoint("InitializationTests.test_k04_listSourcesMirrorsConnectorRepositoryOrder START")
         let harness = Harness(sourceIds: ["src-1", "src-2"])
         harness.connectorRepository.seed([Harness.record(id: "src-1"), Harness.record(id: "src-2")])
 
@@ -91,7 +87,6 @@ final class InitializationTests: XCTestCase {
     // MARK: - К5
 
     func test_k05_listCalendarsMarksSelected() async throws {
-        HangDiagnostics.checkpoint("InitializationTests.test_k05_listCalendarsMarksSelected START")
         let harness = Harness(sourceIds: ["src-1"])
         harness.connectorRepository.seed([Harness.record(id: "src-1", selectedCalendarIds: ["cal-1", "cal-3"])])
         let connector = harness.connector("src-1")
@@ -111,7 +106,6 @@ final class InitializationTests: XCTestCase {
     // MARK: - К6
 
     func test_k06_setSelectedCalendarsUpsertsWithoutTouchingConnector() async throws {
-        HangDiagnostics.checkpoint("InitializationTests.test_k06_setSelectedCalendarsUpsertsWithoutTouchingConnector START")
         let harness = Harness(sourceIds: ["src-1"])
         harness.connectorRepository.seed([Harness.record(id: "src-1", selectedCalendarIds: ["cal-1"])])
         let connector = harness.connector("src-1")
@@ -125,7 +119,6 @@ final class InitializationTests: XCTestCase {
     // MARK: - К7
 
     func test_k07_initializeCalledExactlyOnce() async throws {
-        HangDiagnostics.checkpoint("InitializationTests.test_k07_initializeCalledExactlyOnce START")
         let harness = Harness(sourceIds: ["src-1"])
         harness.connectorRepository.seed([Harness.record(id: "src-1")])
         let connector = harness.connector("src-1")
@@ -161,7 +154,6 @@ final class InitializationTests: XCTestCase {
     }
 
     func test_k09_timeoutAtInitializeTenSecondBoundary() async throws {
-        HangDiagnostics.checkpoint("InitializationTests.test_k09_timeoutAtInitializeTenSecondBoundary START")
         let harness = Harness(sourceIds: ["src-1"])
         harness.connectorRepository.seed([Harness.record(id: "src-1")])
         let connector = harness.connector("src-1")
@@ -178,7 +170,6 @@ final class InitializationTests: XCTestCase {
     }
 
     func test_k09_timeoutAtFetchWindowHundredTwentySecondBoundary() async throws {
-        HangDiagnostics.checkpoint("InitializationTests.test_k09_timeoutAtFetchWindowHundredTwentySecondBoundary START")
         let harness = Harness(sourceIds: ["src-1"])
         harness.connectorRepository.seed([Harness.record(id: "src-1")])
         let connector = harness.connector("src-1")
@@ -195,7 +186,6 @@ final class InitializationTests: XCTestCase {
     }
 
     func test_k09_timeoutAtOtherMethodThirtySecondBoundary() async throws {
-        HangDiagnostics.checkpoint("InitializationTests.test_k09_timeoutAtOtherMethodThirtySecondBoundary START")
         let harness = Harness(sourceIds: ["src-1"])
         harness.connectorRepository.seed([Harness.record(id: "src-1")])
         let connector = harness.connector("src-1")
@@ -217,7 +207,6 @@ final class InitializationTests: XCTestCase {
     // MARK: - К10 (развилка Р10)
 
     func test_k10_upstreamUnavailableReinitializesBeforeNextFetch() async throws {
-        HangDiagnostics.checkpoint("InitializationTests.test_k10_upstreamUnavailableReinitializesBeforeNextFetch START")
         let harness = Harness(sourceIds: ["src-1"])
         harness.connectorRepository.seed([Harness.record(id: "src-1")])
         let connector = harness.connector("src-1")
@@ -250,7 +239,6 @@ final class InitializationTests: XCTestCase {
     // MARK: - К3 (вход А/Б)
 
     func test_k03_authNoneSkipsBeginAuth_oauthProxies1to1() async throws {
-        HangDiagnostics.checkpoint("InitializationTests.test_k03_authNoneSkipsBeginAuth_oauthProxies1to1 START")
         let noAuthSource = CalendarSourceId(rawValue: "src-none")
         let oauthSource = CalendarSourceId(rawValue: "src-oauth")
         let harness = Harness(sourceIds: ["src-none", "src-oauth"])
@@ -301,7 +289,6 @@ final class InitializationTests: XCTestCase {
     /// (`initialize` СНОВА, ДО следующего метода), не отдельным «запретом», которого у
     /// in-process коннектора и нечем было бы наблюдать (кадры протокола — только у stdio).
     func test_k08_orderAllowsInterleavingButNotBeforeInitOrAfterShutdown() async throws {
-        HangDiagnostics.checkpoint("InitializationTests.test_k08_orderAllowsInterleavingButNotBeforeInitOrAfterShutdown START")
         let harness = Harness(sourceIds: ["src-1"])
         harness.connectorRepository.seed([Harness.record(id: "src-1")])
         let connector = harness.connector("src-1")

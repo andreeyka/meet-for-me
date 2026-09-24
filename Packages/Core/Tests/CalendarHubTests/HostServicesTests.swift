@@ -23,7 +23,6 @@ final class HostServicesTests: XCTestCase {
     // MARK: - К11 (секреты — Ш1, namespace == connectorInstanceId)
 
     func test_k11_secretsNamespacedByConnectorInstanceId() async throws {
-        HangDiagnostics.checkpoint("HostServicesTests.test_k11_secretsNamespacedByConnectorInstanceId START")
         let harness = Harness(sourceIds: ["eventkit-1", "eventkit-2"])
         harness.connectorRepository.seed([Harness.record(id: "eventkit-1"), Harness.record(id: "eventkit-2")])
         let connector1 = harness.connector("eventkit-1")
@@ -68,7 +67,6 @@ final class HostServicesTests: XCTestCase {
     // MARK: - К13 (in-process — брошенный Error, не смерть процесса)
 
     func test_k13_inProcessThrowNotProcessDeath() async throws {
-        HangDiagnostics.checkpoint("HostServicesTests.test_k13_inProcessThrowNotProcessDeath START")
         let harness = Harness(sourceIds: ["src-1"])
         harness.connectorRepository.seed([Harness.record(id: "src-1")])
         let connector = harness.connector("src-1")
@@ -98,7 +96,6 @@ final class HostServicesTests: XCTestCase {
     // MARK: - К14 (лог: наблюдаемая часть + мех. сигнатура)
 
     func test_k14_logCapturesLevelAndMessage() async throws {
-        HangDiagnostics.checkpoint("HostServicesTests.test_k14_logCapturesLevelAndMessage START")
         let harness = Harness(sourceIds: ["src-1"])
         harness.connectorRepository.seed([Harness.record(id: "src-1")])
         let connector = harness.connector("src-1")
@@ -131,7 +128,6 @@ final class HostServicesTests: XCTestCase {
     /// не-`async` функции — прежний вектор проверял недоказуемое, этот фиксирует текст
     /// контракта, чтобы будущая правка сигнатуры не прошла незамеченной мимо теста.
     func test_k14_logSignatureIsSyncNonThrowing() throws {
-        HangDiagnostics.checkpoint("HostServicesTests.test_k14_logSignatureIsSyncNonThrowing START")
         let url = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
             .deletingLastPathComponent()
