@@ -211,10 +211,19 @@ extension InMemoryJobRepository {
         )
         locked { claimNextCalls += 1 }
         let outcome = locked { () -> ClaimOutcome in
+            // СТРОКА (MEE-350, снятие): было `&& $0.runAfter <= now` — фильтровало НЕ
+            // ДОШЕДШИЕ по сроку строки прежде, чем очередь их вообще увидит, инвариант 3
+            // называет `runAfter` только СТУПЕНЬЮ ПОРЯДКА (см. `claimOrder`), а не условием
+            // отбора; готовность к запуску (инвариант 4, `JobBlockReason.notYetDue`,
+            // К56/К73/К78) — обязанность ОЧЕРЕДИ, которая решает её на ВЗЯТОМ кандидате
+            // (§7, шаг «условия»), а не решение фейка за неё молча. С фильтром такая строка
+            // никогда не доходила до `firstBlockingReason`, и ожидающий её тест навсегда
+            // подвисал на `await iterator.next()` — то самое зависание CI по этой ветке
+            // (РП, зависание #73). Ступени порядка (проверены `test_mee320_claimNext_orders…`)
+            // не задеты: во всех них `now` заведомо позже обоих сравниваемых `runAfter`.
             let candidates = order.compactMap { jobsById[$0] }
                 .filter {
-                    $0.status == .pending && types.contains($0.type)
-                        && !excluding.contains($0.id) && $0.runAfter <= now
+                    $0.status == .pending && types.contains($0.type) && !excluding.contains($0.id)
                 }
                 .sorted(by: Self.claimOrder)
             guard let picked = candidates.first else { return .empty }
