@@ -59,36 +59,71 @@ extension CalendarPortImpl {
         }
     }
 
+    /// К19 (перечень MEE-347, C-005 v14 правило слияния п.4, признаки а/б, коллизия двух
+    /// кандидатов): признак (а) (по вычисленному `DedupKey` payload'а) и признак (б) (по паре
+    /// `sourceConnectorId`/`externalId` ТОГО ЖЕ payload'а) находят ДВЕ РАЗНЫЕ существующие
+    /// записи — обе уже отдельно несут часть одной и той же реальной встречи. Побеждает
+    /// запись с лексикографически меньшим `id.uuidString`; источники проигравшей переходят
+    /// победителю, её `id` публикуется `.deleted` (К39 вход А — коллизия признаков — один из
+    /// санкционированных поводов для `.deleted`, наравне с уходом единственного источника
+    /// многоисточниковой встречи, К65 вход А).
+    ///
+    /// СТРОКА (возврат РП, 24.09, MEE-361 22:57 UTC — буквальное прочтение по явному
+    /// разрешению, передано архитектору на уточнение формулировки): перечень описывает вход
+    /// как «признак (а) не дал ничего; признак (б) находит два кандидата по разным
+    /// источникам входного события». Прямого кода-пути для «два РАЗНЫХ входящих источника»
+    /// нет: `mergeTail` (инв. 11) полностью сериализует обработку — если у обоих входящих
+    /// payload'ов один и тот же `DedupKey`, второй по счёту всегда находит результат первого
+    /// через признак (а) (коллизии нет, это штатное присоединение источника); а если общего
+    /// `DedupKey` нет ни у одного, семантической связи между двумя раздельными записями нет
+    /// вовсе — сливать нечего. Единственный РЕАЛЬНО ДОСТИЖИМЫЙ код-путь, где `MeetingRepository.
+    /// save` иначе бросил бы `constraintViolation` (инв. 30 C-010 — пара уже занята другой
+    /// записью): признак (а) находит одну запись, а признак (б) по паре ЭТОГО ЖЕ payload'а —
+    /// другую. Реализовано так.
     private func mergeIncoming(payload: MeetingEventPayload) async throws -> Bool {
         let provisional = try payload.assigningId(UUID())
         let dedupKey = DedupKey.make(from: provisional)
-        var winner: MeetingRecord?
+        var byKey: MeetingRecord?
         if let dedupKey {
-            winner = try await meetingRepository.meeting(dedupKey: dedupKey)
+            byKey = try await meetingRepository.meeting(dedupKey: dedupKey)
         }
-        if winner == nil {
-            winner = try await meetingRepository.meeting(
-                sourceConnectorId: payload.sourceConnectorId, externalId: payload.externalId
-            )
+        let byPair = try await meetingRepository.meeting(
+            sourceConnectorId: payload.sourceConnectorId, externalId: payload.externalId
+        )
+
+        var winner = byKey ?? byPair
+        var absorbed: MeetingRecord?
+        if let byKey, let byPair, byKey.event.id != byPair.event.id {
+            (winner, absorbed) = byKey.event.id.uuidString < byPair.event.id.uuidString
+                ? (byKey, byPair) : (byPair, byKey)
         }
 
         let newSource = MeetingSource(
             sourceConnectorId: payload.sourceConnectorId, externalId: payload.externalId,
             icalUid: payload.icalUid, lastModified: payload.lastModified, payload: payload
         )
-        var sources = winner?.sources.filter {
+        var sources = ((winner?.sources ?? []) + (absorbed?.sources ?? [])).filter {
             !($0.sourceConnectorId == newSource.sourceConnectorId && $0.externalId == newSource.externalId)
-        } ?? []
+        }
         sources.append(newSource)
 
         let id = winner?.event.id ?? UUID()
         let merged = try Self.merge(sources: sources, id: id)
+        // Проигравшая запись обязана уйти ДО save() победителя — иначе её всё ещё живая
+        // строка той же пары (sourceConnectorId, externalId) столкнётся с только что
+        // унаследованной инв. 30 C-010 ("пара уже занята другой записью").
+        if let absorbedId = absorbed?.event.id {
+            try await meetingRepository.delete(meetingIds: [absorbedId])
+        }
         try await meetingRepository.save(
             MeetingRecord(
                 event: merged, dedupKey: DedupKey.make(from: merged),
                 status: winner?.status ?? .ready, sources: sources
             )
         )
+        if let absorbedId = absorbed?.event.id {
+            emit(.deleted([absorbedId]))
+        }
         emit(.upserted([merged]))
         return true
     }
@@ -96,8 +131,10 @@ extension CalendarPortImpl {
     /// Правило слияния C-005, шаги 1-6, дословно (инв. 10 — то же правило действует и МЕЖДУ
     /// циклами, на снимках, а не только на пакете одного цикла). Разбито на несколько
     /// маленьких функций — `function_body_length`, тот же приём, что уже стоит по всему
-    /// модулю (`Harness.seedAndInitialize` и соседи, MEE-362 ч.2).
-    private static func merge(sources: [MeetingSource], id: UUID) throws -> MeetingEvent {
+    /// модулю (`Harness.seedAndInitialize` и соседи, MEE-362 ч.2). Не `private`:
+    /// `CalendarPortImplMerge+SourceDeparture.swift` тоже зовёт — `private` в Swift видна
+    /// только внутри своего ФАЙЛА, а тип теперь на два файла.
+    static func merge(sources: [MeetingSource], id: UUID) throws -> MeetingEvent {
         let identityWinner = Self.identityWinner(among: sources)
         let (contentWinner, otherPayloads) = try Self.contentWinner(among: sources, identityWinner: identityWinner)
         let attendees = Self.mergedAttendees(winner: contentWinner, others: otherPayloads)
@@ -198,78 +235,6 @@ extension CalendarPortImpl {
         return attendees
     }
 
-    /// К65 вход Б — источник теряется у многоисточниковой встречи. Инв. 11: идёт через ту
-    /// же общую цепочку `serialized`, что `applyIncoming` — эта операция тоже переустраивает
-    /// `sources`/`event` встречи, конкурентная гонка с `applyIncoming` того же дедуп-ключа
-    /// иначе возможна (возврат РП, приёмка #105, п. 2 — «все слияния», не только входящие).
-    func applyDeletedExternalId(source: CalendarSourceId, externalId: String) async throws -> Bool {
-        try await serialized {
-            try await self.removeExternalId(source: source, externalId: externalId)
-        }
-    }
-
-    private func removeExternalId(source: CalendarSourceId, externalId: String) async throws -> Bool {
-        guard let record = try await meetingRepository.meeting(
-            sourceConnectorId: source.rawValue, externalId: externalId
-        ) else { return false }
-        if record.sources.count <= 1 {
-            try await meetingRepository.delete(meetingIds: [record.event.id])
-            emit(.deleted([record.event.id]))
-            return true
-        }
-        let remaining = record.sources.filter {
-            !($0.sourceConnectorId == source.rawValue && $0.externalId == externalId)
-        }
-        // Возврат РП (MEE-385, инв. 10 C-005, приёмка #105 п. 1): identity
-        // (sourceConnectorId/externalId/icalUid) ПЕРЕСЧИТЫВАЕТСЯ ВСЕГДА шагом 1 (наибольший
-        // lastModified среди оставшихся строк, тай-брейк — лексикографически меньший
-        // sourceConnectorId), даже когда ушедший источник был identity. Содержимое (шаги
-        // 2-3) пересчитывается ТЕМ ЖЕ правилом — шагами 1-6 целиком (`Self.merge`), если
-        // хотя бы у одного из оставшихся источников есть снимок; если снимков не осталось
-        // ни у кого — правило инв. 10 замораживает содержимое, `recomputingIdentity` трогает
-        // только identity. Без пересчёта identity, если ушедший источник был identity,
-        // `save` бросает constraintViolation: `sourcesIncludingOwnIdentity` (storage) не
-        // находит identity `event` среди `remaining` и синтезировать её не вправе (инв. 31
-        // C-010 v18 — синтез снимка собственной identity разрешён только при первом
-        // сохранении с одним источником, не здесь).
-        let recomputedEvent = try remaining.contains(where: { $0.payload != nil })
-            ? Self.merge(sources: remaining, id: record.event.id)
-            : Self.recomputingIdentity(of: record.event, remaining: remaining)
-        try await meetingRepository.save(
-            MeetingRecord(
-                event: recomputedEvent, dedupKey: DedupKey.make(from: recomputedEvent),
-                status: record.status, sources: remaining
-            )
-        )
-        if recomputedEvent != record.event {
-            emit(.upserted([recomputedEvent]))
-        }
-        return false
-    }
-
-    /// Шаг 1 правила слияния C-005 (наибольший `lastModified`, тай-брейк — лексикографически
-    /// меньший `sourceConnectorId`) над IDENTITY-полями (`sourceConnectorId`/`externalId`/
-    /// `icalUid`) оставшихся источников — инв. 10 C-005 требует пересчёта identity всегда,
-    /// независимо от того, пересчитывается ли содержимое. `remaining` непусто по построению
-    /// (вызывающая сторона уже отделила случай `count <= 1` до вызова).
-    private static func recomputingIdentity(of event: MeetingEvent, remaining: [MeetingSource]) throws -> MeetingEvent {
-        let winner = remaining.min { lhs, rhs in
-            lhs.lastModified != rhs.lastModified
-                ? lhs.lastModified > rhs.lastModified
-                : lhs.sourceConnectorId < rhs.sourceConnectorId
-        }!
-        guard winner.sourceConnectorId != event.sourceConnectorId
-            || winner.externalId != event.externalId
-            || winner.icalUid != event.icalUid
-        else {
-            return event
-        }
-        return try MeetingEvent(
-            id: event.id, sourceConnectorId: winner.sourceConnectorId, externalId: winner.externalId,
-            icalUid: winner.icalUid, title: event.title, start: event.start, end: event.end,
-            timeZone: event.timeZone, isAllDay: event.isAllDay, isCancelled: event.isCancelled,
-            organizer: event.organizer, attendees: event.attendees, location: event.location,
-            bodyText: event.bodyText, conference: event.conference, lastModified: event.lastModified
-        )
-    }
+    // К65 вход А/Б — источник теряется у записи — `CalendarPortImplMerge+SourceDeparture.swift`
+    // (тот же приём file_length/type_body_length, что развёл этот файл и `CalendarPortImplSync.swift`).
 }
