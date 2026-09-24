@@ -1,4 +1,4 @@
-//  TranscriptionServicePort — контракт C-012 (MEE-20) v9, §1 «Доменный порт (DomainCore)»,
+//  TranscriptionServicePort — контракт C-012 (MEE-20) v10, §1 «Доменный порт (DomainCore)»,
 //  дословно: «транскрибируй запись X по профилю Y»; о XPC и о движках порт не знает ничего.
 //
 //  Модуль: domain-core · Владелец: DEV-2 · Слой: домен

@@ -1,4 +1,4 @@
-//  TranscribeJobHandlerTests — К43, К44, К45, К47 перечня MEE-370 (C-012 v9 §4/§4.1,
+//  TranscribeJobHandlerTests — К43, К44, К45, К47 перечня MEE-370 (C-012 v10 §4/§4.1,
 //  инварианты 19, 20, 22), владелец: DEV-2. Найдено приёмкой #111/MEE-390, реализовано
 //  и покрыто здесь (MEE-394) — обработчик физически лежит в `domain-core`, контракт §4
 //  дословно объясняет почему (см. шапку `TranscribeJobHandler.swift`).
@@ -80,6 +80,7 @@ final class TranscribeJobHandlerTests: XCTestCase {
     func test_k44_cancelledMapsToSuccessWhenQueueInitiated() async {
         let port = FakeTranscriptionServicePort()
         port.forcedError = .cancelled
+        port.waitForCancellationBeforeThrowing = true
         let handler = TranscribeJobHandler(port: port)
         let theJob = job()
 
@@ -110,6 +111,7 @@ final class TranscribeJobHandlerTests: XCTestCase {
     func test_k45_engineFailureCancelledCodeFollowsSameForkAsK44() async {
         let port = FakeTranscriptionServicePort()
         port.forcedError = .engineFailure(code: "cancelled", message: "движок сам отменил")
+        port.waitForCancellationBeforeThrowing = true
         let handler = TranscribeJobHandler(port: port)
         let theJob = job()
 
@@ -128,5 +130,18 @@ final class TranscribeJobHandlerTests: XCTestCase {
         assertRetry(await run(error, attempts: 0), after: 300)
         assertRetry(await run(error, attempts: 1), after: 900)
         assertRetry(await run(error, attempts: 7), after: 900)
+    }
+
+    // MARK: - FakeTranscriptionServicePort «считает вызовы» (C-012 §«Фейк для тестов»)
+
+    func test_fakeTranscriptionServicePortCountsCallsAndRecordsLastSpec() async {
+        let port = FakeTranscriptionServicePort()
+        let handler = TranscribeJobHandler(port: port)
+
+        _ = await handler.run(job(), progress: { _ in })
+        _ = await handler.run(job(), progress: { _ in })
+
+        XCTAssertEqual(port.transcribeCallCount, 2)
+        XCTAssertEqual(port.lastTranscribedSpec?.profileId, "ru-default")
     }
 }

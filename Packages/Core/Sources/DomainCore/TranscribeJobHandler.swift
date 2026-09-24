@@ -1,4 +1,4 @@
-//  TranscribeJobHandler — обработчик задачи `.transcribe` (C-012 v9 §4/§4.1, инварианты 19,
+//  TranscribeJobHandler — обработчик задачи `.transcribe` (C-012 v10 §4/§4.1, инварианты 19,
 //  20, 22; MEE-394, выявлено приёмкой #111/MEE-390). Отображает исход `TranscriptionServicePort
 //  .transcribe` в `JobOutcome` РОВНО по таблице §4 — обработчик не пишет своего отображения
 //  (инвариант 20 дословно).

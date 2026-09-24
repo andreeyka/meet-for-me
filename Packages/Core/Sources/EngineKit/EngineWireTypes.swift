@@ -1,4 +1,4 @@
-//  EngineJobId, EngineRequest, EngineReply, EngineProgressMessage — C-012 v9 §2, дословно.
+//  EngineJobId, EngineRequest, EngineReply, EngineProgressMessage — C-012 v10 §2, дословно.
 //  Ни одно поле здесь не числовое — синтезированный `Codable` (все вложенные значения сами
 //  либо синтезируют его, либо несут собственный рукописный `init(from:)`) читает байты без
 //  дополнительных ступеней (в)/(б) на этом уровне.
