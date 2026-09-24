@@ -287,12 +287,14 @@ actor DoneFlag {
 
 /// Payload с общим `icalUid` ("shared-uid") — три источника с одним и тем же `icalUid`
 /// сходятся на один дедуп-ключ (C-005 п. 4, признак (а)), не заводят три отдельных встречи.
+/// `start`: по умолчанию фиксированная секунда — большинство вызывающих не варьируют её; К27
+/// (`DedupAndMergeStepsTests.swift`) передаёт своё значение, чтобы попасть в ДРУГУЮ минуту
+/// после округления инварианта 3 (`DedupKey.startEpochSeconds`), не меняя общий `icalUid`.
 func mergeTestPayload(
     connectorId: String, externalId: String, lastModified: Date, location: String? = nil,
-    attendees: [MeetingEvent.Attendee] = []
+    attendees: [MeetingEvent.Attendee] = [], start: Date = Date(timeIntervalSince1970: 1_700_000_000)
 ) throws -> MeetingEventPayload {
-    let start = Date(timeIntervalSince1970: 1_700_000_000)
-    return try MeetingEventPayload(
+    try MeetingEventPayload(
         sourceConnectorId: connectorId, externalId: externalId, icalUid: "shared-uid", title: "T",
         start: start, end: start.addingTimeInterval(1_800), timeZone: "UTC", isAllDay: false,
         isCancelled: false, organizer: nil, attendees: attendees, location: location, bodyText: nil,
