@@ -42,6 +42,18 @@ public actor CalendarPortImpl: CalendarPort {
     /// общую задачу за остальных — свой предохранитель на вызывающего, не на саму задачу
     /// (`CalendarPortImplSync.swift`, `syncOne`/`awaitSharedSync`).
     var syncWaiters: [CalendarSourceId: [UUID: CheckedContinuation<CalendarSyncResult, Never>]] = [:]
+    /// Инв. 11 (C-005, MEE-385): слияние ЛЮБЫХ двух входящих событий сериализуется — ОДНА
+    /// общая цепочка задач на весь актор, не словарь по дедуп-ключу (возврат РП, приёмка
+    /// #105: сериализация по ключу ВХОДЯЩЕГО события теряет обновления, если два источника
+    /// одной встречи попадают на разные ключи в одном цикле — например, второй ещё не
+    /// нашёл существующую запись по `meeting(dedupKey:)`, а первый её уже сохранил под
+    /// другим `DedupKey.make(from:)`; при `dedupKey == nil` сериализации не было вовсе).
+    /// Слияния короткие (`meetingRepository.save` — единственный `await` внутри), цена
+    /// полной сериализации всех встреч разом ничтожна, а корректность не зависит от того,
+    /// сошлись ли два события на один ключ ДО слияния (`CalendarPortImplMerge.swift`,
+    /// `serialized(_:)`). Не `private` — та же причина, что у `inFlightSync`/`syncWaiters`
+    /// (см. комментарий над ними).
+    var mergeTail: Task<Void, Never>?
     private let changeHub = CalendarChangeHub()
     private var scheduleTask: Task<Void, Never>?
 

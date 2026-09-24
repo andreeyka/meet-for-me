@@ -250,6 +250,23 @@ struct Harness {
             cursor: cursor, lastError: nil
         )
     }
+
+    /// Харнесс с записями уже заведёнными и `initialize` каждого источника уже настроенным
+    /// на заданные `capabilities` — общий пролог `MergeTests.swift`/`MergeCrossCycleTests.swift`
+    /// (IR-126, MEE-385), не раздувающий тела тестов сверх `function_body_length` тем же
+    /// довеском, каким пятистрочный пролог повторялся бы в каждом (тот же приём, что уже
+    /// даёт `seedAndInitialize` выше — здесь только без вызова `listCalendars`, тесты этого
+    /// файла его не проверяют).
+    static func mergeReady(sourceIds: [String], deltaSync: Bool = false, cursor: String? = nil) -> Harness {
+        let harness = Harness(sourceIds: sourceIds)
+        harness.connectorRepository.seed(sourceIds.map { Harness.record(id: $0, cursor: cursor) })
+        for id in sourceIds {
+            harness.connector(id).setInitializeResult(capabilities: ConnectorCapabilities(
+                deltaSync: deltaSync, push: false, attendees: true, conference: true, auth: .none
+            ))
+        }
+        return harness
+    }
 }
 
 /// Флаг завершения задачи, читаемый из другого Task без гонки данных (К66/К75) — актор
@@ -258,4 +275,40 @@ actor DoneFlag {
     private var done = false
     func markDone() { done = true }
     func isDone() -> Bool { done }
+}
+
+// MARK: - Оснастка IR-126 (MEE-385) — общая на MergeTests.swift и MergeCrossCycleTests.swift
+//
+// Не `private static` внутри одного класса теста (как было в едином MergeTests.swift до
+// возврата РП, приёмка #105): SwiftLint `file_length` считает каждый ФАЙЛ отдельно, и после
+// четырёх новых тестов возврата единый файл вышел за лимит — тесты разнесены на два файла
+// (тот же приём, что уже стоит у CalendarPortImplSync.swift/CalendarPortImplMerge.swift),
+// и общая оснастка встала сюда, а не продублирована в каждом.
+
+/// Payload с общим `icalUid` ("shared-uid") — три источника с одним и тем же `icalUid`
+/// сходятся на один дедуп-ключ (C-005 п. 4, признак (а)), не заводят три отдельных встречи.
+func mergeTestPayload(
+    connectorId: String, externalId: String, lastModified: Date, location: String? = nil,
+    attendees: [MeetingEvent.Attendee] = []
+) throws -> MeetingEventPayload {
+    let start = Date(timeIntervalSince1970: 1_700_000_000)
+    return try MeetingEventPayload(
+        sourceConnectorId: connectorId, externalId: externalId, icalUid: "shared-uid", title: "T",
+        start: start, end: start.addingTimeInterval(1_800), timeZone: "UTC", isAllDay: false,
+        isCancelled: false, organizer: nil, attendees: attendees, location: location, bodyText: nil,
+        conference: nil, lastModified: lastModified
+    )
+}
+
+func mergeTestAttendee(name: String, email: String?) throws -> MeetingEvent.Attendee {
+    try MeetingEvent.Attendee(
+        person: try MeetingEvent.Person(name: name, email: email), responseStatus: .accepted, isOptional: false
+    )
+}
+
+/// Счётчик вызовов `MeetingRepository.save(_:)` из общего `PortCallLog` фейка — инв. 11
+/// (`test_inv11_secondMergeOfSameMeetingDoesNotStartUntilFirstFinishes`, MergeTests.swift)
+/// опрашивает его напрямую, без ожидания конкретного тайминга самого слияния.
+func meetingRepositorySaveCallCount(_ repository: InMemoryMeetingRepository) -> Int {
+    repository.callLog.calls.filter { $0.signature == "MeetingRepository.save(_:)" }.count
 }
