@@ -61,6 +61,17 @@ final class SleepWakeTests: CaptureAsyncTestCase {
     /// Тот же дефект, наблюдаемый со стороны диска, а не через `stop()`: манифест обязан
     /// оставаться читаемым (проходить валидацию домена) сразу после `.willSleep`, до всякого
     /// пробуждения — контракт требует записи на диск немедленно, не только у `stop()`.
+    ///
+    /// MEE-365: раньше здесь стоял фиксированный `Task.sleep(10мс)` перед чтением с диска —
+    /// гонка со scheduling-задержкой `powerEventsTask` (подписчика `AsyncStream<PowerEvent>`
+    /// от `.emit`), а не логическая ошибка `handleSleep`/`writeManifest` — оба синхронны и
+    /// пишут в одном вызове, без промежуточного `Task`. Под нагрузкой CI runner'а (`macos-14`,
+    /// общий с другими джобами) 10мс не всегда достаточно, чтобы подписчик успел получить и
+    /// обработать событие — тест читал файл до записи и падал не из-за дефекта реализации.
+    /// `pollManifest` опрашивает диск вместо угадывания задержки: критерий («манифест валиден
+    /// и несёт след сна сразу после `.willSleep`») не ослаблен — тест по-прежнему падает, если
+    /// след не появился вовсе (таймаут просто перечитывает файл в последний раз и даёт трём
+    /// `XCTAssertTrue` показать, какое именно условие не выполнилось).
     func test_sleepWritesValidManifestToDiskImmediately() async throws {
         let harness = Harness()
         let directory = try Harness.makeDirectory()
@@ -69,12 +80,12 @@ final class SleepWakeTests: CaptureAsyncTestCase {
         try await Task.sleep(nanoseconds: 10_000_000)
 
         harness.power.emit(.willSleep)
-        try await Task.sleep(nanoseconds: 10_000_000)
 
-        // ManifestWriter.read декодирует и валидирует домен целиком (DomainJSON.decode) — раньше
-        // здесь либо не было файла вовсе (writeManifest молча проглатывал ошибку валидации через
-        // `try?`), либо файл не содержал следа сна.
-        let onDisk = try ManifestWriter.read(from: directory)
+        let onDisk = try await pollManifest(from: directory) { manifest in
+            manifest.markers.contains { $0.kind == .sleep }
+                && manifest.markers.contains { $0.kind == .discontinuity }
+                && manifest.discontinuities.contains { $0.reason == .sleep }
+        }
         XCTAssertTrue(onDisk.markers.contains { $0.kind == .sleep })
         XCTAssertTrue(onDisk.markers.contains { $0.kind == .discontinuity })
         XCTAssertTrue(onDisk.discontinuities.contains { $0.reason == .sleep })
@@ -83,6 +94,26 @@ final class SleepWakeTests: CaptureAsyncTestCase {
         harness.power.emit(.didWake)
         try await Task.sleep(nanoseconds: 10_000_000)
         _ = try await harness.port.stop()
+    }
+
+    /// Опрос вместо фиксированной задержки — см. комментарий у единственного вызывающего
+    /// теста. Таймаут 2с — с большим запасом против `executionTimeAllowance = 10`
+    /// (`CaptureAsyncTestCase`) на тест целиком; интервал опроса 2мс. `ManifestWriter.read`
+    /// бросает, пока файла ещё нет (самый частый случай на первых итерациях) — `try?` здесь
+    /// это ожидаемый, не ошибочный, путь.
+    private func pollManifest(
+        from directory: URL, until predicate: (RecordingManifest) -> Bool
+    ) async throws -> RecordingManifest {
+        let deadline = ContinuousClock.now.advanced(by: .seconds(2))
+        while true {
+            if let manifest = try? ManifestWriter.read(from: directory), predicate(manifest) {
+                return manifest
+            }
+            if ContinuousClock.now >= deadline {
+                return try ManifestWriter.read(from: directory)
+            }
+            try await Task.sleep(nanoseconds: 2_000_000)
+        }
     }
 
     /// Сон поверх ЕЩЁ ОТКРЫТОЙ пересборки (другая причина уже заняла `pendingRebuild`):
