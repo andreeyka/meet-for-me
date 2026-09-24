@@ -13,7 +13,10 @@ extension JobQueueEngine {
         guard let handler = handlers[job.type] else { return }
         broadcaster.publish(.started(jobId: job.id, type: job.type))
         let task = Task { [weak self] in
-            await self?.executeAndFinish(job: job, handler: handler)
+            // `self?.executeAndFinish(...)` типом был бы `Void?`, не `Void` —
+            // `RunningEntry.task` объявлен `Task<Void, Never>` и такого не принял бы.
+            guard let self else { return }
+            await self.executeAndFinish(job: job, handler: handler)
         }
         runningTasks[job.id] = RunningEntry(type: job.type, task: task)
     }
@@ -45,7 +48,9 @@ extension JobQueueEngine {
         await withTaskGroup(of: JobOutcome?.self) { group in
             group.addTask { await body() }
             group.addTask { [weak self] in
-                await self?.renewLeaseWhileRunning(jobId: jobId)
+                if let self {
+                    await self.renewLeaseWhileRunning(jobId: jobId)
+                }
                 return nil
             }
             var outcome: JobOutcome?
