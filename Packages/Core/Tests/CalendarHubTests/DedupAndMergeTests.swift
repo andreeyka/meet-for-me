@@ -10,9 +10,10 @@
 //  тестом — внутреннее поведение `DedupKey.make` (приоритет ветвей, детерминированность,
 //  границы) уже дословно закрыто `DomainCoreTests/DedupKeyTests.swift`, владельцем самой
 //  функции; здесь доказывается только то, что `calendar-hub` реально ЗОВЁТ эту функцию, а
-//  не обходит её и не реализует дедуп сам. К18/К19 (fallback на пару
-//  sourceConnectorId/externalId при несовпадающем dedupKey, коллизия двух кандидатов) в эту
-//  порцию не входят — оставлены следующей.
+//  не обходит её и не реализует дедуп сам. К18 (fallback на пару sourceConnectorId/
+//  externalId при несовпадающем dedupKey) закрыт «частью 3е» (#123). К19 (коллизия двух
+//  кандидатов по признаку (б) через два разных источника) остаётся открытым — требует новой
+//  логики слияния коллизии в `CalendarPortImplMerge.swift`, не только теста (разбор — MEE-386).
 //
 //  Оснастка (`mergeTestPayload`, `mergeTestAttendee`, `Harness.mergeReady`) — общая,
 //  `TestSupport.swift`.
@@ -83,33 +84,41 @@ final class DedupAndMergeTests: XCTestCase {
 
     /// Перечень MEE-347, К18 (C-005 правило слияния п.4, признак (б); условность снята —
     /// `MeetingRepository.meeting(sourceConnectorId:externalId:)` в дереве с C-010 v10,
-    /// инв. 30, IR-118). Вход: `icalUid` события меняется (вхождение перенесено во времени) —
-    /// признак (а) не совпадает ни с одной сохранённой записью (`dedupKey` стал другим), но
-    /// пара (`sourceConnectorId`, `externalId`) та же, что у источника уже существующей
-    /// записи. Ответ: `assigningId` берёт `id` записи, найденной `meeting(sourceConnectorId:
+    /// инв. 30, IR-118). Вход буквально: `DedupKey` нового события не совпадает ни с одной
+    /// сохранённой записью, потому что «вторая составляющая изменилась — вхождение перенесено
+    /// во времени» — `icalUid` («первая составляющая») остаётся ПРЕЖНИМ, меняется только
+    /// `startEpochSeconds` (`DedupKey.icalUid(_:startEpochSeconds:)`), но пара
+    /// (`sourceConnectorId`, `externalId`) та же, что у источника уже существующей записи.
+    /// Ответ: `assigningId` берёт `id` записи, найденной `meeting(sourceConnectorId:
     /// externalId:)` (признак б сработал там, где признак (а) не дал ничего), не заводит
     /// новую.
+    ///
+    /// Возврат РП (24.09, приёмка #123, «мелочи»): прежняя версия меняла `icalUid` целиком
+    /// («moved-uid») — доказывала fallback, но не буквальный вектор перечня («вхождение
+    /// перенесено во времени», не «событие переименовано»). `icalUid` теперь неизменный
+    /// умолчательный "shared-uid" (`mergeTestPayload`), меняется только `start` — на 90с
+    /// (тот же приём, что К27: 90 > 60 всегда переводит в другую минутную корзину после
+    /// округления инварианта 3, независимо от фазы исходной секунды).
     func test_k18_pairMatchFallsBackWhenKeyChanged() async throws {
         let harness = Harness.mergeReady(sourceIds: ["src-1"])
         let connector = harness.connector("src-1")
         let base = Date(timeIntervalSince1970: 1_700_000_100)
+        let firstStart = Date(timeIntervalSince1970: 1_700_000_000)
 
         connector.setFetchEvents([
-            try mergeTestPayload(connectorId: "src-1", externalId: "evt-1", lastModified: base)
+            try mergeTestPayload(connectorId: "src-1", externalId: "evt-1", lastModified: base, start: firstStart)
         ])
         let firstResults = await harness.hub.sync(trigger: .manual)
         XCTAssertNil(firstResults.first?.failure)
         let existingId = try XCTUnwrap(harness.meetingRepository.storedRecords.first?.event.id)
         let existingDedupKey = harness.meetingRepository.storedRecords.first?.dedupKey
 
-        // Второй цикл: та же пара источника, но НОВЫЙ icalUid — признак (а) не совпадёт ни с
-        // одной сохранённой записью (dedupKey стал другим), признак (б) — пара та же.
+        // Второй цикл: тот же icalUid, та же пара источника, но start сдвинут на 90с —
+        // dedupKey меняется («вторая составляющая»), icalUid («первая составляющая») — нет.
         connector.setFetchEvents([
-            try MeetingEventPayload(
-                sourceConnectorId: "src-1", externalId: "evt-1", icalUid: "moved-uid", title: "T",
-                start: base.addingTimeInterval(3_600), end: base.addingTimeInterval(5_400), timeZone: "UTC",
-                isAllDay: false, isCancelled: false, organizer: nil, attendees: [], location: nil,
-                bodyText: nil, conference: nil, lastModified: base.addingTimeInterval(60)
+            try mergeTestPayload(
+                connectorId: "src-1", externalId: "evt-1", lastModified: base.addingTimeInterval(60),
+                start: firstStart.addingTimeInterval(90)
             )
         ])
         let secondResults = await harness.hub.sync(trigger: .manual)
@@ -121,8 +130,10 @@ final class DedupAndMergeTests: XCTestCase {
             stored.first?.event.id, existingId,
             "assigningId обязан взять id через meeting(sourceConnectorId:externalId:) — признак (б)"
         )
-        XCTAssertNotEqual(stored.first?.dedupKey, existingDedupKey, "dedupKey пересчитан под новый icalUid")
-        XCTAssertEqual(stored.first?.event.icalUid, "moved-uid")
+        XCTAssertNotEqual(
+            stored.first?.dedupKey, existingDedupKey, "dedupKey пересчитан — startEpochSeconds сдвинулся"
+        )
+        XCTAssertEqual(stored.first?.event.icalUid, "shared-uid", "icalUid («первая составляющая») не менялся")
     }
 
     // MARK: - К20-К22: шаги 1-3 правила слияния
