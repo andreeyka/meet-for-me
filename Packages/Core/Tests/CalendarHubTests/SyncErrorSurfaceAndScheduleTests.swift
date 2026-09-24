@@ -77,7 +77,13 @@ final class SyncErrorSurfaceAndScheduleTests: XCTestCase {
         }
         await harness.hub.stopScheduledPolling()
 
-        XCTAssertEqual(
+        // >=, не ==: после третьего тика цикл сразу же входит в СЛЕДУЮЩИЙ `waitSeam.sleep`
+        // (durations пишет вызов ДО ожидания результата, см. FakeWaitSeam.sleep,
+        // TestSupport.swift) — гонка с этим самым stopScheduledPolling() может успеть
+        // застать четвёртый вызов уже начатым, но не отпущенным; для проверки формулы
+        // интервала важно только то, что каждый пойманный тик был РОВНО .seconds(15*60),
+        // не сколько их всего успело начаться до отмены.
+        XCTAssertGreaterThanOrEqual(
             harness.waitSeam.durations.filter { $0 == .seconds(15 * 60) }.count, 3,
             "интервал — счёт тиков Ш3 на .minutes(15), не измерение реального времени"
         )
