@@ -64,6 +64,7 @@ extension CalendarPortImpl {
     func syncOne(source: CalendarSourceId, trigger: CalendarSyncTrigger) async -> CalendarSyncResult {
         if inFlightSync[source] == nil {
             let generation = UUID()
+            lastStartedGeneration[source] = generation
             let task = Task { await self.performSync(source: source, trigger: trigger, generation: generation) }
             inFlightSync[source] = (generation, task)
             Task { await self.finishInFlightSync(source: source, generation: generation, task: task) }
@@ -207,12 +208,21 @@ extension CalendarPortImpl {
     /// защищать не от кого. `test_syncOne_cancellingBothCallersCancelsSharedTask`
     /// (`ControlSurfaceEntryPointsTests.swift`) как раз про этот случай — оба вызывающих
     /// отменились, НИКТО не подхватил, а исход отменённой задачи всё равно обязан попасть в
-    /// `connectorRepository` (тот же довод, что у дефекта 4). Подавлять нужно ТОЛЬКО когда
-    /// источник уже в ведении ЧУЖОЙ, отличной от нашей, генерации — не когда он просто пуст.
+    /// `connectorRepository` (тот же довод, что у дефекта 4).
+    ///
+    /// Возврат РП (24.09 21:15 UTC, приёмка #115, п. 2): следующая версия этого guard'а
+    /// (сверка с `inFlightSync[source]`) СНОВА была неверна — она защищает только пока более
+    /// новое поколение ЕЩЁ числится в `inFlightSync`; если оно к моменту устаревшей записи уже
+    /// само успело завершиться (и, как выше, обнулить `inFlightSync[source]` обратно в `nil`),
+    /// проверка вновь читала бы «источник пуст» и снова пропускала бы устаревшую запись —
+    /// `test_defect_staleGenerationSuppressedEvenAfterNewerGenerationAlsoLeftInFlightSync`
+    /// (`StaleGenerationAfterNewerDepartsTests.swift`) — про именно этот, более узкий случай.
+    /// `lastStartedGeneration[source]` (`CalendarPortImpl.swift`) не подвержен этой гонке — он
+    /// не обнуляется НИКЕМ, только перезаписывается следующим стартом `syncOne`, так что
+    /// однозначно называет самое новое из когда-либо заведённых поколений источника, живо оно
+    /// сейчас в `inFlightSync` или уже нет.
     private func recordSyncOutcomeIfCurrent(source: CalendarSourceId, generation: UUID, error: String?) async {
-        if let current = inFlightSync[source], current.generation != generation {
-            return
-        }
+        guard lastStartedGeneration[source] == generation else { return }
         try? await connectorRepository.setSyncOutcome(at: Date(), error: error, connectorId: source.rawValue)
     }
 

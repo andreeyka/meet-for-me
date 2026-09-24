@@ -51,23 +51,11 @@ func pollUntil(
     }
 }
 
-/// Как `pollUntil`, но НЕ проваливает тест по истечении срока — возвращает, стало ли условие
-/// истинным. Нужен, когда истечение — законный, не дефектный исход: возврат РП (24.09,
-/// приёмка #115, CI красный на первом прогоне) —
-/// `test_defect_soleCallerCancelledBeforeRegistrationStillCancelsSharedTask`
-/// (`ControlSurfaceEntryPointsTests.swift`) ждал, что отменённая ДО регистрации общая задача
-/// дойдёт до `save()`, но при работающем фиксе она чаще коротится РАНЬШЕ, во время
-/// `ensureInitialized` (гонка `raceTimeout`/`FakeWaitSeam.sleep`, тот тоже отвечает на уже
-/// взведённую `Task.isCancelled`) — `pollUntil` с его безусловным `XCTFail` превращал
-/// законное «не дошла» в ложный красный прогон, ждущий полных 10 секунд.
-func pollUntilOrTimeout(timeout: Duration = .seconds(2), _ condition: () async -> Bool) async -> Bool {
-    let deadline = ContinuousClock.now + timeout
-    while await !condition() {
-        if ContinuousClock.now >= deadline { return false }
-        try? await Task.sleep(for: .milliseconds(2))
-    }
-    return true
-}
+// Возврат РП (24.09 21:15 UTC, приёмка #115, п. 1): `pollUntilOrTimeout` (заводился под
+// save-воротную версию `test_defect_soleCallerCancelledBeforeRegistrationStillCancelsShared
+// Task`) снят — редизайн на `connector.hang(.fetchEvents)` (см. докстринг того теста,
+// `SyncOneCancellationDefectsTests.swift`) больше не заводит законный «не дошёл» исход,
+// вызывающих нет — не держим неиспользуемый код про запас.
 
 /// Обёртка над `AsyncStream.Iterator` для гонки с таймаутом в `nextOrTimeout` (возврат РП,
 /// приёмка #94, п. 5) — actor, не `inout`: `next()` мутирует структуру-итератор, а
@@ -297,11 +285,9 @@ actor DoneFlag {
 
 // MARK: - Оснастка IR-126 (MEE-385) — общая на MergeTests.swift и MergeCrossCycleTests.swift
 //
-// Не `private static` внутри одного класса теста (как было в едином MergeTests.swift до
-// возврата РП, приёмка #105): SwiftLint `file_length` считает каждый ФАЙЛ отдельно, и после
-// четырёх новых тестов возврата единый файл вышел за лимит — тесты разнесены на два файла
-// (тот же приём, что уже стоит у CalendarPortImplSync.swift/CalendarPortImplMerge.swift),
-// и общая оснастка встала сюда, а не продублирована в каждом.
+// Не `private static` внутри одного класса теста (как было до возврата РП, приёмка #105):
+// SwiftLint `file_length` считает каждый ФАЙЛ отдельно, единый файл вышел за лимит — тесты
+// разнесены на два файла, общая оснастка встала сюда, а не продублирована в каждом.
 
 /// Payload с общим `icalUid` ("shared-uid") — три источника с одним и тем же `icalUid`
 /// сходятся на один дедуп-ключ (C-005 п. 4, признак (а)), не заводят три отдельных встречи.
@@ -320,14 +306,18 @@ func mergeTestPayload(
     )
 }
 
-func mergeTestAttendee(name: String, email: String?) throws -> MeetingEvent.Attendee {
+/// `responseStatus`: по умолчанию `.accepted`. К22 (`DedupAndMergeTests.swift`, возврат РП
+/// 24.09 21:15 UTC) варьирует своим значением — раньше тест ошибочно варьировал `name`.
+func mergeTestAttendee(
+    name: String, email: String?, responseStatus: MeetingEvent.Attendee.ResponseStatus = .accepted
+) throws -> MeetingEvent.Attendee {
     try MeetingEvent.Attendee(
-        person: try MeetingEvent.Person(name: name, email: email), responseStatus: .accepted, isOptional: false
+        person: try MeetingEvent.Person(name: name, email: email), responseStatus: responseStatus, isOptional: false
     )
 }
 
-/// Счётчик вызовов `MeetingRepository.save(_:)` из общего `PortCallLog` фейка — инв. 11
-/// (`test_inv11_secondMergeOfSameMeetingDoesNotStartUntilFirstFinishes`, MergeTests.swift)
+/// Счётчик вызовов `MeetingRepository.save(_:)` из общего `PortCallLog` фейка — инв. 11/К77
+/// (`test_k77_secondMergeOfSameMeetingDoesNotStartUntilFirstFinishes`, MergeTests.swift)
 /// опрашивает его напрямую, без ожидания конкретного тайминга самого слияния.
 func meetingRepositorySaveCallCount(_ repository: InMemoryMeetingRepository) -> Int {
     repository.callLog.calls.filter { $0.signature == "MeetingRepository.save(_:)" }.count
@@ -346,7 +336,7 @@ func connectorRepositorySetSyncOutcomeCallCount(_ repository: InMemoryConnectorR
 
 /// Сеет мимо `save` встречу с двумя источниками ("A"/`evt-a`, "B"/`evt-b`, общий `icalUid`),
 /// оба со снимками, identity и содержимое — B (больший `lastModified`) — общий пролог
-/// `test_inv10_sourceFailureInCycleKeepsOtherSourcesSnapshotsIntact` (MergeCrossCycleTests.swift),
+/// `test_k80_sourceFailureInCycleKeepsOtherSourcesSnapshotsIntact` (MergeCrossCycleTests.swift),
 /// вынесенный сюда той же причиной, что `mergeReady`: не раздувать тело теста сверх
 /// `function_body_length`.
 func seedTwoSourceMeetingIdentityB(
@@ -377,8 +367,8 @@ func seedTwoSourceMeetingIdentityB(
 }
 
 /// Сеет мимо `save` встречу с двумя источниками БЕЗ снимков (`MeetingSource.payload == nil`
-/// у обоих) — `test_inv10_identityRecomputedWhenDepartedSourceWasIdentity` (MergeTests.swift),
-/// тот же довод, что у `seedTwoSourceMeetingIdentityB` рядом.
+/// у обоих) — `test_k65_inputV_...` (MergeTests.swift, К65 вход В), тот же довод, что у
+/// `seedTwoSourceMeetingIdentityB` рядом.
 func seedTwoSourceMeetingNoSnapshots(
     _ harness: Harness, eventId: UUID, base: Date
 ) throws {

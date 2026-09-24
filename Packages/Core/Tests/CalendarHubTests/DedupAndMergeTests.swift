@@ -140,15 +140,24 @@ final class DedupAndMergeTests: XCTestCase {
         XCTAssertEqual(stored.event.location, "Room 42", "победитель без location — первое не-nil среди остальных")
     }
 
-    /// Общий `email`, разный `responseStatus` (здесь — разное имя, тот же email) →
-    /// сохраняется запись победителя содержимого. Два участника с `email == nil`, разные
-    /// `name` → оба добавлены. Совпадающий `name` при `email == nil` — не дублируется.
+    /// Общий `email`, разный `responseStatus` → сохраняется запись победителя содержимого,
+    /// не объединение/усреднение статусов. Два участника с `email == nil`, разные `name` →
+    /// оба добавлены. Совпадающий `name` при `email == nil` — не дублируется.
+    ///
+    /// Возврат РП (24.09 21:15 UTC, приёмка #115, «мелочь»): прежняя версия варьировала
+    /// `name` пары общего email, а не `responseStatus`, которым была озаглавлена (докстрока
+    /// это прямо признавала — «здесь — разное имя, тот же email»). Оба участника общего email
+    /// теперь несут ОДНО И ТО ЖЕ имя — единственное различие пары ровно то, что заявлено.
     func test_k22_attendeesUnionByEmailThenByDistinctName() async throws {
         let harness = Harness.mergeReady(sourceIds: ["src-1", "src-2"])
         let base = Date(timeIntervalSince1970: 1_700_000_100)
 
-        let winnerAttendee = try mergeTestAttendee(name: "Winner Name", email: "shared@example.com")
-        let loserAttendeeSameEmail = try mergeTestAttendee(name: "Loser Name", email: "shared@example.com")
+        let winnerAttendee = try mergeTestAttendee(
+            name: "Shared Name", email: "shared@example.com", responseStatus: .accepted
+        )
+        let loserAttendeeSameEmail = try mergeTestAttendee(
+            name: "Shared Name", email: "shared@example.com", responseStatus: .declined
+        )
         let noEmailA = try mergeTestAttendee(name: "No Email A", email: nil)
         let noEmailB = try mergeTestAttendee(name: "No Email B", email: nil)
         let noEmailADuplicateName = try mergeTestAttendee(name: "No Email A", email: nil)
@@ -171,8 +180,9 @@ final class DedupAndMergeTests: XCTestCase {
         let attendees = try XCTUnwrap(harness.meetingRepository.storedRecords.first?.event.attendees)
         XCTAssertEqual(attendees.count, 3, "shared@example.com дедуплицирован, No Email A по имени — тоже")
         XCTAssertTrue(
-            attendees.contains { $0.person.email == "shared@example.com" && $0.person.name == "Winner Name" },
-            "на совпадении email побеждает запись победителя содержимого (src-1, больший lastModified)"
+            attendees.contains { $0.person.email == "shared@example.com" && $0.responseStatus == .accepted },
+            "на совпадении email побеждает запись победителя содержимого (src-1, больший lastModified) — " +
+                ".accepted, не .declined проигравшего"
         )
         XCTAssertTrue(attendees.contains { $0.person.name == "No Email A" && $0.person.email == nil })
         XCTAssertTrue(attendees.contains { $0.person.name == "No Email B" && $0.person.email == nil })

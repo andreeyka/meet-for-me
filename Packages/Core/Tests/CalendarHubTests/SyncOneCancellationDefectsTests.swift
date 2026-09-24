@@ -40,17 +40,23 @@ extension ControlSurfaceEntryPointsTests {
     /// `.cancelled` ниже упало бы явной, быстрой ошибкой ассерта, не зависанием CI.
     ///
     /// Возврат РП (24.09, приёмка #115, CI красный на первом прогоне первой версии этого
-    /// возврата): `pollUntil { meetingRepositorySaveCallCount(...) >= 1 }` здесь падал
-    /// собственным таймаутом (10с) — при РАБОТАЮЩЕМ фиксе отменённая ДО регистрации задача
-    /// чаще всего НЕ доходит до `save()` вовсе: `cancelSyncWaiter` отменяет её задачу
-    /// (`inFlightSync[source]?.task.cancel()`) почти сразу же, а `ensureInitialized`
-    /// (`raceTimeout`) коротится РАНЬШЕ, во время своей собственной гонки с `FakeWaitSeam.
-    /// sleep` — та тоже отвечает на уже взведённую `Task.isCancelled` и бросает
-    /// `CancellationError`, не дожидаясь ни секунды. «Задача физически не дошла до save-ворот»
-    /// — при этом фиксе ЗАКОННЫЙ, ожидаемый исход, не дефект: `pollUntilOrTimeout` (НЕ
-    /// проваливает тест сам по себе) ждёт КОРОТКО и БЕЗУСЛОВНО отпускает ворота в конце —
-    /// освобождение нужно только как страховка на случай иного порядка (задача всё-таки туда
-    /// дошла), а не как условие для прогресса самого теста.
+    /// возврата): версия на `InMemoryMeetingRepository.gate(on: .save)` часто короталась ДО
+    /// `save()` — законно, не дефект (см. историю в git), но НИЧЕГО не доказывала про сам
+    /// дефект: `results.first?.failure == .cancelled` истинно уже от одной только
+    /// caller-стороны (`cancelSyncWaiter` резолвит СВОЙ continuation `.cancelled` синхронно,
+    /// независимо от того, дошла ли отмена до самой общей задачи) — тест проходил бы даже без
+    /// исходного фикса п. 1 вовсе (возврат РП, 24.09 21:15 UTC: «Тест 1а проходит и без
+    /// task.cancel() в cancelSyncWaiter, то есть ничего не доказывает»).
+    ///
+    /// Редизайн (тот же возврат): `connector.hang(.fetchEvents)`, БЕЗ последующего `release` —
+    /// та же причина, что у К9 входа А (см. докстринг `hang(_:)`, `FakeCalendarConnector`):
+    /// «зависает и не возвращается» без явного отпуска. `hangOrGate` (в отличие от
+    /// `InMemoryMeetingRepository.waitIfGated`, использованного в прежней версии) отвечает на
+    /// кооперативную отмену. Если бы `task.cancel()` (внутри `cancelSyncWaiter`, единственного
+    /// оставшегося ожидающего) не доходил до самой общей задачи — она осталась бы висеть на
+    /// `fetchEvents` НАВСЕГДА (ворота никто не отпускает), и `pollUntil` ниже упал бы явным
+    /// таймаутом, а не тихим зависанием — то самое доказательство, которого не хватало прежней
+    /// версии.
     func test_defect_soleCallerCancelledBeforeRegistrationStillCancelsSharedTask() async throws {
         let harness = Harness(sourceIds: ["src-1"])
         harness.connectorRepository.seed([Harness.record(id: "src-1")])
@@ -58,34 +64,20 @@ extension ControlSurfaceEntryPointsTests {
         connector.setInitializeResult(capabilities: ConnectorCapabilities(
             deltaSync: false, push: false, attendees: true, conference: true, auth: .none
         ))
-        connector.setFetchEvents([
-            try mergeTestPayload(connectorId: "src-1", externalId: "evt-1", lastModified: Date())
-        ])
-        harness.meetingRepository.gate(on: .save)
+        connector.hang(.fetchEvents)
 
         let task = Task { await harness.hub.sync(trigger: .manual) }
         task.cancel()
 
-        let taskReachedSaveGate = await pollUntilOrTimeout(timeout: .seconds(1)) {
-            meetingRepositorySaveCallCount(harness.meetingRepository) >= 1
-        }
-        if taskReachedSaveGate {
-            harness.meetingRepository.stopGating(on: .save)
-            harness.meetingRepository.release(on: .save)
-        }
-
         let results = await task.value
-        XCTAssertEqual(results.first?.failure, .cancelled)
+        XCTAssertEqual(results.first?.failure, .cancelled, "вызывающий отменился — свой continuation")
 
-        // Без фикса inFlightSync[source] не очистился бы никогда — задача застряла на
-        // save-воротах, которые кооперативную отмену не слушают, и pollUntil упал бы явным
-        // таймаутом (не тихим зависанием), доказывая именно этот дефект.
+        // Общая задача действительно получила отмену и дошла до записи своего исхода — не
+        // осталась висеть на fetchEvents навсегда (release(.fetchEvents) здесь ни разу не
+        // зовётся).
+        await pollUntil { harness.connectorRepository.storedRecords.first?.lastError != nil }
+
         await pollUntil(timeout: .seconds(2)) { await harness.hub.inFlightSync[source] == nil }
-
-        // Безусловная страховка (возврат РП, «в конце отпускай ворота»): если задача всё же
-        // дошла до save() уже ПОСЛЕ проверки выше, она не останется висеть навсегда.
-        harness.meetingRepository.stopGating(on: .save)
-        harness.meetingRepository.release(on: .save)
     }
 
     /// Пограничный случай 2: после отмены ПОСЛЕДНЕГО ожидающего `inFlightSync[source]`
@@ -172,6 +164,27 @@ extension ControlSurfaceEntryPointsTests {
     /// Проверка — ЧИСТЫЙ СЧЁТЧИК вызовов `setSyncOutcome`, а не итоговое значение в
     /// хранилище: без фикса счётчик стал бы 2 независимо от того, какая из двух попыток в
     /// итоге осталась видна в `storedRecords`.
+    ///
+    /// Возврат РП (24.09 21:15 UTC, приёмка #115, п. 3): исходная версия рисковала зависнуть
+    /// и заводила ложную (ненужную) инъекцию отказа.
+    /// - Риск зависания: `release(on: .save)` снимает только уже ЗАРЕГИСТРИРОВАННЫЕ на данный
+    ///   момент continuation, ворота (`gatedMethods`) при этом остаются взведены. Оба цикла
+    ///   слияния здесь — одна и та же встреча (общий `icalUid` из `mergeTestPayload`), а
+    ///   значит одна и та же цепочка `mergeTail` (инв. 11): собственный `save()` второго
+    ///   поколения физически не может начаться, пока цепочка не дойдёт до его звена — то есть
+    ///   не раньше, чем звено первого (стоящее на воротах) завершится. Порядок «сначала
+    ///   `release`, потом `stopGating`» оставлял окно: `release` отпускает первое поколение,
+    ///   цепочка тут же передаёт очередь второму, а ворота к этому моменту ЕЩЁ взведены — его
+    ///   СОБСТВЕННЫЙ, ни в чём не повинный `save()` вставал бы на те же ворота повторно, и
+    ///   второго `release(on: .save)` для него уже никто не звал бы — тест завис бы. Порядок
+    ///   исправлен: `stopGating(on: .save)` СНАЧАЛА (следующие вызовы `save`, включая
+    ///   собственный вызов второго поколения, больше не встают), `release(on: .save)` —
+    ///   ПОСЛЕ (снимает только уже стоящий вызов первого поколения).
+    /// - Инъекция `fail(with:on:.save)` убрана целиком: она была не нужна и рисковала задеть
+    ///   СОБСТВЕННЫЙ `save()` второго поколения тем же способом (без `id`, нацеленного на
+    ///   конкретный вызов) — единственная содержательная проверка здесь и так чистый счётчик
+    ///   `setSyncOutcome`, различающий 1 (фикс верен) от 2 (фикс сломан) независимо от того,
+    ///   каким исходом (успех/отказ) завершилась устаревшая попытка.
     func test_defect_staleGenerationDoesNotWriteSyncOutcome() async throws {
         let harness = Harness(sourceIds: ["src-1"])
         harness.connectorRepository.seed([Harness.record(id: "src-1")])
@@ -199,18 +212,15 @@ extension ControlSurfaceEntryPointsTests {
         let secondTask = Task { await harness.hub.sync(trigger: .manual) }
         await pollUntil(timeout: .seconds(2)) { await harness.hub.inFlightSync[source] != nil }
 
-        // Устаревшее поколение всё ещё физически висит на save-воротах — отпускаем его с
-        // заранее взведённым отказом, чтобы у его (потенциальной) записи был заведомо
-        // отличимый от честного успеха вид, и ждём его СОБСТВЕННУЮ задачу до конца (не
-        // firstTask — тот уже вернул .cancelled вызывающему безотносительно судьбы самой
-        // задачи).
-        harness.meetingRepository.fail(
-            with: .dataCorrupted(entity: "meeting", id: "n/a", message: "устаревшее поколение"), on: .save
-        )
+        // Устаревшее поколение всё ещё физически висит на save-воротах — снимаем ворота
+        // (следующий вызов save, включая собственный вызов второго поколения ниже по той же
+        // цепочке mergeTail, больше не встанет) ДО отпуска уже стоящего вызова, не после (см.
+        // докстринг выше — иначе второе поколение рисковало зависнуть на тех же воротах
+        // навсегда). Ждём СОБСТВЕННУЮ задачу устаревшего поколения до конца (не firstTask —
+        // тот уже вернул .cancelled вызывающему безотносительно судьбы самой задачи).
+        harness.meetingRepository.stopGating(on: .save)
         harness.meetingRepository.release(on: .save)
         _ = await firstGenerationTask?.value
-        harness.meetingRepository.stopGating(on: .save)
-        harness.meetingRepository.clearFailure(on: .save)
 
         let secondResults = await secondTask.value
         XCTAssertNil(secondResults.first?.failure, "новое поколение обязано завершиться успешно")
@@ -224,4 +234,8 @@ extension ControlSurfaceEntryPointsTests {
             "итоговое состояние обязано отражать честный успех текущего поколения"
         )
     }
+
+    // Устаревшее поколение после ухода ВТОРОГО, более нового (не только пустого источника) —
+    // `StaleGenerationAfterNewerDepartsTests.swift` (тот же довод file_length/type_body_length,
+    // что развёл этот файл и `ControlSurfaceEntryPointsTests.swift`).
 }
