@@ -24,6 +24,10 @@ public struct DiarizationResult: Codable, Equatable, Sendable, DomainValidatable
             try validate()
         }
 
+        enum CodingKeys: String, CodingKey {
+            case startMs, endMs, cluster
+        }
+
         public init(from decoder: Decoder) throws {
             let box = try decoder.container(keyedBy: CodingKeys.self)
             startMs = try box.decodeBounded(Int.self, forKey: .startMs)
