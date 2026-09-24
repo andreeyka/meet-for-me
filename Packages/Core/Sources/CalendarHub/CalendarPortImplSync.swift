@@ -1,7 +1,8 @@
 //  CalendarPortImpl+Sync — синхронизация источников (К30-К39, К42-К43, К71-К72), дедуп по
 //  признакам (а)/(б) правила слияния C-005 п.4 (реализует К17-К19, К29, К31 — возврат РП,
 //  приёмка #85, дефект 6: заявление «покрыты» здесь раньше значило «есть тесты», тестов не
-//  было ни строки; актуальное покрытие тестами называет шапка `DedupAndMergeTests.swift`).
+//  было ни строки; тестов на К17-К19/К29/К31 по-прежнему нет — задача остаётся открытой,
+//  файл под неё не заведён — возврат РП, приёмка #94, п. 2).
 //
 //  Модуль: calendar-hub · Владелец: DEV-1 · Слой: домен
 //
@@ -32,38 +33,85 @@ extension CalendarPortImpl {
 
     // НАЙДЕНО (бисекция CI-зависания, MEE-362 ч.2 — К67, не среди семи дефектов приёмки
     // #85, обнаружено ЭТИМ новым тестом): `Task { await self.performSync(...) }` —
-    // неструктурная задача; `await task.value`/`await running.value` сами по себе НЕ
-    // передают отмену вызывающего контекста внутрь неё (отмена структурно каскадится
-    // только в дочерние задачи `TaskGroup`/`async let`, не в свободный `Task { }`).
-    // Отмена `sync()`'s группы (К67 — `task.cancel()` в тесте) доходила до самого
-    // `syncOne`, но НЕ доходила до `performSync`'а внутри — задержка повтора §5.2
-    // (`waitSeam.sleep`, свои корректные ворота ждут явной отмены СВОЕЙ задачи) не
-    // получала отмену никогда и висела до конца процесса `swift test`.
-    // `withTaskCancellationHandler` пробрасывает `.cancel()` явно на саму `task`/
-    // `running` — тем же приёмом, что `hangOrGate`/`FakeWaitSeam.sleep` уже используют
-    // сами по себе, только на один уровень выше.
+    // неструктурная задача; `await task.value` сама по себе НЕ передаёт отмену вызывающего
+    // контекста внутрь неё (отмена структурно каскадится только в дочерние задачи
+    // `TaskGroup`/`async let`, не в свободный `Task { }`). Отмена `sync()`'s группы
+    // (К67 — `task.cancel()` в тесте) доходила до самого `syncOne`, но НЕ доходила до
+    // `performSync`'а внутри — задержка повтора §5.2 (`waitSeam.sleep`, свои корректные
+    // ворота ждут явной отмены СВОЕЙ задачи) не получала отмену никогда и висела до конца
+    // процесса `swift test`.
+    //
+    // СТРОКА (возврат РП, приёмка #94, п. 1 — первый заход `withTaskCancellationHandler {
+    // await task.value } onCancel: { task.cancel() }` был неверен другим способом): К35
+    // («второй параллельный вызов получает результат уже идущего, не запускает второй»)
+    // значит НЕСКОЛЬКО вызывающих делят ОДНУ `task` — `task.cancel()` в `onCancel` одного
+    // вызывающего отменял бы общую задачу и для остальных, ничего не просивших об отмене.
+    // Фикс — предохранитель НА ВЫЗЫВАЮЩЕГО, не на саму задачу: каждый вызов регистрирует
+    // свой continuation в `syncWaiters[source]` (тот же приём с `UUID`-ключом и гонкой
+    // «уже отменена до регистрации», что `hangOrGate`/`FakeWaitSeam.sleep`); настоящая
+    // `task` фоновым `Task` (`finishInFlightSync`) при завершении рассылает результат ВСЕМ
+    // зарегистрированным ожидающим разом. Отмена одного вызывающего снимает ТОЛЬКО его
+    // запись и отдаёт ему `.cancelled` — саму `task` это не трогает, пока у неё остаётся
+    // хоть один незавершённый ожидающий; когда последний тоже уходит (отменой или обычным
+    // получением результата), `task.cancel()` вызывается ровно один раз — тот же довод К67
+    // (отмена единственного вызывающего обязана по-настоящему прервать §5.2), просто не
+    // ценой чужих вызовов.
     /// Внутренняя, непубличная операция развилки Р6 — обходит ОДИН источник, не все
     /// (публичный `sync(trigger:)` параметра источника не несёт). Вызывается и публичным
     /// `sync`, и push-обработчиком (`notify(.changesAvailable)`, К61) напрямую.
     /// Не-реентерантна на источник (К35) — второй параллельный вызов для того же
     /// источника получает результат уже идущего, не запускает второй.
     func syncOne(source: CalendarSourceId, trigger: CalendarSyncTrigger) async -> CalendarSyncResult {
-        if let running = inFlightSync[source] {
-            return await withTaskCancellationHandler {
-                await running.value
-            } onCancel: {
-                running.cancel()
-            }
+        if inFlightSync[source] == nil {
+            let task = Task { await self.performSync(source: source, trigger: trigger) }
+            inFlightSync[source] = task
+            Task { await self.finishInFlightSync(source: source, task: task) }
         }
-        let task = Task { await self.performSync(source: source, trigger: trigger) }
-        inFlightSync[source] = task
-        let result = await withTaskCancellationHandler {
-            await task.value
-        } onCancel: {
-            task.cancel()
-        }
+        return await awaitSharedSync(source: source, trigger: trigger)
+    }
+
+    private func finishInFlightSync(source: CalendarSourceId, task: Task<CalendarSyncResult, Never>) async {
+        let result = await task.value
         inFlightSync[source] = nil
-        return result
+        let waiters = syncWaiters.removeValue(forKey: source) ?? [:]
+        for continuation in waiters.values {
+            continuation.resume(returning: result)
+        }
+    }
+
+    private func awaitSharedSync(source: CalendarSourceId, trigger: CalendarSyncTrigger) async -> CalendarSyncResult {
+        let key = UUID()
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { (continuation: CheckedContinuation<CalendarSyncResult, Never>) in
+                guard !Task.isCancelled else {
+                    continuation.resume(returning: Self.cancelledResult(source: source, trigger: trigger))
+                    return
+                }
+                syncWaiters[source, default: [:]][key] = continuation
+            }
+        } onCancel: {
+            Task { await self.cancelSyncWaiter(source: source, key: key, trigger: trigger) }
+        }
+    }
+
+    /// Снимает СВОЮ запись и только свою; если после этого у источника не осталось ни
+    /// одного ожидающего, а настоящая задача ещё не завершилась — она больше никому не
+    /// нужна, отменяем её здесь (ровно один раз, тем же вызовом, что снял последнего).
+    private func cancelSyncWaiter(source: CalendarSourceId, key: UUID, trigger: CalendarSyncTrigger) {
+        guard let continuation = syncWaiters[source]?.removeValue(forKey: key) else { return }
+        continuation.resume(returning: Self.cancelledResult(source: source, trigger: trigger))
+        if syncWaiters[source]?.isEmpty ?? true {
+            syncWaiters[source] = nil
+            inFlightSync[source]?.cancel()
+        }
+    }
+
+    private static func cancelledResult(source: CalendarSourceId, trigger: CalendarSyncTrigger) -> CalendarSyncResult {
+        let now = Date()
+        return CalendarSyncResult(
+            sourceId: source, trigger: trigger, startedAt: now, finishedAt: now,
+            upsertedCount: 0, deletedCount: 0, failure: .cancelled
+        )
     }
 
     private func performSync(source: CalendarSourceId, trigger: CalendarSyncTrigger) async -> CalendarSyncResult {
@@ -249,9 +297,9 @@ extension CalendarPortImpl {
     /// Слияние скаляров/`attendees` по п.2-3 в честном виде (fallback по возрастанию
     /// `sourceConnectorId` для каждого отдельного поля, К20-К24, К28) НЕ реализовано —
     /// `MeetingSource` не хранит per-source сырые поля (IR-126/MEE-372, не решено
-    /// архитектором); здесь пока «последний пишет поверх» на уровне СКАЛЯРОВ целиком. К20-К24
-    /// тестами покрыты только В ПРЕДЕЛАХ одной синхронизации (`DedupAndMergeTests.swift`,
-    /// см. его шапку) — межсинхронизационное честное слияние ждёт того же IR-126.
+    /// архитектором); здесь пока «последний пишет поверх» на уровне СКАЛЯРОВ целиком. Тестов
+    /// на К17-К19/К20-К24/К28/К29 по-прежнему нет — задача остаётся открытой (возврат РП,
+    /// приёмка #94, п. 2); межсинхронизационное честное слияние в любом случае ждёт IR-126.
     @discardableResult
     private func applyIncoming(payload: MeetingEventPayload) async throws -> Bool {
         let provisional = try payload.assigningId(UUID())

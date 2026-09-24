@@ -38,6 +38,10 @@ public actor CalendarPortImpl: CalendarPort {
     private var logEntries: [CalendarSourceId: [(level: LogLevel, message: String)]] = [:]
     private var notifyEntries: [CalendarSourceId: [(kind: HostNotificationKind, detail: String?)]] = [:]
     var inFlightSync: [CalendarSourceId: Task<CalendarSyncResult, Never>] = [:]
+    /// Возврат РП, приёмка #94: отмена ОДНОГО вызывающего `syncOne` не вправе отменять
+    /// общую задачу за остальных — свой предохранитель на вызывающего, не на саму задачу
+    /// (`CalendarPortImplSync.swift`, `syncOne`/`awaitSharedSync`).
+    var syncWaiters: [CalendarSourceId: [UUID: CheckedContinuation<CalendarSyncResult, Never>]] = [:]
     private let changeHub = CalendarChangeHub()
     private var scheduleTask: Task<Void, Never>?
 
