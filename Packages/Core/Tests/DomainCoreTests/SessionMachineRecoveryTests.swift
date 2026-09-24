@@ -94,7 +94,7 @@ final class SessionMachineRecoveryTests: XCTestCase {
         let session = try unwrap(published.first?.session)
         XCTAssertEqual(session.state, .failed, "сессия вошла в `failed`")
         XCTAssertEqual(session.recordingId, recordingId, "и несёт номер той самой записи")
-        XCTAssertEqual(session.origin, .adHoc, "отдана `adHoc()` → `.adHoc`, тем же правилом, что и удавшийся `recover`")
+        XCTAssertEqual(session.origin, .adHoc, "отдана `adHoc()` → `.adHoc`, тем же правилом, что и удача")
         XCTAssertEqual(stand.queue.submissions.count, 0, "задача не ставится ни одна")
         await stand.machine.stop()
     }
