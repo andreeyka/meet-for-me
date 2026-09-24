@@ -45,6 +45,18 @@ enum DateProbe {
         )
     }
 
+    /// Полезная нагрузка коннектора (C-006 §6.1) с тем же валидным окном, что `event`, —
+    /// заведена вместе с MEE-346 для перебора инвариантов `MeetingEventPayload`.
+    static func payload(start: Date = validStart, end: Date = validEnd,
+                        lastModified: Date = validStart) throws -> MeetingEventPayload {
+        try MeetingEventPayload(
+            sourceConnectorId: "eventkit", externalId: "evt-1", icalUid: nil, title: "T",
+            start: start, end: end, timeZone: "UTC", isAllDay: false, isCancelled: false,
+            organizer: nil, attendees: [], location: nil, bodyText: nil,
+            conference: nil, lastModified: lastModified
+        )
+    }
+
     static func transcript(createdAt: Date = validStart) throws -> Transcript {
         try Transcript(
             recordingId: try makeUUID(ManifestJSON.identifier),
