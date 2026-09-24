@@ -238,36 +238,44 @@ final class SecretStoreKeychainTests: XCTestCase {
 
     // MARK: - Е. Ошибки Keychain — К12-К14
 
-    /// Возврат РП (CI, macos-14, #101): ДВЕ предыдущие попытки не дали детерминированного
-    /// отказа. Первая — `SecKeychainDelete()` реального keychain, затем повторное
-    /// использование той же ссылки: молча откатывается на keychain по умолчанию, ничего не
-    /// бросает. Вторая — `SecKeychainOpen()` на пути, где keychain никогда не существовал
-    /// (документированно без проверки пути при самом вызове): тоже не бросила — похоже,
-    /// Security framework на macos-14 либо заводит keychain на лету при первом реальном
-    /// обращении через такую ссылку, либо тоже тихо откатывается на умолчание. Общий
-    /// знаменатель обеих неудач — путь/ссылка вовсе НЕ СУЩЕСТВУЕТ для Security framework на
-    /// момент вызова, а именно это, похоже, и прощается без отказа.
+    /// Возврат РП (CI, macos-14): ТРИ попытки получить `.unexpected(status: errSecNoSuchKeychain)`
+    /// с недействительного/удалённого keychain (`SecKeychainDelete` + повторное использование
+    /// ссылки; `SecKeychainOpen` на никогда не существовавшем пути; 0o444 на файл под доказанно
+    /// рабочей ссылкой) на macos-14 CI не отказали ни разу. Диагноз РП: `SecItemCopyMatching` по
+    /// недоступному в списке поиска keychain отдаёт `errSecItemNotFound` — реализация честно
+    /// трактует это как «нет записи» и уходит в `SecItemAdd`, который на этой платформе тоже не
+    /// отказывает через такую ссылку. Посылка К12/К13(ii) перечня MEE-366 (`errSecNoSuchKeychain`
+    /// от удалённого keychain) эмпирически не подтверждается на macos-14 CI — находка для отчёта
+    /// в MEE-364, не решаемая этим тестом в одиночку. Выделенного шва для подстановки
+    /// произвольного `OSStatus` в модуле нет (MEE-380 §1 — способ «Т» только через настоящий
+    /// Keychain Services, второй способ — «мех./компиляция», не подстановка).
     ///
-    /// Третий заход — держим РЕАЛЬНУЮ, доказанно рабочую пару `keychain`/`store` из setUp
-    /// (ту же, через которую успешно пишут все остальные тесты этого файла — сама
-    /// адресация заведомо верна), портим не ссылку, а ДОСТУПНОСТЬ файла под ней: снимаем
-    /// право записи с самого keychain-файла на диске. Чтение (поиск `SecItemUpdate` перед
-    /// записью, пустой — свежий keychain теста) при этом разрешено; запись (`SecItemAdd`,
-    /// файл — заведомо ТОТ САМЫЙ, что работает у всех остальных тестов) обязана упереться в
-    /// реальный отказ ОС на попытке открыть файл без права записи — списать на умолчание
-    /// здесь нечего, ссылка та же самая, что у всех остальных тестов файла.
+    /// Вместо неё — детерминированный вектор `.denied`, который перечень раньше относил только
+    /// к РУЧНОЙ проверке: `SecKeychainLock` на СВОЙ временный keychain теста (не login) +
+    /// `SecKeychainSetUserInteractionAllowed(false)` (глобально для процесса, восстанавливается
+    /// `defer` до конца этого метода — файл гоняется строго последовательно, CI без
+    /// `--parallel`, гонки с соседним тестом нет) — без диалога системы, детерминированно даёт
+    /// `errSecInteractionNotAllowed`. Автоматизирует то, что раньше требовало рук; собственный
+    /// вектор К12/К13(ii) (`errSecNoSuchKeychain`) остаётся неавтоматизированным — см. отчёт.
     func test_ss12_13_unexpectedOnDeletedKeychain() async throws {
-        try FileManager.default.setAttributes([.posixPermissions: 0o444], ofItemAtPath: keychainURL.path)
+        let keychainToLock = try XCTUnwrap(keychain)
+        XCTAssertEqual(SecKeychainSetUserInteractionAllowed(false), errSecSuccess)
+        defer { SecKeychainSetUserInteractionAllowed(true) }
+        XCTAssertEqual(SecKeychainLock(keychainToLock), errSecSuccess)
+        defer {
+            let password = "test-password"
+            _ = password.withCString { SecKeychainUnlock(keychainToLock, UInt32(password.utf8.count), $0, true) }
+        }
 
         do {
             try await store.set(key: "refreshToken", value: "tok", namespace: "eventkit-1")
-            XCTFail("ожидалась ошибка — файл keychain доступен только для чтения")
+            XCTFail("ожидалась ошибка — keychain заперт, взаимодействие с пользователем выключено")
         } catch let error as SecretStoreKeychainError {
             switch error {
+            case .denied(let status):
+                XCTAssertEqual(status, errSecInteractionNotAllowed)
             case .unexpected:
-                break // конкретный OSStatus контракт не фиксирует — «любой другой отказ», не число
-            case .denied:
-                XCTFail("ожидался .unexpected, получен .denied")
+                XCTFail("ожидался .denied, получен .unexpected")
             }
         }
     }
