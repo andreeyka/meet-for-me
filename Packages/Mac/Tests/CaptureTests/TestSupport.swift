@@ -21,6 +21,17 @@ final class FakeHardwareGateway: HardwareGateway, @unchecked Sendable {
     private let lock = NSLock()
     private var tapContinuations: [CheckedContinuation<TapAttempt, Never>] = []
     private var micContinuations: [CheckedContinuation<MicrophoneAttempt, Never>] = []
+    /// MEE-374 (аудит MEE-377): явный gate вместо фикс. паузы, угадывающей момент, когда
+    /// `AudioCaptureImpl` реально дошёл до `requestSystemAudioTap`/`requestMicrophone` и
+    /// зарегистрировал continuation — `resolveTap`/`resolveMicrophone` до этого момента теряют
+    /// разрешение молча (см. их же `pending = []`).
+    private var tapRequestedContinuations: [CheckedContinuation<Void, Never>] = []
+    private var micRequestedContinuations: [CheckedContinuation<Void, Never>] = []
+    /// Тот же довод для позднего пути (К17): `handleLateTap`/`handleLateMicrophone` зовут
+    /// `releaseTap`/`releaseMicrophone` из СОБСТВЕННОГО фонового `Task` — сигнал «релиз
+    /// действительно случился» вместо угадывания паузой.
+    private var tapReleasedContinuations: [CheckedContinuation<Void, Never>] = []
+    private var micReleasedContinuations: [CheckedContinuation<Void, Never>] = []
 
     private(set) var tapRequestArgs: [ProcessGroup?] = []
     private(set) var micRequestArgs: [InputSelection] = []
@@ -70,26 +81,98 @@ final class FakeHardwareGateway: HardwareGateway, @unchecked Sendable {
         for continuation in pending { continuation.resume(returning: result) }
     }
 
+    /// Ждёт момента, когда `requestSystemAudioTap` реально вызван и continuation
+    /// зарегистрирован — сигнал «право tap запрошено», не оценка времени. Возврат РП
+    /// 24.09 18:05: ограничено пределом (`withDeadline`) — регрессия обязана уронить тест
+    /// утверждением, а не повиснуть до сторожа CI.
+    func awaitTapRequested(file: StaticString = #filePath, line: UInt = #line) async {
+        await withDeadline(file: file, line: line) {
+            await withCheckedContinuation { continuation in
+                self.lock.lock()
+                guard self.tapContinuations.isEmpty else { self.lock.unlock(); continuation.resume(); return }
+                self.tapRequestedContinuations.append(continuation)
+                self.lock.unlock()
+            }
+        }
+    }
+
+    /// Тот же gate для `requestMicrophone`.
+    func awaitMicrophoneRequested(file: StaticString = #filePath, line: UInt = #line) async {
+        await withDeadline(file: file, line: line) {
+            await withCheckedContinuation { continuation in
+                self.lock.lock()
+                guard self.micContinuations.isEmpty else { self.lock.unlock(); continuation.resume(); return }
+                self.micRequestedContinuations.append(continuation)
+                self.lock.unlock()
+            }
+        }
+    }
+
     func requestSystemAudioTap(for group: ProcessGroup?) async -> TapAttempt {
         lock.lock(); tapRequestArgs.append(group); lock.unlock()
         return await withCheckedContinuation { continuation in
-            lock.lock(); tapContinuations.append(continuation); lock.unlock()
+            lock.lock()
+            tapContinuations.append(continuation)
+            let waiters = tapRequestedContinuations
+            tapRequestedContinuations = []
+            lock.unlock()
+            for waiter in waiters { waiter.resume() }
         }
     }
 
     func requestMicrophone(_ selection: InputSelection) async -> MicrophoneAttempt {
         lock.lock(); micRequestArgs.append(selection); lock.unlock()
         return await withCheckedContinuation { continuation in
-            lock.lock(); micContinuations.append(continuation); lock.unlock()
+            lock.lock()
+            micContinuations.append(continuation)
+            let waiters = micRequestedContinuations
+            micRequestedContinuations = []
+            lock.unlock()
+            for waiter in waiters { waiter.resume() }
         }
     }
 
     func releaseTap(_ handle: TapHandle) {
-        lock.lock(); releasedTaps.append(handle); lock.unlock()
+        lock.lock()
+        releasedTaps.append(handle)
+        let waiters = tapReleasedContinuations
+        tapReleasedContinuations = []
+        lock.unlock()
+        for waiter in waiters { waiter.resume() }
     }
 
     func releaseMicrophone(_ handle: MicrophoneHandle) {
-        lock.lock(); releasedMicrophones.append(handle); lock.unlock()
+        lock.lock()
+        releasedMicrophones.append(handle)
+        let waiters = micReleasedContinuations
+        micReleasedContinuations = []
+        lock.unlock()
+        for waiter in waiters { waiter.resume() }
+    }
+
+    /// Ждёт момента, когда `releaseTap` реально вызван — К17, поздний путь. Тот же предел
+    /// ожидания, что у `awaitTapRequested` (возврат РП 24.09 18:05).
+    func awaitTapReleased(file: StaticString = #filePath, line: UInt = #line) async {
+        await withDeadline(file: file, line: line) {
+            await withCheckedContinuation { continuation in
+                self.lock.lock()
+                guard self.releasedTaps.isEmpty else { self.lock.unlock(); continuation.resume(); return }
+                self.tapReleasedContinuations.append(continuation)
+                self.lock.unlock()
+            }
+        }
+    }
+
+    /// Тот же gate для `releaseMicrophone`.
+    func awaitMicrophoneReleased(file: StaticString = #filePath, line: UInt = #line) async {
+        await withDeadline(file: file, line: line) {
+            await withCheckedContinuation { continuation in
+                self.lock.lock()
+                guard self.releasedMicrophones.isEmpty else { self.lock.unlock(); continuation.resume(); return }
+                self.micReleasedContinuations.append(continuation)
+                self.lock.unlock()
+            }
+        }
     }
 
     // MARK: - Aggregate
@@ -235,8 +318,8 @@ struct Harness {
     ))
     let port: AudioCaptureImpl
 
-    init() {
-        port = AudioCaptureImpl(power: power, gateway: gateway, deadline: deadline, pollDriver: poll)
+    init(now: @escaping @Sendable () -> Date = Date.init) {
+        port = AudioCaptureImpl(power: power, gateway: gateway, deadline: deadline, pollDriver: poll, now: now)
     }
 
     /// `directory` обязан существовать — как и в проде, его создаёт `storage` до вызова `start`.

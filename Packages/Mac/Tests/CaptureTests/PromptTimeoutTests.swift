@@ -17,8 +17,10 @@ final class PromptTimeoutTests: CaptureAsyncTestCase {
         let directory = try Harness.makeDirectory()
         let request = Harness.request(directory: directory, input: .none)
 
+        // MEE-374 (аудит MEE-377): `expireNow()` — «текущий И ВСЕ СЛЕДУЮЩИЕ вызовы `wait`
+        // возвращаются немедленно» (см. её же докстринг в `TestSupport.swift`) — вызов до того,
+        // как `wait(seconds:)` внутри `race()` реально стартовал, не теряется и не гонка.
         async let started = harness.port.start(request)
-        try await Task.sleep(nanoseconds: 20_000_000)
         harness.deadline.expireNow()
 
         do {
@@ -42,7 +44,6 @@ final class PromptTimeoutTests: CaptureAsyncTestCase {
         let request = Harness.request(directory: directory, group: nil, input: .systemDefault)
 
         async let started = harness.port.start(request)
-        try await Task.sleep(nanoseconds: 20_000_000)
         harness.deadline.expireNow()
 
         do {
@@ -68,10 +69,17 @@ final class PromptTimeoutTests: CaptureAsyncTestCase {
                                                                           observedAt: Date()), input: .systemDefault)
 
         async let started = harness.port.start(request)
-        try await Task.sleep(nanoseconds: 20_000_000)
+        await harness.gateway.awaitTapRequested()
         let tap = TapHandle()
         harness.gateway.resolveTap(with: .created(tap))
-        try await Task.sleep(nanoseconds: 20_000_000)
+        // `resolveTap` только БУДИТ приостановленный `requestSystemAudioTap` — само решение
+        // гонки (`race()`, CapturePromptRace.swift: значение против `deadline.wait`, ни одна
+        // сторона не отменяется) исполняется отдельной задачей и требует шага планировщика.
+        // `awaitMicrophoneRequested()` — деталь, что `acquireTap` уже ВЕРНУЛ хэндл (иначе до
+        // `acquireMicrophone`/`requestMicrophone` очередь не дошла бы вовсе): без этого шага
+        // `expireNow()` мог обогнать ещё не решённую гонку tap и подложить ей `.timedOut`
+        // вместо `.value`.
+        await harness.gateway.awaitMicrophoneRequested()
         harness.deadline.expireNow()
 
         do {
@@ -96,16 +104,15 @@ final class PromptTimeoutTests: CaptureAsyncTestCase {
         // §«Право на системный звук», п. 3: исход, пришедший после предела, всё равно публикуется
         // `permissionObserved` — тем же путём, что и уложившийся в предел (возврат MEE-317, 24.09:
         // прежде тест проверял только уничтожение tap, не сам факт публикации события).
+        let stream = harness.port.events()
         let collector = Task { () -> CaptureEvent? in
-            for await event in harness.port.events() {
+            for await event in stream {
                 if case .permissionObserved = event { return event }
             }
             return nil
         }
-        try await Task.sleep(nanoseconds: 10_000_000)
 
         async let started = harness.port.start(request)
-        try await Task.sleep(nanoseconds: 20_000_000)
         harness.deadline.expireNow()
         do {
             _ = try await started
@@ -113,8 +120,12 @@ final class PromptTimeoutTests: CaptureAsyncTestCase {
         } catch CaptureError.systemAudioPromptTimedOut {}
 
         let lateTap = TapHandle()
+        await harness.gateway.awaitTapRequested()
         harness.gateway.resolveTap(with: .created(lateTap))
-        try await Task.sleep(nanoseconds: 50_000_000)
+        // MEE-374 (аудит MEE-377): `handleLateTap` освобождает tap из СОБСТВЕННОГО фонового
+        // `Task` (`AudioCaptureImplStart.swift`) — `awaitTapReleased()` ждёт именно этого факта,
+        // не оценки времени, в которое он мог бы уложиться.
+        await harness.gateway.awaitTapReleased()
 
         XCTAssertEqual(harness.gateway.releasedTaps, [lateTap], "tap, пришедший с опозданием, уничтожен")
         XCTAssertEqual(harness.gateway.aggregateBuildCount, 0, "сеанс сам по себе не поднялся")
@@ -131,7 +142,6 @@ final class PromptTimeoutTests: CaptureAsyncTestCase {
         let request = Harness.request(directory: directory, group: nil, input: .systemDefault)
 
         async let started = harness.port.start(request)
-        try await Task.sleep(nanoseconds: 20_000_000)
         harness.deadline.expireNow()
         do {
             _ = try await started
@@ -139,8 +149,9 @@ final class PromptTimeoutTests: CaptureAsyncTestCase {
         } catch CaptureError.microphonePromptTimedOut {}
 
         let lateMic = MicrophoneHandle(uid: "late", name: "Late Mic", channelCount: 1)
+        await harness.gateway.awaitMicrophoneRequested()
         harness.gateway.resolveMicrophone(with: .opened(lateMic))
-        try await Task.sleep(nanoseconds: 50_000_000)
+        await harness.gateway.awaitMicrophoneReleased()
 
         XCTAssertEqual(harness.gateway.releasedMicrophones, [lateMic])
         XCTAssertEqual(harness.gateway.aggregateBuildCount, 0)
@@ -155,15 +166,15 @@ final class PromptTimeoutTests: CaptureAsyncTestCase {
         // MEE-317: после него, ДО `started(_)`, теперь идёт ещё и `capturedProcessesChanged` —
         // инвариант 12(а)); цикл берёт первые два счётом и завершается сам, не полагаясь на
         // отмену задачи поверх AsyncStream (риск незавершённого потока — шов теста, не порт).
+        let stream = harness.port.events()
         let collector = Task { () -> [CaptureEvent] in
             var collected: [CaptureEvent] = []
-            for await event in harness.port.events() {
+            for await event in stream {
                 collected.append(event)
                 if collected.count >= 2 { break }
             }
             return collected
         }
-        try await Task.sleep(nanoseconds: 10_000_000)
 
         _ = try await harness.start(directory: directory)
         let events = await collector.value
@@ -184,18 +195,18 @@ final class PromptTimeoutTests: CaptureAsyncTestCase {
 
         // Отказ права публикует ровно одно событие — permissionObserved(.denied) — и на этом
         // start() бросает: `.started` не следует, цикл берёт единственное событие счётом.
+        let stream = harness.port.events()
         let collector = Task { () -> [CaptureEvent] in
             var collected: [CaptureEvent] = []
-            for await event in harness.port.events() {
+            for await event in stream {
                 collected.append(event)
                 if collected.count >= 1 { break }
             }
             return collected
         }
-        try await Task.sleep(nanoseconds: 10_000_000)
 
         async let started = harness.port.start(request)
-        try await Task.sleep(nanoseconds: 20_000_000)
+        await harness.gateway.awaitTapRequested()
         harness.gateway.resolveTap(with: .permissionDenied)
         do {
             _ = try await started
@@ -219,7 +230,7 @@ final class PromptTimeoutTests: CaptureAsyncTestCase {
         let request = Harness.request(directory: directory, group: nil, input: .systemDefault)
 
         async let started = harness.port.start(request)
-        try await Task.sleep(nanoseconds: 20_000_000)
+        await harness.gateway.awaitMicrophoneRequested()
         harness.gateway.resolveMicrophone(with: .permissionDenied)
 
         do {
@@ -235,7 +246,6 @@ final class PromptTimeoutTests: CaptureAsyncTestCase {
         let request = Harness.request(directory: directory, group: nil, input: .systemDefault)
 
         async let started = harness.port.start(request)
-        try await Task.sleep(nanoseconds: 20_000_000)
         harness.deadline.expireNow()
 
         do {

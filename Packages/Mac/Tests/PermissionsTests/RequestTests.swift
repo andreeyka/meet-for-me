@@ -86,18 +86,20 @@ final class RequestTests: XCTestCase {
         }
     }
 
-    // MARK: - 14. Тотальность: 36 клеток, каждая — значение перечисления, быстрее 500 мс
+    // MARK: - 14. Тотальность: 36 клеток, каждая — значение перечисления
+    //
+    // MEE-379 (аудит MEE-377, п.3): половина критерия «быстрее 500 мс» здесь была проверкой по
+    // реальным часам без единой инжектируемой задержки в проверяемом пути — измеряла шум
+    // планировщика гейтящего раннера, а не поведение SUT. Вынесена отдельным негейтящим
+    // прогоном — `PerformanceTests.test_c14_c18_totalityCellsAnswerWithin500ms`.
 
-    func test_c14_totality_everyCellAnswersWithin500ms() async {
+    func test_c14_totality_everyCellAnswersValidOutcome() async {
         var answered = 0
         for kind in Self.withSystemStatus {
             for status in [PermissionStatus.notDetermined, .granted, .denied, .restricted, .unavailable, .unknown] {
                 let harness = PermissionsHarness([kind: status])
                 harness.statuses.answer(true, for: kind)
-                let started = Date()
                 let outcome = await harness.sut.request(kind)
-                let elapsed = Date().timeIntervalSince(started)
-                XCTAssertLessThan(elapsed, 0.5, "\(kind) при \(status)")
                 XCTAssertTrue([.granted, .denied, .cannotPrompt, .promptOnUse].contains(outcome),
                               "\(kind) при \(status)")
                 answered += 1
@@ -108,9 +110,7 @@ final class RequestTests: XCTestCase {
         for status in [PermissionStatus.unknown, .granted, .denied] {
             let harness = PermissionsHarness()
             await harness.sut.note(observed: status, for: .systemAudioRecording)
-            let started = Date()
             let outcome = await harness.sut.request(.systemAudioRecording)
-            XCTAssertLessThan(Date().timeIntervalSince(started), 0.5)
             XCTAssertTrue([.granted, .denied, .cannotPrompt, .promptOnUse].contains(outcome), "\(status)")
             answered += 1
         }
@@ -133,13 +133,14 @@ final class RequestTests: XCTestCase {
         }
     }
 
-    // MARK: - 18. Системный звук при .unknown → .promptOnUse не позднее 500 мс, статус прежний
+    // MARK: - 18. Системный звук при .unknown → .promptOnUse, статус прежний
+    //
+    // MEE-379 (аудит MEE-377, п.3): половина «не позднее 500 мс» вынесена туда же, в
+    // `PerformanceTests.test_c14_c18_totalityCellsAnswerWithin500ms` — тот же довод, что у К14.
 
-    func test_c18_systemAudio_unknown_promptOnUse_within500ms() async {
+    func test_c18_systemAudio_unknown_promptOnUse() async {
         for sut in [SystemPermissions(), PermissionsHarness().sut] {
-            let started = Date()
             let outcome = await sut.request(.systemAudioRecording)
-            XCTAssertLessThan(Date().timeIntervalSince(started), 0.5)
             XCTAssertEqual(outcome, .promptOnUse)
             let after = await sut.status(of: .systemAudioRecording)
             XCTAssertEqual(after, .unknown)
@@ -170,9 +171,25 @@ final class RequestTests: XCTestCase {
     func test_c20_mechanicalHalf_parallelRequests_promptOnce_sameOutcome() async {
         let harness = PermissionsHarness([.microphone: .notDetermined])
         harness.statuses.answer(true, for: .microphone)
-        harness.statuses.promptDelay = 0.2
+        // MEE-379 (аудит MEE-377, п.1): второй `request` заводится ТОЛЬКО когда первый реально
+        // вошёл в `prompt(_:)` — явный gate вместо фикс. паузы, угадывавшей столкновение по
+        // реальному времени.
+        harness.statuses.holdPromptUntilReleased = true
         async let first = harness.sut.request(.microphone)
+        await harness.statuses.awaitPromptStarted(.microphone)
         async let second = harness.sut.request(.microphone)
+        // Возврат РП (24.09 18:05): `awaitPromptStarted` гарантирует лишь, что ПЕРВЫЙ вызов
+        // вошёл в `prompt(_:)` — не то, что ВТОРОЙ уже присоединился к летящему запросу
+        // (`PermissionsCore.requestsInFlight`). Без этого шага второй вызов мог бы дойти до
+        // `requestsInFlight` уже ПОСЛЕ `releasePrompt()`, застать её пустой и завести свой,
+        // повторный промпт — тест прошёл бы, не проверив склейку. `joinedInFlightRequestCount`
+        // (тестовый шов в PermissionsCore, поведение не меняется) — прямое наблюдение факта
+        // склейки, не оценка времени.
+        let joined = await waitUntilAsync {
+            await harness.sut.joinedInFlightRequestCount >= 1
+        }
+        XCTAssertTrue(joined, "второй request не присоединился к уже летящему запросу за отведённое время")
+        harness.statuses.releasePrompt()
         let outcomes = await [first, second]
         XCTAssertEqual(outcomes, [.granted, .granted])
         XCTAssertEqual(harness.statuses.prompts, [.microphone], "промпт показан ровно один раз")

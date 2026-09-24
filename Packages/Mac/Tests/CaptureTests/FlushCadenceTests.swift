@@ -16,19 +16,17 @@ final class FlushCadenceTests: CaptureAsyncTestCase {
 
         let budget = UInt64(AudioCaptureLimits.truncatedTailBudgetMs)
 
+        // MEE-374 (аудит MEE-377): `feed` синхронно доходит до `TrackFile.flush` — пауз не нужно.
         harness.gateway.feed(.samples(.mic, frameCount: 480, channelCount: 1, hostTime: 1_000))
-        try await Task.sleep(nanoseconds: 10_000_000)
         let session1 = try harness.port.currentSession()
         let firstFlush = try XCTUnwrap(session1.micTrack).lastFlushAt
         XCTAssertEqual(firstFlush, 1_000, "первый буфер сбрасывается всегда")
 
         harness.gateway.feed(.samples(.mic, frameCount: 480, channelCount: 1, hostTime: 1_000 + budget - 1))
-        try await Task.sleep(nanoseconds: 10_000_000)
         let session2 = try harness.port.currentSession()
         XCTAssertEqual(try XCTUnwrap(session2.micTrack).lastFlushAt, 1_000, "разрыв меньше бюджета — сброса ещё нет")
 
         harness.gateway.feed(.samples(.mic, frameCount: 480, channelCount: 1, hostTime: 1_000 + budget))
-        try await Task.sleep(nanoseconds: 10_000_000)
         let session3 = try harness.port.currentSession()
         XCTAssertEqual(try XCTUnwrap(session3.micTrack).lastFlushAt, 1_000 + budget,
                        "разрыв достиг бюджета — сброс")

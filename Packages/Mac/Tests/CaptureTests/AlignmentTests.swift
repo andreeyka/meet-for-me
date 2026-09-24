@@ -13,12 +13,13 @@ final class AlignmentTests: CaptureAsyncTestCase {
         try await harness.start(directory: directory)
 
         // До разрыва: 480 кадров на оба трека одним и тем же host time.
+        // MEE-374 (аудит MEE-377): `gateway.feed`/`emit` синхронно доходят до записи на диск —
+        // `handleBuffer` без единого `await`/`Task` внутри (см. `AudioCaptureImplBuffers.swift`),
+        // пауз между вызовами шва не нужно.
         harness.gateway.feed(.samples(.mic, frameCount: 480, channelCount: 1, hostTime: 1_000))
         harness.gateway.feed(.samples(.system, frameCount: 480, channelCount: 2, hostTime: 1_010))
-        try await Task.sleep(nanoseconds: 10_000_000)
 
         harness.gateway.emit(.tapInvalidated(atHostTime: 2_000))
-        try await Task.sleep(nanoseconds: 10_000_000)
 
         // После разрыва: первый пришедший буфер (мик) разрешает `pendingRebuild` — `resolveRebuild`
         // досыпает ОДНО и то же число кадров тишины ОБОИМ трекам за один вызов (общий `gapMs`,
@@ -27,7 +28,6 @@ final class AlignmentTests: CaptureAsyncTestCase {
         // порций реальных данных, поданных каждому треку, а не от заполнения разрыва.
         harness.gateway.feed(.samples(.mic, frameCount: 240, channelCount: 1, hostTime: 2_050))
         harness.gateway.feed(.samples(.system, frameCount: 240, channelCount: 2, hostTime: 2_050))
-        try await Task.sleep(nanoseconds: 10_000_000)
 
         // Возврат MEE-317 (24.09): проверка сразу после разрешения разрыва, а не только на итоговом
         // файле — точное равенство, а не допуск в 512 кадров на весь прогон (тот допуск маскировал

@@ -20,10 +20,11 @@ final class EventsLivenessTests: CaptureAsyncTestCase {
         // Считаем только started/stopped: успешный старт публикует ещё и permissionObserved
         // (право системного звука) — если считать вперемешку, «первые 4 события» не обязательно
         // окажутся двумя парами started/stopped.
+        let stream = harness.port.events()
         let collector = Task { () -> [CaptureEvent] in
             var collected: [CaptureEvent] = []
             var startedStoppedCount = 0
-            for await event in harness.port.events() {
+            for await event in stream {
                 collected.append(event)
                 switch event {
                 case .started, .stopped: startedStoppedCount += 1
@@ -33,7 +34,6 @@ final class EventsLivenessTests: CaptureAsyncTestCase {
             }
             return collected
         }
-        try await Task.sleep(nanoseconds: 10_000_000)
 
         try await harness.start(directory: firstDirectory)
         _ = try await harness.port.stop()

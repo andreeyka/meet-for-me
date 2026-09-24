@@ -19,6 +19,20 @@ actor PermissionsCore {
         let settings: SettingsOpener
         let loginItems: LoginItemRegistry
         let activation: ActivationSource
+        /// MEE-379 (аудит MEE-377, возврат РП 24.09 18:05): шов часов — `checkedAt` снимка
+        /// перестаёт быть настоящим `Date()`, недостижимым для тестов без реальной паузы.
+        let now: @Sendable () -> Date
+
+        /// Явный init, не синтезированный memberwise: значение `now` по умолчанию (`Date.init`)
+        /// обязано сохранять прежнее поведение для всех прежних мест вызова без правки.
+        init(rights: StatusSource, settings: SettingsOpener, loginItems: LoginItemRegistry,
+             activation: ActivationSource, now: @escaping @Sendable () -> Date = Date.init) {
+            self.rights = rights
+            self.settings = settings
+            self.loginItems = loginItems
+            self.activation = activation
+            self.now = now
+        }
 
         static func system() -> Environment {
             Environment(rights: TranslatingStatusSource(reader: SystemRightsReader()),
@@ -37,6 +51,10 @@ actor PermissionsCore {
     private var pendingPublish = false
     private var refreshChain: Task<PermissionSnapshot, Never>?
     private var requestsInFlight: [PermissionKind: Task<PermissionRequestOutcome, Never>] = [:]
+    /// MEE-379 (аудит MEE-377, возврат РП 24.09 18:05): тестовый шов — сколько раз `request`
+    /// присоединился к уже летящему запросу (не завёл свой). Поведение `request` не меняется;
+    /// используется только тестом, ждущим этого факта вместо угадывания по времени.
+    private(set) var joinedInFlightRequestCount = 0
 
     init(environment: Environment) {
         self.environment = environment
@@ -71,7 +89,7 @@ actor PermissionsCore {
         for kind in PermissionKind.allCases {
             states.append(PermissionState(kind: kind, status: await status(of: kind)))
         }
-        let snapshot = PermissionSnapshot(states: states, checkedAt: Date())
+        let snapshot = PermissionSnapshot(states: states, checkedAt: environment.now())
         let changed = pendingPublish || lastStates.map { $0 != states } ?? false
         pendingPublish = false
         lastStates = states
@@ -85,6 +103,7 @@ actor PermissionsCore {
 
     func request(_ kind: PermissionKind) async -> PermissionRequestOutcome {
         if let inFlight = requestsInFlight[kind] {
+            joinedInFlightRequestCount += 1
             return await inFlight.value
         }
         let task = Task { [self] in await self.performRequest(kind) }

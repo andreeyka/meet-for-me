@@ -74,4 +74,10 @@ public final class SystemPermissions: PermissionsPort, Sendable {
     var liveObserverCount: Int {
         core.publisher.subscriberCount
     }
+
+    /// MEE-379: сколько раз `request` присоединился к уже летящему запросу — тестовый шов
+    /// (возврат РП 24.09 18:05), в паре со счётчиком `PermissionsCore.joinedInFlightRequestCount`.
+    var joinedInFlightRequestCount: Int {
+        get async { await core.joinedInFlightRequestCount }
+    }
 }

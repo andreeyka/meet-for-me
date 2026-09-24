@@ -19,13 +19,17 @@ final class CapturedProcessTests: CaptureAsyncTestCase {
         let first = CaptureProcessDescriptor(pid: 111, bundleId: "us.zoom.xos", executableName: "zoom.us")
         let second = CaptureProcessDescriptor(pid: 222, bundleId: "us.zoom.xos.helper", executableName: "helper")
 
+        // MEE-374 (аудит MEE-377): `events()` вызван ЗДЕСЬ, а не внутри `Task {}` ниже — continuation
+        // регистрируется синхронно раньше, чем публикатор мог бы успеть до него. Внутри `Task {}` был
+        // бы разрыв между созданием задачи и её первым исполнением, в котором событие терялось бы
+        // молча (буфер `AsyncStream` не копит события ДО регистрации continuation).
+        let stream = harness.port.events()
         let collector = Task { () -> CapturedProcessSnapshot? in
-            for await event in harness.port.events() {
+            for await event in stream {
                 if case .capturedProcessesChanged(let snapshot) = event { return snapshot }
             }
             return nil
         }
-        try await Task.sleep(nanoseconds: 10_000_000)
 
         // «Не реже раза в capturedProcessesPollSeconds, даже без единого события шва» — таймер
         // самого порта, не событие шва: сеанс не порождал ни одного processesChanged.
@@ -36,9 +40,9 @@ final class CapturedProcessTests: CaptureAsyncTestCase {
         XCTAssertEqual(snapshot.requestedAppKey, "us.zoom.xos")
 
         // Второй снимок — другой процесс; манифест хранит ОБЪЕДИНЕНИЕ, не последний снимок.
+        // `pollCapturedProcesses` синхронно доходит до записи в манифест — паузы не нужно.
         harness.gateway.setCapturedProcesses([second], for: tap)
         harness.port.pollCapturedProcesses()
-        try await Task.sleep(nanoseconds: 10_000_000)
 
         let manifest = try await harness.port.stop()
         let pids = Set(manifest.capturedProcesses.map(\.pid))
@@ -61,18 +65,18 @@ final class CapturedProcessTests: CaptureAsyncTestCase {
             [CaptureProcessDescriptor(pid: 111, bundleId: "us.zoom.xos", executableName: "zoom.us")], for: knownTap
         )
 
+        let stream = harness.port.events()
         let collector = Task { () -> CapturedProcessSnapshot? in
-            for await event in harness.port.events() {
+            for await event in stream {
                 if case .capturedProcessesChanged(let snapshot) = event { return snapshot }
             }
             return nil
         }
-        try await Task.sleep(nanoseconds: 10_000_000)
 
         async let started = harness.port.start(request)
-        try await Task.sleep(nanoseconds: 20_000_000)
+        await harness.gateway.awaitTapRequested()
         harness.gateway.resolveTap(with: .created(knownTap))
-        try await Task.sleep(nanoseconds: 5_000_000)
+        await harness.gateway.awaitMicrophoneRequested()
         harness.gateway.resolveMicrophone(with: .opened(
             MicrophoneHandle(uid: "BuiltInMicrophoneDevice", name: "MacBook Pro Microphone", channelCount: 1)
         ))
@@ -93,13 +97,13 @@ final class CapturedProcessTests: CaptureAsyncTestCase {
         try await harness.start(directory: directory, group: group)
         let tap = try XCTUnwrap(harness.gateway.lastCreatedTap)
 
+        let stream = harness.port.events()
         let collector = Task { () -> CapturedProcessSnapshot? in
-            for await event in harness.port.events() {
+            for await event in stream {
                 if case .capturedProcessesChanged(let snapshot) = event { return snapshot }
             }
             return nil
         }
-        try await Task.sleep(nanoseconds: 10_000_000)
 
         harness.gateway.setCapturedProcesses(
             [CaptureProcessDescriptor(pid: 111, bundleId: "us.zoom.xos", executableName: "zoom.us"),
@@ -127,9 +131,10 @@ final class CapturedProcessTests: CaptureAsyncTestCase {
         let helper = CaptureProcessDescriptor(pid: 112, bundleId: "us.zoom.xos.helper", executableName: "helper")
         let foreign = CaptureProcessDescriptor(pid: 999, bundleId: "com.apple.WebKit.GPU", executableName: "WebKit")
 
+        let stream = harness.port.events()
         let collector = Task { () -> [CapturedProcessSnapshot] in
             var collected: [CapturedProcessSnapshot] = []
-            for await event in harness.port.events() {
+            for await event in stream {
                 if case .capturedProcessesChanged(let snapshot) = event {
                     collected.append(snapshot)
                     if collected.count >= 3 { break }
@@ -137,11 +142,11 @@ final class CapturedProcessTests: CaptureAsyncTestCase {
             }
             return collected
         }
-        try await Task.sleep(nanoseconds: 10_000_000)
+        // `emit` доходит до `continuation.yield` синхронно (см. `AudioCaptureImpl.emit`) —
+        // `AsyncStream` копит события в буфере независимо от темпа читателя, трёх emit подряд
+        // без пауз достаточно, порядок доставки сохраняется.
         harness.gateway.emit(.processesChanged([matched, foreign], atHostTime: 1_000))
-        try await Task.sleep(nanoseconds: 10_000_000)
         harness.gateway.emit(.processesChanged([matched, helper], atHostTime: 2_000))
-        try await Task.sleep(nanoseconds: 10_000_000)
         harness.gateway.emit(.processesChanged([matched], atHostTime: 3_000))
 
         let snapshots = await collector.value
@@ -168,13 +173,13 @@ final class CapturedProcessTests: CaptureAsyncTestCase {
             pid: 112, bundleId: "com.apple.WebKit.GPU", executableName: "com.apple.WebKit.GPU",
             responsibleBundleId: "us.zoom.xos"
         )
+        let firstStream = harness.port.events()
         let collector = Task { () -> CapturedProcessSnapshot? in
-            for await event in harness.port.events() {
+            for await event in firstStream {
                 if case .capturedProcessesChanged(let snapshot) = event { return snapshot }
             }
             return nil
         }
-        try await Task.sleep(nanoseconds: 10_000_000)
         harness.gateway.emit(.processesChanged([helperOfZoom], atHostTime: 1_000))
         let firstReceived = await collector.value
         let first = try XCTUnwrap(firstReceived)
@@ -187,13 +192,13 @@ final class CapturedProcessTests: CaptureAsyncTestCase {
             pid: 113, bundleId: "us.zoom.xos", executableName: "impostor",
             responsibleBundleId: "com.apple.WebKit.GPU"
         )
+        let secondStream = harness.port.events()
         let secondCollector = Task { () -> CapturedProcessSnapshot? in
-            for await event in harness.port.events() {
+            for await event in secondStream {
                 if case .capturedProcessesChanged(let snapshot) = event { return snapshot }
             }
             return nil
         }
-        try await Task.sleep(nanoseconds: 10_000_000)
         harness.gateway.emit(.processesChanged([impostor], atHostTime: 2_000))
         let secondReceived = await secondCollector.value
         let second = try XCTUnwrap(secondReceived)
@@ -206,13 +211,13 @@ final class CapturedProcessTests: CaptureAsyncTestCase {
         let directory = try Harness.makeDirectory()
         try await harness.start(directory: directory, group: nil, input: .systemDefault)
 
+        let stream = harness.port.events()
         let collector = Task { () -> CapturedProcessSnapshot? in
-            for await event in harness.port.events() {
+            for await event in stream {
                 if case .capturedProcessesChanged(let snapshot) = event { return snapshot }
             }
             return nil
         }
-        try await Task.sleep(nanoseconds: 10_000_000)
         harness.gateway.emit(.processesChanged(
             [CaptureProcessDescriptor(pid: 1, bundleId: "anything", executableName: nil)], atHostTime: 1_000
         ))

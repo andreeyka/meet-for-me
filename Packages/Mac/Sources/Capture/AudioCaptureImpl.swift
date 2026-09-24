@@ -32,6 +32,10 @@ public final class AudioCaptureImpl: AudioCapturePort, @unchecked Sendable {
     let deadline: PromptDeadline
     let pollDriver: CapturePollDriver
     let power: PowerPort
+    /// MEE-374 (аудит MEE-377, возврат РП 24.09 18:05): шов часов для троттлинга `.levels`
+    /// (`updateLevels`, инвариант 23) — момент ДОСТАВКИ буфера перестаёт быть недостижимым для
+    /// теста настоящим `Date()`. Значение по умолчанию сохраняет прежнее поведение продакшена.
+    let now: @Sendable () -> Date
 
     let lock = NSLock()
     var phase: CapturePhase = .idle
@@ -59,11 +63,13 @@ public final class AudioCaptureImpl: AudioCapturePort, @unchecked Sendable {
     var pendingSubscriptionContinuations: [CheckedContinuation<Void, Never>] = []
 
     /// Инициализатор для тестов и для харнесса-писателя (план MEE-315 §6): все швы подставные.
-    init(power: PowerPort, gateway: HardwareGateway, deadline: PromptDeadline, pollDriver: CapturePollDriver) {
+    init(power: PowerPort, gateway: HardwareGateway, deadline: PromptDeadline, pollDriver: CapturePollDriver,
+         now: @escaping @Sendable () -> Date = Date.init) {
         self.power = power
         self.gateway = gateway
         self.deadline = deadline
         self.pollDriver = pollDriver
+        self.now = now
     }
 
     /// Продовый инициализатор: единственное место, где швы связаны с настоящей системой.
