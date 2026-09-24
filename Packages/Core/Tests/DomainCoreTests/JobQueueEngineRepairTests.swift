@@ -29,17 +29,23 @@ final class JobQueueEngineRepairTests: XCTestCase {
             jobId: badId, error: .dataCorrupted(entity: "Job", id: badId.uuidString, message: message)
         )
 
+        // Подписка — ДО `submit()`: иначе `.submitted` уйдёт до того, как эта же `events()`
+        // заведёт свой `Continuation`, и `iterator.next()` этого события никогда не увидит.
+        // Цикл ниже досчитывает РОВНО до фактического числа событий (submitted/failed/
+        // started/succeeded — четыре, ни одного больше): `AsyncStream`, которую никто не
+        // завершил `finish()`, на лишний `next()` не возвращает `nil` — виснет навсегда,
+        // а не «пропускает» несуществующее событие (то самое зависание CI по этой ветке).
+        let stream = rig.queue.events()
+        var iterator = stream.makeAsyncIterator()
+
         let goodId = try await rig.queue.submit(makeSubmission(
             payload: .attribute(transcriptId: UUID(), meetingId: nil), priority: 10
         ))
-
-        let stream = rig.queue.events()
-        var iterator = stream.makeAsyncIterator()
         await rig.queue.start()
         await rig.queue.waitUntilIdle()
 
         var sawFailed = false
-        for _ in 0..<6 {
+        for _ in 0..<4 {
             guard let event = await nextEventOrNil(&iterator) else { break }
             if case .failed(let id, let type, let error, let willRetry) = event, id == badId {
                 XCTAssertEqual(type, .transcode)
