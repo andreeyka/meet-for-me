@@ -79,6 +79,52 @@ final class DedupAndMergeTests: XCTestCase {
         XCTAssertEqual(stored.first?.event.id, existingId, "assigningId обязан использовать id существующей записи")
     }
 
+    // MARK: - К18: fallback по паре (sourceConnectorId, externalId), если признак (а) не совпал
+
+    /// Перечень MEE-347, К18 (C-005 правило слияния п.4, признак (б); условность снята —
+    /// `MeetingRepository.meeting(sourceConnectorId:externalId:)` в дереве с C-010 v10,
+    /// инв. 30, IR-118). Вход: `icalUid` события меняется (вхождение перенесено во времени) —
+    /// признак (а) не совпадает ни с одной сохранённой записью (`dedupKey` стал другим), но
+    /// пара (`sourceConnectorId`, `externalId`) та же, что у источника уже существующей
+    /// записи. Ответ: `assigningId` берёт `id` записи, найденной `meeting(sourceConnectorId:
+    /// externalId:)` (признак б сработал там, где признак (а) не дал ничего), не заводит
+    /// новую.
+    func test_k18_pairMatchFallsBackWhenKeyChanged() async throws {
+        let harness = Harness.mergeReady(sourceIds: ["src-1"])
+        let connector = harness.connector("src-1")
+        let base = Date(timeIntervalSince1970: 1_700_000_100)
+
+        connector.setFetchEvents([
+            try mergeTestPayload(connectorId: "src-1", externalId: "evt-1", lastModified: base)
+        ])
+        let firstResults = await harness.hub.sync(trigger: .manual)
+        XCTAssertNil(firstResults.first?.failure)
+        let existingId = try XCTUnwrap(harness.meetingRepository.storedRecords.first?.event.id)
+        let existingDedupKey = harness.meetingRepository.storedRecords.first?.dedupKey
+
+        // Второй цикл: та же пара источника, но НОВЫЙ icalUid — признак (а) не совпадёт ни с
+        // одной сохранённой записью (dedupKey стал другим), признак (б) — пара та же.
+        connector.setFetchEvents([
+            try MeetingEventPayload(
+                sourceConnectorId: "src-1", externalId: "evt-1", icalUid: "moved-uid", title: "T",
+                start: base.addingTimeInterval(3_600), end: base.addingTimeInterval(5_400), timeZone: "UTC",
+                isAllDay: false, isCancelled: false, organizer: nil, attendees: [], location: nil,
+                bodyText: nil, conference: nil, lastModified: base.addingTimeInterval(60)
+            )
+        ])
+        let secondResults = await harness.hub.sync(trigger: .manual)
+        XCTAssertNil(secondResults.first?.failure)
+
+        let stored = harness.meetingRepository.storedRecords
+        XCTAssertEqual(stored.count, 1, "признак (б) нашёл ту же запись — новая не заведена")
+        XCTAssertEqual(
+            stored.first?.event.id, existingId,
+            "assigningId обязан взять id через meeting(sourceConnectorId:externalId:) — признак (б)"
+        )
+        XCTAssertNotEqual(stored.first?.dedupKey, existingDedupKey, "dedupKey пересчитан под новый icalUid")
+        XCTAssertEqual(stored.first?.event.icalUid, "moved-uid")
+    }
+
     // MARK: - К20-К22: шаги 1-3 правила слияния
 
     /// Вход А: равный dedupKey, разный `lastModified` → победитель — больший `lastModified`.
