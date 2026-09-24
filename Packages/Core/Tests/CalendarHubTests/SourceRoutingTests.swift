@@ -14,6 +14,7 @@ final class SourceRoutingTests: XCTestCase {
     // MARK: - К73 (маршрутизация по CalendarSourceId, не по порядку регистрации)
 
     func test_k73_routingBySourceIdNotByRegistrationOrder() async throws {
+        HangDiagnostics.checkpoint("SourceRoutingTests.test_k73_routingBySourceIdNotByRegistrationOrder START")
         let ids = ["eventkit-1", "graph-work-1"]
         let harness = Harness(sourceIds: ids)
         harness.connectorRepository.seed(ids.map { Harness.record(id: $0) })
@@ -53,6 +54,7 @@ final class SourceRoutingTests: XCTestCase {
     // MARK: - К74 (неизвестный sourceId / auth == .none — notConfigured до коннектора)
 
     func test_k74_unknownSourceOrNoOAuthGivesNotConfiguredBeforeConnector() async throws {
+        HangDiagnostics.checkpoint("SourceRoutingTests.test_k74_unknownSourceOrNoOAuthGivesNotConfiguredBeforeConnector START")
         let harness = Harness(sourceIds: ["src-1"])
         harness.connectorRepository.seed([Harness.record(id: "src-1")])
         let connector = harness.connector("src-1")
@@ -86,6 +88,7 @@ final class SourceRoutingTests: XCTestCase {
     // MARK: - К75 (stop() — идемпотентность, ожидание всех, ленивое переподключение после)
 
     func test_k75_stopIdempotentAwaitsAllLazyReconnectAfter() async throws {
+        HangDiagnostics.checkpoint("SourceRoutingTests.test_k75_stopIdempotentAwaitsAllLazyReconnectAfter START")
         let ids = ["src-1", "src-2", "src-3"]
         let harness = Harness(sourceIds: ids)
         harness.connectorRepository.seed(ids.map { Harness.record(id: $0) })

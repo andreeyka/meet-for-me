@@ -144,6 +144,25 @@ final class FakeSecretStore: SecretStore, @unchecked Sendable {
     }
 }
 
+// СТРОКА (бисекция CI-зависания, MEE-362 ч.2, временно): CI-обёртчик буферизует stdout
+// самого `swift test` крупными пачками (видно по группам строк с ОДНИМ и тем же
+// временем в логе) — при убийстве по таймауту последняя пачка не флашится и пропадает
+// целиком, поэтому реальная точка зависания невидна ни в одном прогоне. `FileHandle.
+// standardError.write` — сырой `write()` в fd, идёт мимо буфера stdio; шаг CI сам
+// собирает и stdout, и stderr в один и тот же файл (`2>&1`), так что эти строки
+// долетают в лог даже при принудительном убийстве. Снять после того, как зависание
+// найдено — диагностика, не постоянная часть тестов.
+// СТРОКА (то же зависание, следующий заход): `XCTestObservationCenter.addTestObserver`
+// на macOS требует главного потока — вызов из тела `async`-теста (не на главном потоке)
+// рушил процесс на месте (`NSInternalInconsistencyException`), а не помогал диагностике.
+// `checkpoint(_:)` — просто сырая запись в stderr, без регистрации наблюдателя нигде;
+// вызывается вручную с именем теста как первая строка каждого метода.
+enum HangDiagnostics {
+    static func checkpoint(_ label: String) {
+        FileHandle.standardError.write(Data("[HANG-DIAG] \(label)\n".utf8))
+    }
+}
+
 struct Harness {
     let connectorRepository = InMemoryConnectorRepository()
     let meetingRepository = InMemoryMeetingRepository()
