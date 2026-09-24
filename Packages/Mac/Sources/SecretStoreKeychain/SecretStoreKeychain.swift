@@ -24,15 +24,26 @@
 //  `kSecUseKeychain` пишет в keychain по умолчанию независимо от списка поиска, находка
 //  самой постановки IR-125.
 //
-//  ОШИБКИ (IR-125, MEE-368): собственный `enum` этого модуля (внутренний, не публичный —
-//  `SecretStore.get`/`set` объявлены `async throws` без типа ошибки, конкретный тип
-//  публичным быть не обязан) — НЕ `ConnectorError` (C-006 §6: тот для ошибки ПЛАГИНА,
-//  обратное направление) и не тип `DomainCore`. Два случая: заблокированный/отклонённый
-//  доступ (`errSecInteractionNotAllowed`, `errSecAuthFailed` — диалог показать некому в
-//  headless/CI) и любой другой `OSStatus` — «неожиданный». `get(key:namespace:)` на
-//  `errSecItemNotFound` отдаёт `nil`, не бросает — это ответ по типу метода (`String?`), а
-//  не отказ. `set(key:value: nil, namespace:)` на отсутствующей записи — успех без
-//  действия: `errSecItemNotFound` от `SecItemDelete` не пробрасывается, удаление уже
+//  ОШИБКИ (IR-125, MEE-368; малый возврат — имена и правка довода): `SecretStoreKeychainError`
+//  — собственный `enum` ЭТОГО модуля, `internal`. НЕ тем же приёмом, что сам протокол
+//  `SecretStore` — тот ПУБЛИЧНЫЙ (его реализует этот модуль, `calendar-hub` — другой пакет,
+//  того и требует реализация чужого протокола). Довод для `internal` свой: единственный
+//  вызывающий (`HostServicesImpl.secretGet`/`secretSet`, `calendar-hub`) случаи не различает
+//  — пробрасывает брошенное `SecretStore` не читая (PR #85: `try await secretStore.get(...)`
+//  без `catch`). НЕ `ConnectorError` (C-006 §6: тот для ошибки ПЛАГИНА, обратное направление)
+//  и не тип `DomainCore`. Два случая:
+//    * `SecretStoreKeychainError.denied(status: OSStatus)` — `errSecInteractionNotAllowed`/
+//      `errSecAuthFailed` (keychain заблокирован или доступ отклонён). Решение РП: проверяется
+//      ВРУЧНУЮ, не вектором CI — `SecKeychainLock`/`kSecUseAuthenticationUIFail` подвесили бы
+//      тест на диалоге системы на машине разработчика, цена без выгоды для Среза 1.
+//    * `SecretStoreKeychainError.unexpected(status: OSStatus)` — любой другой не-`errSecSuccess`
+//      код, несёт его `OSStatus` дословно.
+//  `get(key:namespace:)` на `errSecItemNotFound` отдаёт `nil`, не бросает — это ответ по типу
+//  метода (`String?`), а не отказ. `set(key:value: nil, namespace:)` на отсутствующей записи —
+//  успех без действия: `errSecItemNotFound` от `SecItemDelete` не пробрасывается, удаление уже
 //  отсутствующего идемпотентно (тот же довод, что уже принят для
 //  `ConnectorHostServices.secretSet`, MEE-346, PR #71).
+//  По проводу (`host/secrets.*`, C-006 §4/v14): отказ → JSON-RPC `-32603 internal error`,
+//  `message` — `SecCopyErrorMessageString(status, nil)` (системное описание `OSStatus`), а без
+//  него — сам числовой `OSStatus`.
 //
