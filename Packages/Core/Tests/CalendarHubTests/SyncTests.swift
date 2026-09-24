@@ -17,7 +17,6 @@ final class SyncTests: XCTestCase {
     // MARK: - К40 (инв. 6 — сортировка по start, затем по id на ничью; окно вне синхронизированного пусто)
 
     func test_k40_eventsSortedByStartThenByIdOnTie_emptyOutsideWindow() async throws {
-        HangDiagnostics.checkpoint("SyncTests.test_k40_eventsSortedByStartThenByIdOnTie_emptyOutsideWindow START")
         let harness = Harness(sourceIds: [])
         let base = Date(timeIntervalSince1970: 1_700_000_000)
         let recordEarly = try Self.makeRecord(
@@ -63,7 +62,6 @@ final class SyncTests: XCTestCase {
     // MARK: - К41 (event(id:))
 
     func test_k41_eventByIdOrNilForUnknown() async throws {
-        HangDiagnostics.checkpoint("SyncTests.test_k41_eventByIdOrNilForUnknown START")
         let harness = Harness(sourceIds: [])
         let base = Date(timeIntervalSince1970: 1_700_000_000)
         let record = try Self.makeRecord(

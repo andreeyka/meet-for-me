@@ -15,21 +15,17 @@ final class ControlSurfaceEntryPointsTests: XCTestCase {
     // MARK: - К66 (stop() — fan-out shutdown всем инициализированным, ждёт всех)
 
     func test_k66_stopFansOutShutdownToAllInitializedSourcesAndAwaitsAll() async throws {
-        HangDiagnostics.checkpoint("ControlSurfaceEntryPointsTests.test_k66_stopFansOutShutdownToAllInitializedSourcesAndAwaitsAll START")
         let ids = ["src-1", "src-2", "src-3"]
         let harness = Harness(sourceIds: ids)
         harness.connectorRepository.seed(ids.map { Harness.record(id: $0) })
         let connectors = ids.map { harness.connector($0) }
         for (index, connector) in connectors.enumerated() {
-            HangDiagnostics.checkpoint("K66 loop iter \(index) (\(ids[index])) before listCalendars")
             connector.setInitializeResult(capabilities: ConnectorCapabilities(
                 deltaSync: false, push: false, attendees: true, conference: true, auth: .none
             ))
             connector.setListCalendars([])
             _ = try await harness.hub.listCalendars(source: CalendarSourceId(rawValue: ids[index]))
-            HangDiagnostics.checkpoint("K66 loop iter \(index) (\(ids[index])) after listCalendars")
         }
-        HangDiagnostics.checkpoint("K66 after listCalendars loop")
 
         let delayedConnector = connectors[2]
         delayedConnector.hang(.shutdown)
@@ -37,7 +33,6 @@ final class ControlSurfaceEntryPointsTests: XCTestCase {
         let flag = DoneFlag()
         let stopTask = Task {
             await harness.hub.stop()
-            HangDiagnostics.checkpoint("K66 stop() returned")
             await flag.markDone()
         }
 
@@ -56,14 +51,11 @@ final class ControlSurfaceEntryPointsTests: XCTestCase {
             connectors[0].shutdownCallCount > 0 && connectors[1].shutdownCallCount > 0
                 && delayedConnector.callCount(.shutdown) > 0
         }
-        HangDiagnostics.checkpoint("K66 pollUntil satisfied")
         let doneEarly = await flag.isDone()
         XCTAssertFalse(doneEarly, "stop() не возвращается, пока не отработал shutdown третьего источника")
 
         delayedConnector.release(.shutdown)
-        HangDiagnostics.checkpoint("K66 released, awaiting stopTask")
         await stopTask.value
-        HangDiagnostics.checkpoint("K66 stopTask.value returned")
 
         let doneAfterRelease = await flag.isDone()
         XCTAssertTrue(doneAfterRelease)
@@ -75,7 +67,6 @@ final class ControlSurfaceEntryPointsTests: XCTestCase {
     // MARK: - К67 (отмена во время ожидания повтора — cancelled, не transport)
 
     func test_k67_cancellationDuringRetryWaitGivesCancelledNotTransport() async throws {
-        HangDiagnostics.checkpoint("ControlSurfaceEntryPointsTests.test_k67_cancellationDuringRetryWaitGivesCancelledNotTransport START")
         let harness = Harness(sourceIds: ["src-1"])
         harness.connectorRepository.seed([Harness.record(id: "src-1")])
         let connector = harness.connector("src-1")
@@ -99,7 +90,6 @@ final class ControlSurfaceEntryPointsTests: XCTestCase {
     // MARK: - К68 (settingsSchema/configure — 1:1 проброс)
 
     func test_k68_settingsSchemaAndConfigureProxy1to1() async throws {
-        HangDiagnostics.checkpoint("ControlSurfaceEntryPointsTests.test_k68_settingsSchemaAndConfigureProxy1to1 START")
         let harness = Harness(sourceIds: ["src-1"])
         harness.connectorRepository.seed([Harness.record(id: "src-1")])
         let connector = harness.connector("src-1")
@@ -121,7 +111,6 @@ final class ControlSurfaceEntryPointsTests: XCTestCase {
     // MARK: - К69 (healthCheck — проброс результата как есть)
 
     func test_k69_healthCheckProxiesResultAsIs() async throws {
-        HangDiagnostics.checkpoint("ControlSurfaceEntryPointsTests.test_k69_healthCheckProxiesResultAsIs START")
         let harness = Harness(sourceIds: ["src-1"])
         harness.connectorRepository.seed([Harness.record(id: "src-1")])
         let connector = harness.connector("src-1")
@@ -142,7 +131,6 @@ final class ControlSurfaceEntryPointsTests: XCTestCase {
     // MARK: - К71 (развилка Р9 — первая дельта-синхронизация)
 
     func test_k71_firstDeltaSyncFetchesChangesThenFullWindow() async throws {
-        HangDiagnostics.checkpoint("ControlSurfaceEntryPointsTests.test_k71_firstDeltaSyncFetchesChangesThenFullWindow START")
         let harness = Harness(sourceIds: ["src-1"])
         harness.connectorRepository.seed([Harness.record(id: "src-1")])
         let connector = harness.connector("src-1")
@@ -199,7 +187,6 @@ final class ControlSurfaceEntryPointsTests: XCTestCase {
     // MARK: - К72 (calendarIds == selectedCalendarIds, не полный список и не литерал теста)
 
     func test_k72_calendarIdsArgumentIsSelectedCalendarIdsNotFullList() async throws {
-        HangDiagnostics.checkpoint("ControlSurfaceEntryPointsTests.test_k72_calendarIdsArgumentIsSelectedCalendarIdsNotFullList START")
         // Вектор fetchEvents (deltaSync == false).
         let fullWindowHarness = Harness(sourceIds: ["src-1"])
         fullWindowHarness.connectorRepository.seed([

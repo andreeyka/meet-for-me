@@ -144,44 +144,6 @@ final class FakeSecretStore: SecretStore, @unchecked Sendable {
     }
 }
 
-// СТРОКА (бисекция CI-зависания, MEE-362 ч.2, временно): CI-обёртчик буферизует stdout
-// самого `swift test` крупными пачками (видно по группам строк с ОДНИМ и тем же
-// временем в логе) — при убийстве по таймауту последняя пачка не флашится и пропадает
-// целиком, поэтому реальная точка зависания невидна ни в одном прогоне. `FileHandle.
-// standardError.write` — сырой `write()` в fd, идёт мимо буфера stdio; шаг CI сам
-// собирает и stdout, и stderr в один и тот же файл (`2>&1`), так что эти строки
-// долетают в лог даже при принудительном убийстве. Снять после того, как зависание
-// найдено — диагностика, не постоянная часть тестов.
-// СТРОКА (то же зависание, следующий заход): `XCTestObservationCenter.addTestObserver`
-// на macOS требует главного потока — вызов из тела `async`-теста (не на главном потоке)
-// рушил процесс на месте (`NSInternalInconsistencyException`), а не помогал диагностике.
-// `checkpoint(_:)` — просто сырая запись в stderr, без регистрации наблюдателя нигде;
-// вызывается вручную с именем теста как первая строка каждого метода.
-enum HangDiagnostics {
-    static func checkpoint(_ label: String) {
-        FileHandle.standardError.write(Data("[HANG-DIAG] \(label)\n".utf8))
-    }
-
-    // СТРОКА (бисекция, следующий заход): маркеры до/после конкретных строк К66 сами
-    // застревали в доставке лога CI ровно до убийства по таймауту (видно по обрезанным
-    // строкам) — не различить "тест реально висит здесь" от "просто доставка отстаёт".
-    // Отдельный фоновый тик независимо от какого-либо теста: если он продолжает капать
-    // до самого конца — планировщик жив и не исчерпан целиком (не то зависание, что
-    // MEE-329 п.11, там висел весь процесс), сама точка внутри К66 — настоящий затор,
-    // не доставка. Если тик тоже замолкает — наоборот, процесс встал целиком.
-    private static let heartbeatOnce: Void = {
-        Task.detached(priority: .background) {
-            var tick = 0
-            while true {
-                try? await Task.sleep(for: .seconds(1))
-                tick += 1
-                checkpoint("heartbeat \(tick)")
-            }
-        }
-    }()
-    static func startHeartbeat() { _ = heartbeatOnce }
-}
-
 struct Harness {
     let connectorRepository = InMemoryConnectorRepository()
     let meetingRepository = InMemoryMeetingRepository()
@@ -191,7 +153,6 @@ struct Harness {
     let hub: CalendarPortImpl
 
     init(sourceIds: [String]) {
-        HangDiagnostics.startHeartbeat()
         var connectorMap: [CalendarSourceId: CalendarConnector] = [:]
         var fakes: [String: FakeCalendarConnector] = [:]
         for id in sourceIds {

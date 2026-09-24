@@ -35,13 +35,33 @@ extension CalendarPortImpl {
     /// `sync`, и push-обработчиком (`notify(.changesAvailable)`, К61) напрямую.
     /// Не-реентерантна на источник (К35) — второй параллельный вызов для того же
     /// источника получает результат уже идущего, не запускает второй.
+    // НАЙДЕНО (бисекция CI-зависания, MEE-362 ч.2 — К67, не среди семи дефектов приёмки
+    // #85, обнаружено ЭТИМ новым тестом): `Task { await self.performSync(...) }` —
+    // неструктурная задача; `await task.value`/`await running.value` сами по себе НЕ
+    // передают отмену вызывающего контекста внутрь неё (отмена структурно каскадится
+    // только в дочерние задачи `TaskGroup`/`async let`, не в свободный `Task { }`).
+    // Отмена `sync()`'s группы (К67 — `task.cancel()` в тесте) доходила до самого
+    // `syncOne`, но НЕ доходила до `performSync`'а внутри — задержка повтора §5.2
+    // (`waitSeam.sleep`, свои корректные ворота ждут явной отмены СВОЕЙ задачи) не
+    // получала отмену никогда и висела до конца процесса `swift test`.
+    // `withTaskCancellationHandler` пробрасывает `.cancel()` явно на саму `task`/
+    // `running` — тем же приёмом, что `hangOrGate`/`FakeWaitSeam.sleep` уже используют
+    // сами по себе, только на один уровень выше.
     func syncOne(source: CalendarSourceId, trigger: CalendarSyncTrigger) async -> CalendarSyncResult {
         if let running = inFlightSync[source] {
-            return await running.value
+            return await withTaskCancellationHandler {
+                await running.value
+            } onCancel: {
+                running.cancel()
+            }
         }
         let task = Task { await self.performSync(source: source, trigger: trigger) }
         inFlightSync[source] = task
-        let result = await task.value
+        let result = await withTaskCancellationHandler {
+            await task.value
+        } onCancel: {
+            task.cancel()
+        }
         inFlightSync[source] = nil
         return result
     }
