@@ -62,7 +62,10 @@ extension CalendarPortImpl {
     private func mergeIncoming(payload: MeetingEventPayload) async throws -> Bool {
         let provisional = try payload.assigningId(UUID())
         let dedupKey = DedupKey.make(from: provisional)
-        var winner = try await meetingRepository.meeting(dedupKey: dedupKey)
+        var winner: MeetingRecord?
+        if let dedupKey {
+            winner = try await meetingRepository.meeting(dedupKey: dedupKey)
+        }
         if winner == nil {
             winner = try await meetingRepository.meeting(
                 sourceConnectorId: payload.sourceConnectorId, externalId: payload.externalId
