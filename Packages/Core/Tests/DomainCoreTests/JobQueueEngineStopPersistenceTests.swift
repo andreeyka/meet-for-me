@@ -59,6 +59,15 @@ final class JobQueueEngineStopPersistenceTests: XCTestCase {
 
         await rig.queue.stop()   // конкурентно с зависшим на condition-check пересмотром
 
+        // Возврат РП по MEE-350: проверка статуса СРАЗУ после `stop()`, ДО снятия подвеса —
+        // иначе кандидата мог вернуть в pending сам возобновившийся пересмотр (его собственный
+        // `guard isRunning else { ... }`, JobQueueEngineReview.swift), а не `stop()`, и тест
+        // это не различил бы.
+        let strayRightAfterStop = try await rig.repository.job(id: strayId)
+        XCTAssertEqual(
+            strayRightAfterStop?.status, .pending, "это stop() вернул кандидата, а не возобновившийся пересмотр"
+        )
+
         rig.catalog.releaseGatedCall()   // отпускаем подвес уже ПОСЛЕ stop() — не раньше
         await startTask.value            // дожидаемся, чтобы пересмотр точно закончился
 

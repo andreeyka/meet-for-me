@@ -165,8 +165,19 @@ final class JobQueueEngineCancelEventsTests: XCTestCase {
         await rig.queue.start()
         try await rig.queue.cancel(jobId: cancelId)
         await rig.queue.waitUntilIdle()
-        events = await drainExactly(&iterator, count: 3)
-        assertSingleFinalSequence(events, jobId: cancelId, final: .cancelled)
+
+        // Возврат РП по MEE-350: `drainExactly(count: 3)` сам по себе не отличает «у
+        // cancelId ровно три события» от «есть и четвёртое, но мы его молча не прочли» —
+        // счётчик просто останавливается. Задача-метка после третьего сценария — независимый
+        // `submitted`, и если бы у cancelId было что-то сверх трёх, оно оказалось бы на месте
+        // четвёртого прочитанного события, а не сама метка.
+        let markerId = try await rig.queue.submit(makeSubmission(priority: -100))
+        events = await drainExactly(&iterator, count: 4)
+        assertSingleFinalSequence(Array(events.prefix(3)), jobId: cancelId, final: .cancelled)
+        guard case .submitted(let markerSubmittedId, _) = events[3] else {
+            return XCTFail("четвёртое событие обязано быть submitted метки — ничего от cancelId сверх трёх")
+        }
+        XCTAssertEqual(markerSubmittedId, markerId)
     }
 
     /// К69: `progressed(fraction:)` лежит в `0...1` — значения вне диапазона зажимаются.
