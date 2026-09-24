@@ -138,11 +138,26 @@ final class InitializationTests: XCTestCase {
 
     // MARK: - К9, вход А (границы 10/120/30с)
 
+    /// `FakeWaitSeam.sleep(for:)` не авторазрешается по умолчанию (см. TestSupport.swift) —
+    /// отпускаем ворота гонки `raceTimeout` только ПОСЛЕ того, как проверяемый метод реально
+    /// встал в `hangOrGate` (`callCount(method) > 0`, пишется ДО входа туда), иначе можно было
+    /// бы по ошибке отпустить ворота более ранней, ещё не зависшей гонки того же шва
+    /// (например, `initialize` — раньше проверяемого «остального» метода).
+    private func resolveTimeoutAfterHang(
+        _ waitSeam: FakeWaitSeam, connector: FakeCalendarConnector, method: CalendarConnectorMethod
+    ) {
+        Task {
+            while connector.callCount(method) == 0 { await Task.yield() }
+            while !waitSeam.resolveNext() { await Task.yield() }
+        }
+    }
+
     func test_k09_timeoutAtInitializeTenSecondBoundary() async throws {
         let harness = Harness(sourceIds: ["src-1"])
         harness.connectorRepository.seed([Harness.record(id: "src-1")])
         let connector = harness.connector("src-1")
         connector.hang(.initialize)
+        resolveTimeoutAfterHang(harness.waitSeam, connector: connector, method: .initialize)
 
         do {
             _ = try await harness.hub.listCalendars(source: source)
@@ -161,6 +176,7 @@ final class InitializationTests: XCTestCase {
             deltaSync: false, push: false, attendees: true, conference: true, auth: .none
         ))
         connector.hang(.fetchEvents)
+        resolveTimeoutAfterHang(harness.waitSeam, connector: connector, method: .fetchEvents)
 
         let results = await harness.hub.sync(trigger: .manual)
 
@@ -176,6 +192,7 @@ final class InitializationTests: XCTestCase {
             deltaSync: false, push: false, attendees: true, conference: true, auth: .none
         ))
         connector.hang(.listCalendars)
+        resolveTimeoutAfterHang(harness.waitSeam, connector: connector, method: .listCalendars)
 
         do {
             _ = try await harness.hub.listCalendars(source: source)
