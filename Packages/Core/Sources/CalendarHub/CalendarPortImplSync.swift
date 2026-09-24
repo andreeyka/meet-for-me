@@ -64,7 +64,8 @@ extension CalendarPortImpl {
     func syncOne(source: CalendarSourceId, trigger: CalendarSyncTrigger) async -> CalendarSyncResult {
         if inFlightSync[source] == nil {
             let generation = UUID()
-            let task = Task { await self.performSync(source: source, trigger: trigger) }
+            lastStartedGeneration[source] = generation
+            let task = Task { await self.performSync(source: source, trigger: trigger, generation: generation) }
             inFlightSync[source] = (generation, task)
             Task { await self.finishInFlightSync(source: source, generation: generation, task: task) }
         }
@@ -147,7 +148,9 @@ extension CalendarPortImpl {
         )
     }
 
-    private func performSync(source: CalendarSourceId, trigger: CalendarSyncTrigger) async -> CalendarSyncResult {
+    private func performSync(
+        source: CalendarSourceId, trigger: CalendarSyncTrigger, generation: UUID
+    ) async -> CalendarSyncResult {
         let startedAt = Date()
         do {
             guard let connector = connectors[source] else {
@@ -156,15 +159,15 @@ extension CalendarPortImpl {
             try await ensureInitialized(source, connector: connector)
             let record = try await requireRecord(source)
             let outcome = try await fetchAndApply(source: source, connector: connector, record: record)
-            try? await connectorRepository.setSyncOutcome(at: Date(), error: nil, connectorId: source.rawValue)
+            await recordSyncOutcomeIfCurrent(source: source, generation: generation, error: nil)
             return CalendarSyncResult(
                 sourceId: source, trigger: trigger, startedAt: startedAt, finishedAt: Date(),
                 upsertedCount: outcome.upserted, deletedCount: outcome.deleted, failure: nil
             )
         } catch let error as CalendarError {
             // Развилка Р3: отказ не меняет сохранённое состояние источника ни в одной строке.
-            try? await connectorRepository.setSyncOutcome(
-                at: Date(), error: String(describing: error), connectorId: source.rawValue
+            await recordSyncOutcomeIfCurrent(
+                source: source, generation: generation, error: String(describing: error)
             )
             return CalendarSyncResult(
                 sourceId: source, trigger: trigger, startedAt: startedAt, finishedAt: Date(),
@@ -176,14 +179,51 @@ extension CalendarPortImpl {
             // обновлялся на ошибках, не являющихся CalendarError (например, StorageError
             // из репозиториев). Тот же вызов, что и там.
             let mapped = CalendarError.transport(sourceId: source, message: String(describing: error))
-            try? await connectorRepository.setSyncOutcome(
-                at: Date(), error: String(describing: mapped), connectorId: source.rawValue
+            await recordSyncOutcomeIfCurrent(
+                source: source, generation: generation, error: String(describing: mapped)
             )
             return CalendarSyncResult(
                 sourceId: source, trigger: trigger, startedAt: startedAt, finishedAt: Date(),
                 upsertedCount: 0, deletedCount: 0, failure: mapped
             )
         }
+    }
+
+    /// Возврат РП (24.09, приёмка #112, бэклог «часть 3г», п. 2): `finishInFlightSync`
+    /// защищает бухгалтерию вызывающих (`inFlightSync`/`syncWaiters`) проверкой `generation`,
+    /// но САМ `setSyncOutcome` внутри `performSync` этой проверки не имел вовсе — устаревшее
+    /// (отменённое, замещённое новым вызывающим) поколение, once отпущено воротами теста или
+    /// коннектор перестал висеть, всё равно доходило до конца и писало СВОЙ исход
+    /// (`transport(CancellationError)`, если что-то по пути бросило отмену, либо честный
+    /// успех/отказ) в `connectorRepository` — независимо от того, что к этому моменту источник
+    /// уже мог обслуживать СЛЕДУЮЩЕЕ, более новое поколение с собственным, уже записанным
+    /// исходом. Гонка по времени: если устаревшая запись физически проигрывает свежей (её
+    /// `await` в глубине `fetchAndApply` просто медленнее), она перетирает корректный исход
+    /// новой синхронизации неверным.
+    ///
+    /// Возврат РП (24.09, приёмка #115, CI красный на первом прогоне): guard `inFlightSync
+    /// [source]?.generation == generation` глушил запись и тогда, когда `inFlightSync[source]`
+    /// стал `nil` (отменённый вызывающий был ПОСЛЕДНИМ — часть 3в, `cancelSyncWaiter`), а
+    /// новый вызывающий так и не пришёл — источник просто больше никем не обслуживается,
+    /// защищать не от кого. `test_syncOne_cancellingBothCallersCancelsSharedTask`
+    /// (`ControlSurfaceEntryPointsTests.swift`) как раз про этот случай — оба вызывающих
+    /// отменились, НИКТО не подхватил, а исход отменённой задачи всё равно обязан попасть в
+    /// `connectorRepository` (тот же довод, что у дефекта 4).
+    ///
+    /// Возврат РП (24.09 21:15 UTC, приёмка #115, п. 2): следующая версия этого guard'а
+    /// (сверка с `inFlightSync[source]`) СНОВА была неверна — она защищает только пока более
+    /// новое поколение ЕЩЁ числится в `inFlightSync`; если оно к моменту устаревшей записи уже
+    /// само успело завершиться (и, как выше, обнулить `inFlightSync[source]` обратно в `nil`),
+    /// проверка вновь читала бы «источник пуст» и снова пропускала бы устаревшую запись —
+    /// `test_defect_staleGenerationSuppressedEvenAfterNewerGenerationAlsoLeftInFlightSync`
+    /// (`StaleGenerationAfterNewerDepartsTests.swift`) — про именно этот, более узкий случай.
+    /// `lastStartedGeneration[source]` (`CalendarPortImpl.swift`) не подвержен этой гонке — он
+    /// не обнуляется НИКЕМ, только перезаписывается следующим стартом `syncOne`, так что
+    /// однозначно называет самое новое из когда-либо заведённых поколений источника, живо оно
+    /// сейчас в `inFlightSync` или уже нет.
+    private func recordSyncOutcomeIfCurrent(source: CalendarSourceId, generation: UUID, error: String?) async {
+        guard lastStartedGeneration[source] == generation else { return }
+        try? await connectorRepository.setSyncOutcome(at: Date(), error: error, connectorId: source.rawValue)
     }
 
     private struct SyncOutcome { var upserted = 0; var deleted = 0 }
