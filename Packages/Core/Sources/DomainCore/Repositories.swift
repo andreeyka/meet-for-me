@@ -19,6 +19,11 @@
 //  и от `status` (инвариант 7). Фейк, который иначе не соберётся без этого метода, —
 //  предмет `InMemoryRecordingRepository.swift`.
 //
+//  `MeetingRepository.meeting(sourceConnectorId:externalId:)` (C-010 v10, IR-118, MEE-348,
+//  инвариант 30) добавлен MEE-352: пара — первичный ключ таблицы `meeting_sources` (§1),
+//  метод отдаёт запись, чья строка `meeting_sources` названа этой парой, или `nil`.
+//  Не изменялся v11–v13 (см. отчёт MEE-352).
+//
 //  `StorageError` объявлен, хотя `async throws` в Swift тип ошибки не называет и
 //  компиляции он не требует: на нём стоят инварианты 20 и 21 контракта, и фейкам MEE-290
 //  бросать нечем без него.
@@ -207,6 +212,11 @@ public protocol MeetingRepository: Sendable {
     func save(_ record: MeetingRecord) async throws
     func meeting(id: UUID) async throws -> MeetingRecord?
     func meeting(dedupKey: DedupKey) async throws -> MeetingRecord?
+
+    /// C-010 v10, IR-118 (MEE-348), инвариант 30: пара — первичный ключ `meeting_sources`
+    /// (§1), поэтому результат не более чем один; полный перебор `meetings` не нужен.
+    func meeting(sourceConnectorId: String, externalId: String) async throws -> MeetingRecord?
+
     func meetings(from: Date, to: Date) async throws -> [MeetingRecord]
     func setStatus(_ status: MeetingStatus, meetingId: UUID) async throws
     func delete(meetingIds: [UUID]) async throws

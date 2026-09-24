@@ -1,4 +1,5 @@
 //  GRDBMeetingRepository — реализация `MeetingRepository`, C-010 (MEE-18) v7 §5.
+//  `meeting(sourceConnectorId:externalId:)` — C-010 v10, IR-118 (MEE-348), дописан MEE-352.
 //
 //  Модуль: storage · Владелец: DEV-2 · Слой: хранилище
 //
@@ -48,6 +49,27 @@ final class GRDBMeetingRepository: MeetingRepository {
             guard let row = try Row.fetchOne(
                 db, sql: "SELECT * FROM meetings WHERE dedup_key = ?", arguments: [dedupText]
             ) else { return nil }
+            return try Self.meetingRecord(from: row, db: db)
+        }
+    }
+
+    /// C-010 v10, IR-118 (MEE-348), инвариант 30: пара — первичный ключ `meeting_sources`
+    /// (§1) — прямая точечная выборка по нему, без перебора `meetings`.
+    func meeting(sourceConnectorId: String, externalId: String) async throws -> MeetingRecord? {
+        return try await withDatabase(entity: StorageEntity.meeting, id: "?") { db in
+            guard let sourceRow = try Row.fetchOne(
+                db,
+                sql: "SELECT meeting_id FROM meeting_sources WHERE source_connector_id = ? AND external_id = ?",
+                arguments: [sourceConnectorId, externalId]
+            ) else {
+                return nil
+            }
+            let meetingId: String = sourceRow["meeting_id"]
+            guard let row = try Row.fetchOne(
+                db, sql: "SELECT * FROM meetings WHERE id = ?", arguments: [meetingId]
+            ) else {
+                return nil
+            }
             return try Self.meetingRecord(from: row, db: db)
         }
     }

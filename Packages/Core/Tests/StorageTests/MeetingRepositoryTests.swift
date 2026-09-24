@@ -50,6 +50,41 @@ final class MeetingRepositoryTests: StorageAsyncTestCase {
         try await repository.save(MeetingRecord(event: event, dedupKey: dedupKey, status: .scheduled, sources: []))
     }
 
+    // MARK: - Инвариант 30 (C-010 v10, IR-118, MEE-348)
+
+    /// «Пара — первичный ключ `meeting_sources`, результат не более чем один; полный
+    /// перебор `meetings` не нужен». Прямая точечная выборка, не полное чтение таблицы.
+    func test_invariant30_meetingBySourcePairFindsRecordOrNil() async throws {
+        let temp = try StorageTestSupport.makeDatabase()
+        defer { StorageTestSupport.cleanup(temp) }
+        let repository = temp.database.meetingRepository()
+
+        let event = try TestFixtures.meetingEvent(externalId: "ext-30")
+        let sources = [
+            MeetingSource(
+                sourceConnectorId: "eventkit", externalId: "ext-30-a", icalUid: nil,
+                lastModified: TestFixtures.epoch
+            ),
+            MeetingSource(
+                sourceConnectorId: "graph:work", externalId: "ext-30-b", icalUid: nil,
+                lastModified: TestFixtures.epoch
+            )
+        ]
+        try await repository.save(MeetingRecord(event: event, dedupKey: nil, status: .scheduled, sources: sources))
+
+        let foundByFirst = try await repository.meeting(sourceConnectorId: "eventkit", externalId: "ext-30-a")
+        XCTAssertEqual(foundByFirst?.event.id, event.id)
+
+        let foundBySecond = try await repository.meeting(sourceConnectorId: "graph:work", externalId: "ext-30-b")
+        XCTAssertEqual(foundBySecond?.event.id, event.id, "у одной встречи несколько источников — любой находит её")
+
+        let halfMatch = try await repository.meeting(sourceConnectorId: "eventkit", externalId: "ext-30-b")
+        XCTAssertNil(halfMatch, "пара — обе половины вместе, не порознь")
+
+        let missing = try await repository.meeting(sourceConnectorId: "eventkit", externalId: "нет-такой")
+        XCTAssertNil(missing, "пары нет — nil, а не отказ")
+    }
+
     // MARK: - К11
 
     func testK11_deleteMeetingCascadesSourcesAttendeesOutputsButKeepsRecordingWithNilMeetingId() async throws {
