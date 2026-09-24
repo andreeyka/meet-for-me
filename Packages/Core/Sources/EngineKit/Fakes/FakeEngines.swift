@@ -182,11 +182,36 @@ public final class FakeEmbeddingEngine: EmbeddingEngine, @unchecked Sendable {
     }
 
     /// C-011 «Фейк для тестов»: вектор строится из `startMs` среза, не из константы — разные
-    /// срезы дают разные векторы, не совпадающие случайно.
+    /// срезы дают разные векторы. Возврат РП по MEE-390 (24.09 21:00 UTC): линейная зависимость
+    /// `[startMs, startMs+1, …]` не годится — у срезов 1000 и 2000 косинус выходил 0.9999999,
+    /// а атрибуция сравнивает именно по косинусу; сливались бы в одного говорящего. Нелинейная
+    /// зависимость через `pseudoRandomUnitVector` разводит соседние `startMs` по косинусу
+    /// далеко от 1, сохраняя детерминированность (тот же `startMs` — тот же вектор).
     private func makeResult(for request: EmbeddingRequest) throws -> EmbeddingResult {
-        let base = Float(request.slice.startMs)
-        let vector = (0..<dimension).map { index in base + Float(index) }
+        let vector = Self.pseudoRandomUnitVector(
+            seed: UInt64(bitPattern: Int64(request.slice.startMs)), dimension: dimension
+        )
         return try EmbeddingResult(vector: vector, dimension: dimension, modelVersion: modelVersion)
+    }
+
+    /// SplitMix64 (Steele/Vigna) — не криптографический ГПСЧ, здесь и не нужен: только
+    /// устойчивое рассеивание зерна, чтобы соседние `startMs` не давали похожие векторы.
+    private static func pseudoRandomUnitVector(seed: UInt64, dimension: Int) -> [Float] {
+        var state = seed
+        func nextUnitInterval() -> Double {
+            state = state &+ 0x9E37_79B9_7F4A_7C15
+            var z = state
+            z = (z ^ (z >> 30)) &* 0xBF58_476D_1CE4_E5B9
+            z = (z ^ (z >> 27)) &* 0x94D0_49BB_1331_11EB
+            z = z ^ (z >> 31)
+            return Double(z >> 11) * (1.0 / Double(1 << 53))
+        }
+        var components = (0..<dimension).map { _ in nextUnitInterval() * 2 - 1 }
+        let norm = (components.reduce(0) { $0 + $1 * $1 }).squareRoot()
+        if norm > 0 {
+            components = components.map { $0 / norm }
+        }
+        return components.map { Float($0) }
     }
 }
 

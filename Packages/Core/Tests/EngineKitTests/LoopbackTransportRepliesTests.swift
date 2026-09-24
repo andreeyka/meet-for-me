@@ -149,4 +149,28 @@ final class LoopbackTransportRepliesTests: XCTestCase {
         XCTAssertEqual(transcript.createdAt.timeIntervalSince1970, 1_000.123, accuracy: 1e-4,
                        "1_000.123_456_789 обязан округлиться до 1_000.123 уже на границе транспорта")
     }
+
+    /// Возврат РП по MEE-390 (24.09 21:00 UTC): дополнительный случай округления вверх —
+    /// 1_000.1236 (0.6 доли миллисекунды сверх 1_000.123) обязан округлиться до 1_000.124,
+    /// не до 1_000.123 (округление до БЛИЖАЙШЕЙ миллисекунды, не отбрасыванием остатка).
+    func test_k41_loopbackTransportRoundsUpToNearestMillisecond() async throws {
+        let transcription = FakeTranscriptionEngine()
+        transcription.forcedResult = {
+            try Transcript(
+                recordingId: EngineFixtures.recordingId, language: "en", engine: "fake-asr",
+                modelVersion: "v1", createdAt: Date(timeIntervalSince1970: 1_000.1236),
+                segments: [], speakers: []
+            )
+        }
+        let transport = makeTransport(transcription: transcription)
+        let jobId = EngineJobId(rawValue: UUID())
+        transport.receive(.transcribe(jobId, try EngineFixtures.transcriptionRequest()))
+        try await waitUntil { !transport.sentReplies.isEmpty }
+
+        guard case .transcript(_, let transcript) = transport.sentReplies[0] else {
+            return XCTFail("ожидался .transcript")
+        }
+        XCTAssertEqual(transcript.createdAt.timeIntervalSince1970, 1_000.124, accuracy: 1e-4,
+                       "1_000.1236 обязан округлиться ВВЕРХ до 1_000.124")
+    }
 }

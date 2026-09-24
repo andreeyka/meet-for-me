@@ -11,11 +11,22 @@ final class FakeEngineFidelityTests: XCTestCase {
 
     // MARK: - FakeEmbeddingEngine: вектор строится из startMs среза
 
-    func test_fakeEmbeddingEngineProducesDifferentVectorsForDifferentStartMs() async throws {
+    private func cosine(_ a: [Float], _ b: [Float]) -> Float {
+        let dot = zip(a, b).reduce(Float(0)) { $0 + $1.0 * $1.1 }
+        let normA = a.reduce(Float(0)) { $0 + $1 * $1 }.squareRoot()
+        let normB = b.reduce(Float(0)) { $0 + $1 * $1 }.squareRoot()
+        return dot / (normA * normB)
+    }
+
+    /// Возврат РП по MEE-390 (24.09 21:00 UTC): линейная зависимость `[startMs, startMs+1, …]`
+    /// давала косинус 0.9999999 у срезов 1000/2000 — атрибуция (сравнивает по косинусу)
+    /// слила бы их в одного говорящего. Порог из самого возврата: у разных срезов < 0.5.
+    func test_fakeEmbeddingEngineProducesLowCosineSimilarityForDifferentStartMs() async throws {
         let engine = FakeEmbeddingEngine()
-        let first = try await engine.embed(try EngineFixtures.embeddingRequest(startMs: 0, endMs: 500))
-        let second = try await engine.embed(try EngineFixtures.embeddingRequest(startMs: 1_000, endMs: 1_500))
-        XCTAssertNotEqual(first.vector, second.vector, "разные срезы обязаны давать разные векторы")
+        let first = try await engine.embed(try EngineFixtures.embeddingRequest(startMs: 1_000, endMs: 1_500))
+        let second = try await engine.embed(try EngineFixtures.embeddingRequest(startMs: 2_000, endMs: 2_500))
+        XCTAssertLessThan(cosine(first.vector, second.vector), 0.5,
+                          "разные срезы обязаны давать низкое косинусное сходство")
     }
 
     func test_fakeEmbeddingEngineIsDeterministicForSameStartMs() async throws {
