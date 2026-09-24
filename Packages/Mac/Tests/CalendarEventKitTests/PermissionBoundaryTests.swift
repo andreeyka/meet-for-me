@@ -64,17 +64,36 @@ final class PermissionBoundaryTests: XCTestCase {
                 _ = try await harness.connector.listCalendars()
                 XCTFail("ожидался authorizationRequired для \(status)")
             } catch ConnectorError.authorizationRequired {}
-            XCTAssertEqual(harness.gateway.calendarsCallCount, 0, "\(status): шов не тронут")
+            XCTAssertEqual(harness.gateway.calendarsCallCount, 0, "\(status): Ш1 не тронут")
+
+            // Возврат РП (Д4, 24.09): та же проверка ветвления — и через fetchEvents (Ш2).
+            do {
+                _ = try await harness.connector.fetchEvents(
+                    from: Date(timeIntervalSince1970: 0), to: Date(timeIntervalSince1970: 2_000_000_000),
+                    calendarIds: ["cal-1"]
+                )
+                XCTFail("ожидался authorizationRequired для \(status)")
+            } catch ConnectorError.authorizationRequired {}
+            XCTAssertEqual(harness.gateway.eventsCallCount, 0, "\(status): Ш2 не тронут")
         }
     }
 
     func test_k24_gatewayFailureAfterGrantedDistinguishesCause() async throws {
+        // Возврат РП (Д3, 24.09): вход по перечню — отказ именно на `events(from:to:
+        // calendarIds:)`, не на `listCalendars`. Проверено обоими вызовами Ш1 и Ш2.
         let permissionLossHarness = Harness()
         try await permissionLossHarness.initialize()
         permissionLossHarness.permissions.setStatus(.granted, for: .calendars)
         permissionLossHarness.gateway.fail(with: .looksLikePermissionLoss(message: "похоже на потерю права"))
         do {
             _ = try await permissionLossHarness.connector.listCalendars()
+            XCTFail("ожидался authorizationRequired, не upstreamUnavailable")
+        } catch ConnectorError.authorizationRequired {}
+        do {
+            _ = try await permissionLossHarness.connector.fetchEvents(
+                from: Date(timeIntervalSince1970: 0), to: Date(timeIntervalSince1970: 2_000_000_000),
+                calendarIds: ["cal-1"]
+            )
             XCTFail("ожидался authorizationRequired, не upstreamUnavailable")
         } catch ConnectorError.authorizationRequired {}
 
@@ -84,6 +103,13 @@ final class PermissionBoundaryTests: XCTestCase {
         otherCauseHarness.gateway.fail(with: .other(message: "иная причина"))
         do {
             _ = try await otherCauseHarness.connector.listCalendars()
+            XCTFail("ожидался upstreamUnavailable, не authorizationRequired")
+        } catch ConnectorError.upstreamUnavailable(_) {}
+        do {
+            _ = try await otherCauseHarness.connector.fetchEvents(
+                from: Date(timeIntervalSince1970: 0), to: Date(timeIntervalSince1970: 2_000_000_000),
+                calendarIds: ["cal-1"]
+            )
             XCTFail("ожидался upstreamUnavailable, не authorizationRequired")
         } catch ConnectorError.upstreamUnavailable(_) {}
     }

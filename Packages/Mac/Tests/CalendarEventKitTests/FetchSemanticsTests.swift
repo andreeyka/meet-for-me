@@ -37,6 +37,8 @@ final class FetchSemanticsTests: XCTestCase {
         harness.permissions.setStatus(.granted, for: .calendars)
         let t1 = Date(timeIntervalSince1970: 1_700_000_000)
         let t2 = Date(timeIntervalSince1970: 1_700_100_000)
+        // Возврат РП (Д5, 24.09): пять календарей, как в перечне (МЕЕ-339, вход К20) — только
+        // два из пяти запрошены.
         harness.gateway.setEvents([
             .fixture(calendarId: "id1", externalId: "evt-t1", start: t1, end: t1.addingTimeInterval(3_600)),
             .fixture(calendarId: "id1", externalId: "evt-t2", start: t2, end: t2.addingTimeInterval(3_600)),
@@ -47,6 +49,14 @@ final class FetchSemanticsTests: XCTestCase {
             .fixture(
                 calendarId: "id2", externalId: "evt-outside",
                 start: t2.addingTimeInterval(10_000), end: t2.addingTimeInterval(11_000)
+            ),
+            .fixture(
+                calendarId: "id4", externalId: "evt-id4",
+                start: t1.addingTimeInterval(1_500), end: t1.addingTimeInterval(2_500)
+            ),
+            .fixture(
+                calendarId: "id5", externalId: "evt-id5",
+                start: t1.addingTimeInterval(1_800), end: t1.addingTimeInterval(2_800)
             )
         ])
 
@@ -56,5 +66,7 @@ final class FetchSemanticsTests: XCTestCase {
         XCTAssertFalse(ids.contains("evt-t2"), "T2 исключена — правая граница")
         XCTAssertFalse(ids.contains("evt-other-cal"), "календарь id3 не запрошен")
         XCTAssertFalse(ids.contains("evt-outside"), "событие вне окна")
+        XCTAssertFalse(ids.contains("evt-id4"), "календарь id4 не запрошен")
+        XCTAssertFalse(ids.contains("evt-id5"), "календарь id5 не запрошен")
     }
 }

@@ -45,6 +45,7 @@ final class HealthCheckTests: XCTestCase {
             let health = try await harness.connector.healthCheck()
             XCTAssertEqual(health.status, .failed)
             XCTAssertNotNil(health.lastSuccessfulSyncAt, "историческая метка успеха не стирается отзывом права")
+            XCTAssertNotNil(health.message, "возврат РП (Д6, 24.09): причина названа и здесь")
         }
         // (4) не .granted, вызовов шва не было вовсе → .failed, lastSuccessfulSyncAt == nil
         do {
@@ -55,6 +56,7 @@ final class HealthCheckTests: XCTestCase {
             let health = try await harness.connector.healthCheck()
             XCTAssertEqual(health.status, .failed)
             XCTAssertNil(health.lastSuccessfulSyncAt)
+            XCTAssertNotNil(health.message, "возврат РП (Д6, 24.09): причина названа и здесь")
         }
     }
 }

@@ -41,14 +41,15 @@ final class EventKitCoreGateway: EventKitGateway, @unchecked Sendable {
     private static func rawEvent(from event: EKEvent) -> RawEvent {
         RawEvent(
             calendarId: event.calendar.calendarIdentifier,
-            externalId: event.eventIdentifier,
-            // Приватный API не даёт публичного доступа к iCalUID отдельно от eventIdentifier —
-            // поле контракта опционально, ни один критерий MEE-339 его не проверяет.
-            icalUid: nil,
+            externalId: externalId(for: event),
+            // Возврат РП (Д9, 24.09) — самокоррекция: `calendarItemExternalIdentifier` ЕСТЬ
+            // публичный API (не приватный, как утверждал прежний комментарий) — стабильный
+            // межустройственный UID, в отличие от `eventIdentifier` (локален хранилищу).
+            icalUid: event.calendarItemExternalIdentifier,
             title: event.title ?? "",
             start: event.startDate,
             end: event.endDate,
-            timeZoneIdentifier: event.timeZone?.identifier ?? TimeZone.current.identifier,
+            timeZoneIdentifier: event.timeZone?.identifier ?? Self.floatingEventTimeZoneIdentifier,
             isAllDay: event.isAllDay,
             isCancelled: event.status == .canceled,
             organizer: event.organizer.map(rawPerson),
@@ -56,9 +57,55 @@ final class EventKitCoreGateway: EventKitGateway, @unchecked Sendable {
             location: event.location,
             notes: event.notes,
             url: event.url,
-            lastModified: event.lastModifiedDate ?? event.startDate
+            lastModified: event.lastModifiedDate ?? Self.lastModifiedFallback(for: event)
         )
     }
+
+    /// Возврат РП (Д1, блокирует, 24.09): `event.eventIdentifier` ОДИН И ТОТ ЖЕ у всех вхождений
+    /// повторяющегося события — К19 (развёрнутые вхождения, каждое со своим `externalId`) на
+    /// живом пути был бы нарушен этим полем в одиночку, и `calendar-hub` склеил бы вхождения
+    /// при дедупе по этому же полю. `occurrenceDate` — дата ИМЕННО этого вхождения, у каждого
+    /// из N вхождений одного `eventIdentifier` — своя.
+    //
+    // СТРОКА: форма составного идентификатора не названа ни контрактом, ни перечнем — решение
+    // здесь, не цитата. Беру `"<eventIdentifier>:<occurrenceDate как Unix-время в секундах>"`.
+    // Вилка не решена мной до конца:
+    // (а) эта форма стабильна между запусками (не зависит от порядка перечисления,
+    //     только от значений двух полей EventKit) и не пересекается с одиночными
+    //     (неповторяющимися) событиями, у которых `occurrenceDate == startDate` — коллизия с
+    //     другим событием потребовала бы совпадения обоих полей одновременно;
+    // (б) секундная точность `occurrenceDate` теоретически схлопнула бы два РАЗНЫХ вхождения
+    //     одного правила повторения, начинающихся в одну и ту же секунду, — сценарий, которого
+    //     ни один существующий тест не проверяет и которого сама семантика правил повторения
+    //     EventKit (шаг не короче минуты) не производит на практике.
+    // М1 п. 5 (план MEE-343 §5) — единственный источник, калибрующий факт про K19 на живом
+    // EventKit; эта строка калибрует только ФОРМУ идентификатора, не сам факт различимости.
+    private static func externalId(for event: EKEvent) -> String {
+        "\(event.eventIdentifier ?? ""):\(Int(event.occurrenceDate.timeIntervalSince1970))"
+    }
+
+    // СТРОКА: «плавающее» событие (`event.timeZone == nil` — EventKit это допускает: время
+    // читается как есть в любом поясе просмотра, без собственной привязки) не описано ни
+    // контрактом C-006/C-001, ни перечнем MEE-339 — решение здесь, не цитата. Беру часовой пояс
+    // ПРОЦЕССА (`TimeZone.current`) на момент чтения. Вилка не решена мной:
+    // (а) это разумное приближение — большинство «плавающих» событий (дни рождения, годовщины)
+    //     осмысленны в поясе наблюдателя, и без него `timeZoneIdentifier` контракта (C-001,
+    //     инвариант 2 — валидный IANA-идентификатор) вообще нечем было бы заполнить;
+    // (б) `TimeZone.current` — пояс МАШИНЫ DEV-1/пользователя в момент синхронизации, не
+    //     обязательно пояс, в котором событие «имелось в виду» создателем; правильный ответ
+    //     контракт не называет вовсе.
+    private static var floatingEventTimeZoneIdentifier: String { TimeZone.current.identifier }
+
+    // СТРОКА: `lastModifiedDate == nil` (EventKit допускает — поле опционально) не описано ни
+    // контрактом, ни перечнем. Беру `startDate` события как нижнюю оценку возраста. Вилка не
+    // решена мной: (а) `startDate` — единственное другое поле-`Date`, гарантированно связанное
+    // с этим же событием, и не может быть МЕНЬШЕ реальной даты последнего изменения (событие не
+    // могло измениться раньше, чем оно начинается, по построению большинства сценариев создания);
+    // (б) для события, отредактированного давно после своего `startDate` в прошлом, эта оценка
+    // занижает реальный возраст изменения произвольно сильно — контракт не даёт лучшего сигнала
+    // на этот случай, и точная семантика «когда именно EventKit оставляет `lastModifiedDate`
+    // пустым» не измерена ни разу.
+    private static func lastModifiedFallback(for event: EKEvent) -> Date { event.startDate }
 
     private static func rawPerson(from participant: EKParticipant) -> RawPerson {
         // EventKit не даёт отдельного поля email — адрес несёт `url` схемой `mailto:`

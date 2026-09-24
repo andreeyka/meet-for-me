@@ -3,9 +3,10 @@
 //  Модуль: calendar-eventkit · Владелец: DEV-1 · Слой: плагин (адаптер системного API)
 //
 //  IR-116 (MEE-340) разрешён: нормализацию делает коннектор, независимо от транспорта
-//  (C-006 v8 «Поведение»). Четыре вещи, к инвариантам C-001 их приводит эта сторона:
-//  `email` (К10, К11), `timeZone` (К12), границы «весь день» (К13, К14), `conference` (К16,
-//  развилка Р4 — своя эвристика, не входит в список «четырёх вещей» C-001).
+//  (C-006 v8 «Поведение»). Три из четырёх вещей, к инвариантам C-001 их приводит эта сторона,
+//  живут здесь: `email` (К10, К11), `timeZone` (К12), границы «весь день» (К13, К14).
+//  `conference` (К16) — не здесь: C-009 v11 (IR-118) отдаёт разбор ссылки `PlatformResolver`,
+//  см. `EventKitConnector.resolveConference`.
 //
 //  Представимость трёх полей `Date` (К17, C-001 §0.2 п. 9) здесь НЕ проверяется отдельно —
 //  `MeetingEventPayload.init` сам зовёт `validate()`, а тот — `requireDate` на каждом из трёх;
@@ -39,9 +40,16 @@ enum EventNormalizer {
         return !parts[0].isEmpty && !parts[1].isEmpty
     }
 
-    /// К12: идентификатор, не входящий в IANA-базу (гипотетический вход теста), заменяется на
-    /// `"UTC"` — гарантирует `TimeZone(identifier:) != nil` у результата без отказа события
-    /// целиком. Валидный идентификатор источника переносится без изменения.
+    // СТРОКА: возврат РП (Д8, 24.09) — какое именно значение подставлять вместо не-IANA
+    // идентификатора (К12), не называет ни контракт, ни перечень: только требование
+    // `TimeZone(identifier:) != nil` у результата (само по себе допускает любой валидный
+    // идентификатор). Беру `"UTC"`. Вилка не решена мной:
+    // (а) `"UTC"` — нейтральный, не искажающий часы события в какую-либо конкретную сторону
+    //     (в отличие, например, от `TimeZone.current` — пояса машины, произвольно смещённого
+    //     от реального намерения источника события);
+    // (б) `"UTC"` всё равно ИСКАЖАЕТ отображаемое локальное время события — контракт не
+    //     говорит, что искажение допустимо вовсе, только что оно не должно приводить к отказу
+    //     конструктора; на практике вход недостижим живым EventKit (К12, гипотетический вход).
     static func ianaTimeZoneIdentifier(_ raw: String) -> String {
         TimeZone(identifier: raw) != nil ? raw : "UTC"
     }
@@ -72,36 +80,7 @@ enum EventNormalizer {
         return (start, end)
     }
 
-    /// К16, развилка Р4: эвристика по известным доменам конференц-провайдеров над `location`,
-    /// заметками и URL-полем события — первое совпадение побеждает. Отдаёт только `https`-ссылки
-    /// (инвариант 5 C-001 требует абсолютный `https` URL — не-`https` совпадение либо не
-    /// найдено, либо отброшено этой же функцией, чтобы не уронить конструктор `Conference`
-    /// вместо честного «эвристика не распознала»).
-    static func detectConference(location: String?, notes: String?, url: URL?) -> (provider: String, joinUrl: URL)? {
-        let rules: [(domain: String, provider: String)] = [
-            ("zoom.us", "zoom"),
-            ("meet.google.com", "meet"),
-            ("teams.microsoft.com", "teams")
-        ]
-        var candidates: [URL] = []
-        if let url { candidates.append(url) }
-        for text in [location, notes].compactMap({ $0 }) {
-            candidates.append(contentsOf: extractLinks(from: text))
-        }
-        for candidate in candidates {
-            guard candidate.scheme?.lowercased() == "https", let host = candidate.host?.lowercased() else { continue }
-            for rule in rules where host == rule.domain || host.hasSuffix("." + rule.domain) {
-                return (rule.provider, candidate)
-            }
-        }
-        return nil
-    }
-
-    private static func extractLinks(from text: String) -> [URL] {
-        guard let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue) else {
-            return []
-        }
-        let range = NSRange(text.startIndex..<text.endIndex, in: text)
-        return detector.matches(in: text, range: range).compactMap(\.url)
-    }
+    // Развилка Р4 (собственная эвристика по трём доменам) снята: C-009 v11 закрыла IR-118 —
+    // разбор ссылки на созвон делает `PlatformResolver.resolve(text:source:)`, инжектированный
+    // составным корнем `app-ui` (см. `EventKitConnector.resolveConference`), не эта функция.
 }

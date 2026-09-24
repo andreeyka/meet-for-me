@@ -13,19 +13,12 @@ public actor EventKitConnector: CalendarConnector {
 
     private let gateway: EventKitGateway
     private let permissions: PermissionsPort
-    // СТРОКА: IR-118 (MEE-348) — возврат РП на MEE-349 по К16, 24.09. Развилку Р4 (своя
-    // таблица доменов) заменяет вызов `PlatformResolver` (C-009, `domain-core`) — разбор ссылки
-    // на созвон входит в нормализацию IR-116 целиком, и делает её та же сторона, что строит
-    // `MeetingEventPayload`. Какой метод `PlatformResolver` звать здесь — не решено: `resolve(
-    // event:)` требует готовый `MeetingEvent` (с `id`), которого у коннектора нет и не будет —
-    // `id` назначает только хост (C-006 §6.1); `resolve(text:source:)` не несёт оркестровки
-    // «`conference` → `location` → `bodyText`, первое совпадение» (C-009 §2, инв. 3-5) — эту
-    // оркестровку сегодня ведёт вызывающая сторона, а не сам метод. Архитектор правит C-009
-    // (MEE-348, пп. 1-2 возврата) под этот случай. Инжектируется сюда, а не строится изнутри
-    // модуля, — тем же приёмом, что `permissions`: реализацию (`detector`) собирает составной
-    // корень (C-016), не `calendar-eventkit`. До ответа C-009 хранится, но не вызывается —
-    // `resolveConference` ниже всё ещё ведёт эвристику Р4 (`EventNormalizer.detectConference`,
-    // за одним швом ради замены одной правкой); К16 в текущем виде РП не примет (см. отчёт).
+    /// IR-118 (MEE-348) закрыт C-009 v11: развилку Р4 (своя таблица доменов) заменяет вызов
+    /// `PlatformResolver.resolve(text:source:)` (не `resolve(event:)` — тот требует готовый
+    /// `MeetingEvent` с `id`, которого у коннектора нет: `id` назначает только хост, C-006
+    /// §6.1). Инжектируется составным корнем `app-ui` (не C-016 — C-016 сам отказывается быть
+    /// чем-либо большим фасада UI, C-009 v11), не строится изнутри модуля — тем же приёмом,
+    /// что `permissions`.
     private let platformResolver: PlatformResolver
 
     private var host: ConnectorHostServices?
@@ -191,7 +184,7 @@ public actor EventKitConnector: CalendarConnector {
         let bounds = raw.isAllDay
             ? EventNormalizer.allDayBounds(rawStart: raw.start, rawEnd: raw.end, timeZoneIdentifier: timeZoneIdentifier)
             : (start: raw.start, end: raw.end)
-        let conference = resolveConference(location: raw.location, notes: raw.notes, url: raw.url)
+        let conference = resolveConference(location: raw.location, bodyText: raw.notes)
         return try MeetingEventPayload(
             sourceConnectorId: connectorInstanceId,
             externalId: raw.externalId,
@@ -211,16 +204,16 @@ public actor EventKitConnector: CalendarConnector {
         )
     }
 
-    /// СТРОКА: IR-118 (MEE-348) — см. хранение `platformResolver` в шапке типа. Единственный
-    /// шов вызова: пока ведёт эвристику Р4 (`EventNormalizer.detectConference`), не трогает
-    /// `platformResolver` — замена станет одной правкой этого тела, когда C-009 назовёт метод.
-    private func resolveConference(location: String?, notes: String?, url: URL?) -> MeetingEvent.Conference? {
-        _ = platformResolver
-        return EventNormalizer
-            .detectConference(location: location, notes: notes, url: url)
-            .flatMap { try? MeetingEvent.Conference(
-                provider: $0.provider, joinUrl: $0.joinUrl, meetingId: nil, passcode: nil
-            ) }
+    /// IR-118/К16, C-009 v11: порядок разбора события — `conference → location → bodyText`,
+    /// первое совпадение побеждает (C-009 §2, инв. 3). У EventKit-источника структурного поля
+    /// `conference` нет (сама причина, по которой Р4 вообще была нужна) — коннектор проверяет
+    /// оставшиеся два поля в том же относительном порядке: `location`, затем `bodyText`.
+    private func resolveConference(location: String?, bodyText: String?) -> MeetingEvent.Conference? {
+        let joinInfo = location.flatMap { platformResolver.resolve(text: $0, source: .location) }
+            ?? bodyText.flatMap { platformResolver.resolve(text: $0, source: .bodyText) }
+        return joinInfo.flatMap { try? MeetingEvent.Conference(
+            provider: $0.provider, joinUrl: $0.joinUrl, meetingId: $0.meetingId, passcode: $0.passcode
+        ) }
     }
 
     private func buildPerson(from raw: RawPerson) throws -> MeetingEvent.Person {

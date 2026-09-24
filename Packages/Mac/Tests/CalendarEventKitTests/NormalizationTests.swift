@@ -122,43 +122,72 @@ final class NormalizationTests: XCTestCase {
         } catch ConnectorError.protocolViolation(_) {}
     }
 
-    /// Ждёт C-009 (IR-118, MEE-348, возврат РП на MEE-349, 24.09): К16 в этом виде — тест
-    /// временной эвристики Р4 (`EventNormalizer.detectConference`), не финального поведения.
-    /// РП: «в нынешнем виде (таблица доменов) К16 принят не будет». Тест остаётся зелёным,
-    /// пока `EventKitConnector.resolveConference` не переключат на `platformResolver`
-    /// (см. `// СТРОКА:` там же) — замена этого теста идёт той же правкой.
+    /// C-009 v11 закрыл IR-118: разбор ссылки на созвон делает `PlatformResolver.resolve(
+    /// text:source:)`, инжектированный составным корнем (`app-ui`) — коннектор больше не ведёт
+    /// собственную эвристику по доменам (снятая развилка Р4). Порядок — `location`, затем
+    /// `bodyText` (структурного поля `conference` у EventKit-источника нет, инв. 3 C-009),
+    /// первое совпадение побеждает.
     func test_k16_conferenceHeuristicMatchesKnownProviderAndAbsence() async throws {
-        let harness = Harness()
+        let zoomJoinInfo = JoinInfo(
+            provider: "zoom", joinUrl: URL(string: "https://zoom.us/j/123456789")!,
+            meetingId: "123456789", passcode: nil, clientBundleIds: [], source: .location
+        )
+        let meetJoinInfo = JoinInfo(
+            provider: "meet", joinUrl: URL(string: "https://meet.google.com/abc-defg-hij")!,
+            meetingId: nil, passcode: nil, clientBundleIds: [], source: .bodyText
+        )
+        let harness = Harness(platformResolver: FixedPlatformResolver(answers: [
+            "https://zoom.us/j/123456789": zoomJoinInfo,
+            "заметки со ссылкой meet": meetJoinInfo
+        ]))
         try await harness.initialize()
         harness.permissions.setStatus(.granted, for: .calendars)
         harness.gateway.setEvents([
-            .fixture(externalId: "evt-zoom", location: "https://zoom.us/j/123456789"),
+            .fixture(externalId: "evt-location", location: "https://zoom.us/j/123456789"),
+            .fixture(externalId: "evt-bodytext", location: "Переговорка 3", notes: "заметки со ссылкой meet"),
             .fixture(externalId: "evt-none", location: "Переговорка 3")
         ])
 
         let payloads = try await fetch(harness)
-        let zoomPayload = try XCTUnwrap(payloads.first { $0.externalId == "evt-zoom" })
-        XCTAssertEqual(zoomPayload.conference?.provider, "zoom")
-        XCTAssertEqual(zoomPayload.conference?.joinUrl.absoluteString, "https://zoom.us/j/123456789")
+        let locationPayload = try XCTUnwrap(payloads.first { $0.externalId == "evt-location" })
+        XCTAssertEqual(locationPayload.conference?.provider, "zoom")
+        XCTAssertEqual(locationPayload.conference?.joinUrl.absoluteString, "https://zoom.us/j/123456789")
+
+        let bodyTextPayload = try XCTUnwrap(payloads.first { $0.externalId == "evt-bodytext" })
+        XCTAssertEqual(bodyTextPayload.conference?.provider, "meet", "location не совпал — проверен bodyText")
+
         let nonePayload = try XCTUnwrap(payloads.first { $0.externalId == "evt-none" })
-        XCTAssertNil(nonePayload.conference, "нет узнаваемой ссылки — не отказ")
+        XCTAssertNil(nonePayload.conference, "нет ответа резолвера ни на одном поле — не отказ")
     }
 
     func test_k17_dateRepresentabilityThreeFieldsGroup() async throws {
         let harness = Harness()
         try await harness.initialize()
         harness.permissions.setStatus(.granted, for: .calendars)
-        let farFuture = Date(timeIntervalSinceReferenceDate: 3e11)   // далеко за 9999-12-31
+        let farFuture = Date(timeIntervalSinceReferenceDate: 3e11)    // далеко за 9999-12-31
+        // Возврат РП (Д6, 24.09): нижняя граница представимости — далеко раньше 0001-01-01,
+        // не только верхняя.
+        let farPast = Date(timeIntervalSinceReferenceDate: -1e11)
+        // Окно шире общего `fetch(harness)`: обе крайности должны попасть в него, иначе
+        // собственный фильтр коннектора (не сам инвариант 0) отбросит событие раньше проверки.
+        let wideWindowFrom = Date(timeIntervalSinceReferenceDate: -2e11)
+        let wideWindowTo = Date(timeIntervalSinceReferenceDate: 4e11)
 
         let cases: [(label: String, event: RawEvent)] = [
-            ("start", .fixture(externalId: "evt-start", start: farFuture, end: farFuture.addingTimeInterval(3600))),
-            ("end", .fixture(externalId: "evt-end", end: farFuture)),
-            ("lastModified", .fixture(externalId: "evt-lastmod", lastModified: farFuture))
+            ("start, будущее", .fixture(externalId: "evt-start-future",
+                                        start: farFuture, end: farFuture.addingTimeInterval(3600))),
+            ("start, прошлое", .fixture(externalId: "evt-start-past", start: farPast)),
+            ("end, будущее", .fixture(externalId: "evt-end-future", end: farFuture)),
+            ("end, прошлое", .fixture(externalId: "evt-end-past", end: farPast)),
+            ("lastModified, будущее", .fixture(externalId: "evt-lastmod-future", lastModified: farFuture)),
+            ("lastModified, прошлое", .fixture(externalId: "evt-lastmod-past", lastModified: farPast))
         ]
         for testCase in cases {
             harness.gateway.setEvents([testCase.event])
             do {
-                _ = try await fetch(harness)
+                _ = try await harness.connector.fetchEvents(
+                    from: wideWindowFrom, to: wideWindowTo, calendarIds: ["cal-1"]
+                )
                 XCTFail("ожидался отказ представимости, поле \(testCase.label)")
             } catch ConnectorError.protocolViolation(let message) {
                 XCTAssertTrue(message.contains("инв. 0"), "поле \(testCase.label): \(message)")
