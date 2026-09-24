@@ -14,18 +14,24 @@ import DomainCore
 
 extension CalendarPortImpl {
 
-    /// Инв. 11 (C-005, MEE-385): слияние ДВУХ входящих событий ОДНОЙ встречи (тот же дедуп-
-    /// ключ) сериализуется — очередь задач на ключ (`mergeTail`), атомарно или строгим
-    /// порядком, так что конкурентное чтение-запись двух таких событий не теряет ни одно.
-    /// Разные встречи сливаются независимо и параллельно, как и раньше — нет записи в
-    /// словаре под их ключом, нет и ожидания. `TaskGroup` (`sync(trigger:)`, один `Task` на
-    /// источник) плюс реентерабельность актора на `await` иначе могут перекрыть запись
-    /// одного входящего события записью другого, ещё не слитого с ним.
-    func serialized<T: Sendable>(
-        dedupKey: DedupKey?, _ body: @Sendable @escaping () async throws -> T
-    ) async throws -> T {
-        guard let dedupKey else { return try await body() }
-        let previous = mergeTail[dedupKey]
+    /// Инв. 11 (C-005, MEE-385): слияние ЛЮБЫХ двух входящих событий (и `applyIncoming`, и
+    /// `applyDeletedExternalId` — оба переустраивают `sources`/`event` одной и той же
+    /// встречи) сериализуется — ОДНА общая цепочка задач на весь актор (`mergeTail`), не
+    /// словарь по дедуп-ключу входящего события.
+    ///
+    /// Возврат РП (приёмка #105): словарь по ключу был неверен ДВАЖДЫ. (1) Ключ входящего
+    /// события известен только СНАЧАЛА тела (`DedupKey.make(from:)` от временно
+    /// присвоенного id) — если два источника одной существующей встречи в одном цикле
+    /// вычисляют разные ключи (например, второй ещё не находит запись через
+    /// `meeting(dedupKey:)`, пока первый её уже не сохранил под другим ключом), они
+    /// сериализуются на РАЗНЫЕ записи словаря и всё равно гонятся друг с другом.
+    /// (2) `applyDeletedExternalId` вообще не заводил ключ — `dedupKey == nil` пропускал
+    /// сериализацию целиком (старый `guard let dedupKey else { return try await body() }`).
+    /// Слияния короткие (один `await meetingRepository.save`/`.meeting` внутри) — цена
+    /// полной сериализации всех встреч актора разом ничтожна, а корректность не зависит от
+    /// того, на какой ключ разошлись два события ДО слияния.
+    func serialized<T: Sendable>(_ body: @Sendable @escaping () async throws -> T) async throws -> T {
+        let previous = mergeTail
         // Task<T, Error> (обычный, «сырой» throws), не Task<Result<T, Error>, Never>: голый
         // `Error` не Sendable, Result<T, Error> с ним тоже не Sendable — Task этого от
         // Success (T) требует, но не от Failure (`Task<Success, Failure> where Success:
@@ -35,7 +41,7 @@ extension CalendarPortImpl {
             _ = await previous?.value
             return try await body()
         }
-        mergeTail[dedupKey] = Task { _ = try? await task.value }
+        mergeTail = Task { _ = try? await task.value }
         return try await task.value
     }
 
@@ -48,18 +54,15 @@ extension CalendarPortImpl {
     /// значением по умолчанию `nil`.
     @discardableResult
     func applyIncoming(payload: MeetingEventPayload) async throws -> Bool {
-        let provisional = try payload.assigningId(UUID())
-        let key = DedupKey.make(from: provisional)
-        return try await serialized(dedupKey: key) {
-            try await self.mergeIncoming(payload: payload, dedupKey: key)
+        try await serialized {
+            try await self.mergeIncoming(payload: payload)
         }
     }
 
-    private func mergeIncoming(payload: MeetingEventPayload, dedupKey: DedupKey?) async throws -> Bool {
-        var winner: MeetingRecord?
-        if let dedupKey {
-            winner = try await meetingRepository.meeting(dedupKey: dedupKey)
-        }
+    private func mergeIncoming(payload: MeetingEventPayload) async throws -> Bool {
+        let provisional = try payload.assigningId(UUID())
+        let dedupKey = DedupKey.make(from: provisional)
+        var winner = try await meetingRepository.meeting(dedupKey: dedupKey)
         if winner == nil {
             winner = try await meetingRepository.meeting(
                 sourceConnectorId: payload.sourceConnectorId, externalId: payload.externalId
@@ -192,7 +195,17 @@ extension CalendarPortImpl {
         return attendees
     }
 
+    /// К65 вход Б — источник теряется у многоисточниковой встречи. Инв. 11: идёт через ту
+    /// же общую цепочку `serialized`, что `applyIncoming` — эта операция тоже переустраивает
+    /// `sources`/`event` встречи, конкурентная гонка с `applyIncoming` того же дедуп-ключа
+    /// иначе возможна (возврат РП, приёмка #105, п. 2 — «все слияния», не только входящие).
     func applyDeletedExternalId(source: CalendarSourceId, externalId: String) async throws -> Bool {
+        try await serialized {
+            try await self.removeExternalId(source: source, externalId: externalId)
+        }
+    }
+
+    private func removeExternalId(source: CalendarSourceId, externalId: String) async throws -> Bool {
         guard let record = try await meetingRepository.meeting(
             sourceConnectorId: source.rawValue, externalId: externalId
         ) else { return false }
@@ -204,26 +217,30 @@ extension CalendarPortImpl {
         let remaining = record.sources.filter {
             !($0.sourceConnectorId == source.rawValue && $0.externalId == externalId)
         }
-        // Возврат РП (MEE-385, инв. 10 C-005): К65 вход Б — источник теряется у
-        // многоисточниковой встречи. Identity (sourceConnectorId/externalId/icalUid)
-        // ПЕРЕСЧИТЫВАЕТСЯ ВСЕГДА шагом 1 (наибольший lastModified среди оставшихся
-        // строк, тай-брейк — лексикографически меньший sourceConnectorId), даже когда
-        // ушедший источник был identity. Содержимое (шаги 2-3) пересчитывается тем же
-        // инвариантом 10 только если у оставшихся источников есть снимок (не решено этим
-        // коммитом — applyIncoming уже переносит payload, но эта ветвь до полного
-        // слияния пока не доведена; событие остаётся с прежним содержимым, identity —
-        // всегда свежая). Без пересчёта identity, если ушедший источник был identity,
+        // Возврат РП (MEE-385, инв. 10 C-005, приёмка #105 п. 1): identity
+        // (sourceConnectorId/externalId/icalUid) ПЕРЕСЧИТЫВАЕТСЯ ВСЕГДА шагом 1 (наибольший
+        // lastModified среди оставшихся строк, тай-брейк — лексикографически меньший
+        // sourceConnectorId), даже когда ушедший источник был identity. Содержимое (шаги
+        // 2-3) пересчитывается ТЕМ ЖЕ правилом — шагами 1-6 целиком (`Self.merge`), если
+        // хотя бы у одного из оставшихся источников есть снимок; если снимков не осталось
+        // ни у кого — правило инв. 10 замораживает содержимое, `recomputingIdentity` трогает
+        // только identity. Без пересчёта identity, если ушедший источник был identity,
         // `save` бросает constraintViolation: `sourcesIncludingOwnIdentity` (storage) не
         // находит identity `event` среди `remaining` и синтезировать её не вправе (инв. 31
         // C-010 v18 — синтез снимка собственной identity разрешён только при первом
         // сохранении с одним источником, не здесь).
-        let recomputedEvent = try Self.recomputingIdentity(of: record.event, remaining: remaining)
+        let recomputedEvent = try remaining.contains(where: { $0.payload != nil })
+            ? Self.merge(sources: remaining, id: record.event.id)
+            : Self.recomputingIdentity(of: record.event, remaining: remaining)
         try await meetingRepository.save(
             MeetingRecord(
                 event: recomputedEvent, dedupKey: DedupKey.make(from: recomputedEvent),
                 status: record.status, sources: remaining
             )
         )
+        if recomputedEvent != record.event {
+            emit(.upserted([recomputedEvent]))
+        }
         return false
     }
 
