@@ -65,16 +65,30 @@ final class JobQueueEngineSubmissionTests: XCTestCase {
     /// К52: `JobSubmission.standard` — таблица §4 по составу нагрузки, не по перечню типов.
     func test_k52_standardFillsDefaultsFromPayloadComposition() {
         let recordingId = UUID()
-        let cases: [(JobPayload, profileId: String?, priority: Int, maxAttempts: Int,
-                    ac: Bool, forbid: Bool, thermal: ThermalPressure)] = [
-            (.transcode(recordingId: recordingId), nil, 50, 3, false, true, .serious),
-            (.transcribe(recordingId: recordingId, profileId: "p", language: nil), "p", 30, 3, false, true, .fair),
-            (.diarize(recordingId: recordingId, profileId: "p"), "p", 20, 3, false, true, .fair),
-            (.attribute(transcriptId: UUID(), meetingId: nil), nil, 40, 3, false, false, .serious),
-            (.summarize(meetingId: UUID(), transcriptId: UUID(), profileId: "p"), "p", 10, 2, true, true, .fair)
+        let cases: [StandardDefaultsCase] = [
+            StandardDefaultsCase(
+                payload: .transcode(recordingId: recordingId), profileId: nil,
+                priority: 50, maxAttempts: 3, ac: false, forbid: true, thermal: .serious
+            ),
+            StandardDefaultsCase(
+                payload: .transcribe(recordingId: recordingId, profileId: "p", language: nil), profileId: "p",
+                priority: 30, maxAttempts: 3, ac: false, forbid: true, thermal: .fair
+            ),
+            StandardDefaultsCase(
+                payload: .diarize(recordingId: recordingId, profileId: "p"), profileId: "p",
+                priority: 20, maxAttempts: 3, ac: false, forbid: true, thermal: .fair
+            ),
+            StandardDefaultsCase(
+                payload: .attribute(transcriptId: UUID(), meetingId: nil), profileId: nil,
+                priority: 40, maxAttempts: 3, ac: false, forbid: false, thermal: .serious
+            ),
+            StandardDefaultsCase(
+                payload: .summarize(meetingId: UUID(), transcriptId: UUID(), profileId: "p"), profileId: "p",
+                priority: 10, maxAttempts: 2, ac: true, forbid: true, thermal: .fair
+            )
         ]
         for testCase in cases {
-            let submission = JobSubmission.standard(testCase.0, runAfter: Date(timeIntervalSince1970: 0))
+            let submission = JobSubmission.standard(testCase.payload, runAfter: Date(timeIntervalSince1970: 0))
             XCTAssertEqual(submission.conditions.requiresProfileReady, testCase.profileId)
             XCTAssertEqual(submission.priority, testCase.priority)
             XCTAssertEqual(submission.maxAttempts, testCase.maxAttempts)
@@ -82,5 +96,16 @@ final class JobQueueEngineSubmissionTests: XCTestCase {
             XCTAssertEqual(submission.conditions.forbidWhileRecording, testCase.forbid)
             XCTAssertEqual(submission.conditions.maxThermalPressure, testCase.thermal)
         }
+    }
+
+    /// Один вход таблицы §4 для К52 — struct, а не кортеж: `large_tuple` разрешает два члена.
+    private struct StandardDefaultsCase {
+        let payload: JobPayload
+        let profileId: String?
+        let priority: Int
+        let maxAttempts: Int
+        let ac: Bool
+        let forbid: Bool
+        let thermal: ThermalPressure
     }
 }

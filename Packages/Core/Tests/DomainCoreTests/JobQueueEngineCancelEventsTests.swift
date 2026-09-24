@@ -3,26 +3,8 @@
 import XCTest
 import DomainCore
 import DomainTestKit
-#if canImport(Glibc)
-import Glibc
-#else
-import Darwin
-#endif
 
 final class JobQueueEngineCancelEventsTests: XCTestCase {
-
-    /// Диагностика зависаний CI (РП по прогону #73): вывод `swift test` в трубу
-    /// (`ci.yml`: `| tee`) полностью буферизуется — при зависании лог показывает застрявшим
-    /// более РАННИЙ тест, чем настоящий (буфер копится и не доходит до `tee`). Этот класс —
-    /// первый из `JobQueueEngine*Tests` по алфавиту; снятие буферизации здесь делает
-    /// дальнейший лог достоверным. Временное диагностическое средство — снимается вместе с
-    /// находкой настоящего места. `_IONBF` — небуферизованный вывод, `setvbuf` на glibc
-    /// принимает смену режима и посреди процесса, несмотря на не вполне строгую по C89
-    /// семантику «до первого ввода-вывода».
-    override class func setUp() {
-        super.setUp()
-        setvbuf(stdout, nil, _IONBF, 0)
-    }
 
     /// К64: `cancel` по пяти статусам.
     func test_k64_cancelBehavesPerStatus() async throws {

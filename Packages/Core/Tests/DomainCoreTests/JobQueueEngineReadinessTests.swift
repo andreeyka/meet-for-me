@@ -12,86 +12,88 @@ import DomainTestKit
 
 final class JobQueueEngineReadinessTests: XCTestCase {
 
-    /// К53: готовность — конъюнкция шести клауз; снятие любой одной её ломает, седьмой вход
-    /// (все выполнены) исполняется.
-    func test_k53_readinessIsAConjunctionOfSixClauses() async throws {
-        // (i) status != .pending — cancelled её исключает.
-        do {
-            let rig = JobQueueTestRig()
-            let handler = FakeJobHandler(type: .transcode)
-            try await rig.queue.register(handler: handler)
-            let id = try await rig.queue.submit(makeSubmission())
-            try await rig.queue.cancel(jobId: id)
-            await rig.queue.start()
-            XCTAssertEqual(handler.runCallCount, 0, "cancelled задача не исполняется")
-        }
-        // (ii) runAfter > now.
-        do {
-            let rig = JobQueueTestRig()
-            let handler = FakeJobHandler(type: .transcode)
-            try await rig.queue.register(handler: handler)
-            _ = try await rig.queue.submit(makeSubmission(runAfter: rig.clock.now().addingTimeInterval(3_600)))
-            await rig.queue.start()
-            XCTAssertEqual(handler.runCallCount, 0)
-        }
-        // (iii) обработчик типа не зарегистрирован.
-        do {
-            let rig = JobQueueTestRig()
-            let id = try await rig.queue.submit(makeSubmission())
-            await rig.queue.start()
-            let job = try await rig.repository.job(id: id)
-            XCTAssertEqual(job?.status, .pending)
-        }
-        // (iv) превышен maxConcurrent ТИПА — два transcode при пределе типа 1.
-        do {
-            let rig = JobQueueTestRig(globalConcurrencyLimit: 2, perTypeConcurrencyLimit: 1)
-            let handler = FakeJobHandler(type: .transcode)
-            handler.workLong(seconds: 0.3)
-            try await rig.queue.register(handler: handler)
-            _ = try await rig.queue.submit(makeSubmission(priority: 10))
-            let secondId = try await rig.queue.submit(makeSubmission(priority: 5))
-            await rig.queue.start()
-            let second = try await rig.repository.job(id: secondId)
-            XCTAssertEqual(second?.status, .pending, "предел типа 1 уже занят первой задачей")
-        }
-        // (v) превышен ГЛОБАЛЬНЫЙ предел — разные типы, предел 1.
-        do {
-            let rig = JobQueueTestRig(globalConcurrencyLimit: 1, perTypeConcurrencyLimit: 1)
-            let transcodeHandler = FakeJobHandler(type: .transcode)
-            transcodeHandler.workLong(seconds: 0.3)
-            try await rig.queue.register(handler: transcodeHandler)
-            try await rig.queue.register(handler: FakeJobHandler(type: .attribute))
-            _ = try await rig.queue.submit(makeSubmission(priority: 10))
-            let secondId = try await rig.queue.submit(makeSubmission(
-                payload: .attribute(transcriptId: UUID(), meetingId: nil), priority: 5
-            ))
-            await rig.queue.start()
-            let second = try await rig.repository.job(id: secondId)
-            XCTAssertEqual(second?.status, .pending, "глобальный предел 1 уже занят")
-        }
-        // (vi) одно из четырёх условий JobConditions не выполнено — requiresACPower на battery.
-        do {
-            let rig = JobQueueTestRig(powerSnapshot: PowerSnapshot(
-                source: .battery, batteryFraction: 0.5, isLowPowerModeEnabled: false,
-                thermalPressure: .nominal, checkedAt: Date(timeIntervalSince1970: 0)
-            ))
-            try await rig.queue.register(handler: FakeJobHandler(type: .transcode))
-            let id = try await rig.queue.submit(makeSubmission(requiresACPower: true))
-            await rig.queue.start()
-            let job = try await rig.repository.job(id: id)
-            XCTAssertEqual(job?.status, .pending)
-        }
-        // (vii) седьмой вход — всё выполнено.
-        do {
-            let rig = JobQueueTestRig()
-            let handler = FakeJobHandler(type: .transcode)
-            handler.workLong(seconds: 0.3)
-            try await rig.queue.register(handler: handler)
-            let id = try await rig.queue.submit(makeSubmission())
-            await rig.queue.start()
-            let job = try await rig.repository.job(id: id)
-            XCTAssertEqual(job?.status, .running)
-        }
+    /// К53 (i): status != .pending — cancelled её исключает.
+    func test_k53a_cancelledStatusExcludesReadiness() async throws {
+        let rig = JobQueueTestRig()
+        let handler = FakeJobHandler(type: .transcode)
+        try await rig.queue.register(handler: handler)
+        let id = try await rig.queue.submit(makeSubmission())
+        try await rig.queue.cancel(jobId: id)
+        await rig.queue.start()
+        XCTAssertEqual(handler.runCallCount, 0, "cancelled задача не исполняется")
+    }
+
+    /// К53 (ii): runAfter > now.
+    func test_k53b_runAfterInTheFutureExcludesReadiness() async throws {
+        let rig = JobQueueTestRig()
+        let handler = FakeJobHandler(type: .transcode)
+        try await rig.queue.register(handler: handler)
+        _ = try await rig.queue.submit(makeSubmission(runAfter: rig.clock.now().addingTimeInterval(3_600)))
+        await rig.queue.start()
+        XCTAssertEqual(handler.runCallCount, 0)
+    }
+
+    /// К53 (iii): обработчик типа не зарегистрирован.
+    func test_k53c_missingHandlerExcludesReadiness() async throws {
+        let rig = JobQueueTestRig()
+        let id = try await rig.queue.submit(makeSubmission())
+        await rig.queue.start()
+        let job = try await rig.repository.job(id: id)
+        XCTAssertEqual(job?.status, .pending)
+    }
+
+    /// К53 (iv): превышен maxConcurrent ТИПА — два transcode при пределе типа 1.
+    func test_k53d_perTypeConcurrencyLimitExcludesReadiness() async throws {
+        let rig = JobQueueTestRig(globalConcurrencyLimit: 2, perTypeConcurrencyLimit: 1)
+        let handler = FakeJobHandler(type: .transcode)
+        handler.workLong(seconds: 0.3)
+        try await rig.queue.register(handler: handler)
+        _ = try await rig.queue.submit(makeSubmission(priority: 10))
+        let secondId = try await rig.queue.submit(makeSubmission(priority: 5))
+        await rig.queue.start()
+        let second = try await rig.repository.job(id: secondId)
+        XCTAssertEqual(second?.status, .pending, "предел типа 1 уже занят первой задачей")
+    }
+
+    /// К53 (v): превышен ГЛОБАЛЬНЫЙ предел — разные типы, предел 1.
+    func test_k53e_globalConcurrencyLimitExcludesReadiness() async throws {
+        let rig = JobQueueTestRig(globalConcurrencyLimit: 1, perTypeConcurrencyLimit: 1)
+        let transcodeHandler = FakeJobHandler(type: .transcode)
+        transcodeHandler.workLong(seconds: 0.3)
+        try await rig.queue.register(handler: transcodeHandler)
+        try await rig.queue.register(handler: FakeJobHandler(type: .attribute))
+        _ = try await rig.queue.submit(makeSubmission(priority: 10))
+        let secondId = try await rig.queue.submit(makeSubmission(
+            payload: .attribute(transcriptId: UUID(), meetingId: nil), priority: 5
+        ))
+        await rig.queue.start()
+        let second = try await rig.repository.job(id: secondId)
+        XCTAssertEqual(second?.status, .pending, "глобальный предел 1 уже занят")
+    }
+
+    /// К53 (vi): одно из четырёх условий JobConditions не выполнено — requiresACPower на battery.
+    func test_k53f_unmetJobConditionExcludesReadiness() async throws {
+        let rig = JobQueueTestRig(powerSnapshot: PowerSnapshot(
+            source: .battery, batteryFraction: 0.5, isLowPowerModeEnabled: false,
+            thermalPressure: .nominal, checkedAt: Date(timeIntervalSince1970: 0)
+        ))
+        try await rig.queue.register(handler: FakeJobHandler(type: .transcode))
+        let id = try await rig.queue.submit(makeSubmission(requiresACPower: true))
+        await rig.queue.start()
+        let job = try await rig.repository.job(id: id)
+        XCTAssertEqual(job?.status, .pending)
+    }
+
+    /// К53 (vii): седьмой вход — все шесть клауз выполнены — исполняется.
+    func test_k53g_allSixClausesSatisfiedIsReady() async throws {
+        let rig = JobQueueTestRig()
+        let handler = FakeJobHandler(type: .transcode)
+        handler.workLong(seconds: 0.3)
+        try await rig.queue.register(handler: handler)
+        let id = try await rig.queue.submit(makeSubmission())
+        await rig.queue.start()
+        let job = try await rig.repository.job(id: id)
+        XCTAssertEqual(job?.status, .running)
     }
 
     /// К54: невыполненное условие не расходует попытку, сколько бы пересмотров ни прошло.
