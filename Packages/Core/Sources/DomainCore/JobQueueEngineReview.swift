@@ -21,7 +21,7 @@ extension JobQueueEngine {
         await performRevisitSweep()
     }
 
-    /// MEE-370: настоящий заход (`reclaimExpiredLeases` + цикл `claimNext`) идёт не более
+    /// MEE-363: настоящий заход (`reclaimExpiredLeases` + цикл `claimNext`) идёт не более
     /// чем один одновременно (`isRevisitLoopRunning`). Вызов, пришедшийся на время, пока
     /// заход уже идёт, не заводит СОБСТВЕННЫЙ параллельный заход — тот гонялся бы за тем же
     /// `claimNext` одновременно с первым: оба видят одну и ту же строку то занятой другим,
@@ -29,15 +29,17 @@ extension JobQueueEngine {
     /// по `noHandler` кандидат снова оказывался `running`, потому что пересмотр, заведённый
     /// завершением соседней задачи, гонялся за тем же `claimNext` одновременно с ещё не
     /// домотавшим свой `while` пересмотром, запущенным `start()`) — вместо параллельного
-    /// захода такой вызов лишь оставляет заявку `revisitPassRequested`.
+    /// захода такой вызов лишь оставляет заявку `revisitPassRequested` и возвращается
+    /// немедленно, СВОЕГО захода не проводя вовсе.
     ///
-    /// Заявка исполняется ОТДЕЛЬНОЙ `Task`, а не продолжением этого же вызова: этот вызов
-    /// обязан вернуться, домотав СВОЙ заход, — вызывающая сторона (`start()`, `submit()`)
-    /// ждёт ровно ОДИН заход, свой, а не цепочку из всех, что успели попроситься следом,
-    /// пока он шёл (иначе число и состав событий одного внешнего вызова перестало бы быть
-    /// предсказуемым — второй заход, если он понадобится, наблюдаем через `waitUntilIdle()`,
-    /// который эту заявку и её `Task` дожидается через `activeRevisitPasses`, см. довод
-    /// там же).
+    /// Заявка, оставленная ПОКА этот вызов вёл СВОЙ заход, исполняется ОТДЕЛЬНОЙ `Task`, а
+    /// не продолжением этого же вызова: этот вызов обязан вернуться, домотав ровно один заход
+    /// (свой) — вызывающая сторона (`start()`, `submit()`) не ждёт цепочку из всех заходов,
+    /// что успели попроситься следом, пока он шёл (иначе число и состав событий одного
+    /// внешнего вызова перестало бы быть предсказуемым — второй заход, если он понадобится,
+    /// наблюдаем через `waitUntilIdle()`, который эту заявку и её `Task` дожидается через
+    /// `activeRevisitPasses`, см. довод там же). У вызова, заставшего мьютекс уже занятым
+    /// (первый абзац), ни СВОЕГО, ни чужого захода нет вовсе — он только оставляет заявку.
     func performRevisitSweep() async {
         guard !isRevisitLoopRunning else {
             revisitPassRequested = true
@@ -47,13 +49,29 @@ extension JobQueueEngine {
         await runOneRevisitSweep()
         isRevisitLoopRunning = false
 
-        guard revisitPassRequested, isRunning else { return }
+        // Заявка снимается ДО проверки isRunning: stop() посреди захода не должен оставить
+        // её висеть на следующий start() — тот увидел бы её и завёл лишний, никем не
+        // просивший пересмотр (найдено РП на приёмке MEE-363, PR #91).
+        let requested = revisitPassRequested
         revisitPassRequested = false
+        guard requested, isRunning else { return }
         activeRevisitPasses += 1
         Task { [weak self] in
             guard let self else { return }
             await self.fulfillRequestedRevisitSweep()
         }
+    }
+
+    /// Только для теста MEE-375 (`@testable import`): `revisitPassRequested` — простое
+    /// хранимое свойство актора, извне присвоить его напрямую нельзя (мутация актора
+    /// разрешена только изнутри) — этот метод заводит заявку и зовёт `performRevisitSweep()`
+    /// одним изолированным вызовом, воспроизводя детерминированно то, что в проде — гонка
+    /// (см. довод у самого теста).
+    func performRevisitSweepForTest(withPendingRequest: Bool) async {
+        if withPendingRequest {
+            revisitPassRequested = true
+        }
+        await performRevisitSweep()
     }
 
     /// Обязательство, заведённое `performRevisitSweep()` для заявки `revisitPassRequested`,

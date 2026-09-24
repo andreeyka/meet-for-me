@@ -94,6 +94,19 @@ public final class FakePowerPort: PowerPort, @unchecked Sendable {
         self.log = log
     }
 
+    /// MEE-375: без этого подписчик `events()`, не дождавшийся явного `finishEvents()`
+    /// (обычный случай — тест `JobQueueEngine`, зовущий `start()`/`stop()`, ни разу порт не
+    /// трогает напрямую), навсегда виснет в `for await` — `Task.cancel()` в `stop()`/`deinit`
+    /// `JobQueueEngine` итерацию `AsyncStream` без явного `finish()` не завершает (см. довод
+    /// там же). Раз этот фейк уже уходит — эмитировать в него всё равно больше некому, и
+    /// закрыть поток здесь так же законно, как явный `finishEvents()` теста. Сотни таких
+    /// повисших `for await` от тестов без `finishEvents()`, копящихся за один прогон `swift
+    /// test`, — задокументированная причина зависаний планировщика Swift Concurrency
+    /// (`JobQueueEngine.swift`, `deinit`); этот фейк — единственный источник таких `Task`.
+    deinit {
+        finishEvents()
+    }
+
     /// Журнал, в который пишет этот фейк. Тот же объект, что передали в инициализатор.
     public var callLog: PortCallLog { log }
 
