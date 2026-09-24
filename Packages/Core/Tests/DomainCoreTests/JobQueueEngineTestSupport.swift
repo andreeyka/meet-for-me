@@ -102,3 +102,67 @@ func makeRunningRow(
         lastError: lastError, createdAt: now, updatedAt: now
     )
 }
+
+/// MEE-377 (аудит, возврат РП на приёмке #93): гонка `iterator.next()` с дедлайном — раньше
+/// вызовы `next()` в тестах `JobQueueEngine` (`drainExactly`, К69) шли напрямую, «БЕЗ
+/// таймаута нарочно», доводом «счётчик обязан ровно совпадать» (число событий, которое
+/// сценарий действительно публикует, а не приблизительная граница). Расхождение
+/// (реализация публикует МЕНЬШЕ событий, чем ждёт счётчик) тонуло в таймауте `swift test`
+/// (300 с, MEE-329) без единого слова о причине — `AsyncStream`, которую никто не
+/// `finish()`ит, на лишний `next()` не вернёт `nil`, зависнет НАВСЕГДА. 10 секунд — с
+/// большим запасом сверх любого реального сценария (сравнить нечего: без расхождения
+/// событие уже лежит в буфере к моменту вызова, `JobEventBroadcaster.publish` — синхронный
+/// `continuation.yield`).
+///
+/// Гонка — НЕструктурная (голые `Task`, не `TaskGroup`): `withTaskGroup` на выходе сам ждёт
+/// каждую дочернюю задачу до конца, и повисшая `next()` унесла бы с собой тот же дедлайн,
+/// который призван её поймать. Копия `iterator`, переданная в свою `Task`, — тот же
+/// `AsyncStream.AsyncIterator`, что и снаружи: обе читают из одного общего буфера потока,
+/// второй параллельный потребитель не заводится (буфер — разделяемое хранилище позади
+/// итератора, не сам итератор).
+func nextOrFail(
+    _ iterator: AsyncStream<JobEvent>.AsyncIterator, seconds: UInt64 = 10,
+    file: StaticString = #filePath, line: UInt = #line
+) async -> JobEvent? {
+    let outcome = DrainRaceOutcome()
+    Task {
+        var iterator = iterator
+        let event = await iterator.next()
+        await outcome.resolve(.some(event))
+    }
+    Task {
+        try? await Task.sleep(nanoseconds: seconds * 1_000_000_000)
+        await outcome.resolve(.none)
+    }
+    guard let event = await outcome.wait() else {
+        XCTFail(
+            "iterator.next() не вернул событие за \(seconds) с — расхождение числа " +
+                "публикуемых событий (аудит MEE-377), а не обычное падение",
+            file: file, line: line
+        )
+        return nil
+    }
+    return event
+}
+
+/// Разрешение гонки `nextOrFail` — первое из двух `resolve` (настоящий `next()` либо
+/// дедлайн) побеждает, второе не действует; ждущие `wait()` будятся один раз.
+private actor DrainRaceOutcome {
+    private var value: JobEvent??
+    private var waiters: [CheckedContinuation<JobEvent??, Never>] = []
+
+    func resolve(_ newValue: JobEvent??) {
+        guard value == nil else { return }
+        value = newValue
+        let pending = waiters
+        waiters = []
+        for waiter in pending {
+            waiter.resume(returning: newValue)
+        }
+    }
+
+    func wait() async -> JobEvent?? {
+        if value != nil { return value }
+        return await withCheckedContinuation { waiters.append($0) }
+    }
+}

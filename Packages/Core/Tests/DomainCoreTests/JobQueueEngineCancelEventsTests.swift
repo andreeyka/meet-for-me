@@ -292,7 +292,7 @@ final class JobQueueEngineCancelEventsTests: XCTestCase {
         handler.setProgressSteps([-0.1, 0, 0.5, 1, 1.1])
         try await rig.queue.register(handler: handler)
         let stream = rig.queue.events()
-        var iterator = stream.makeAsyncIterator()
+        let iterator = stream.makeAsyncIterator()
 
         _ = try await rig.queue.submit(makeSubmission())
         await rig.queue.start()
@@ -300,7 +300,7 @@ final class JobQueueEngineCancelEventsTests: XCTestCase {
 
         var fractions: [Double] = []
         for _ in 0..<7 {
-            guard case .progressed(_, let fraction) = await iterator.next() else { continue }
+            guard case .progressed(_, let fraction) = await nextOrFail(iterator) else { continue }
             fractions.append(fraction)
         }
         XCTAssertEqual(fractions, [0, 0, 0.5, 1, 1])
@@ -310,19 +310,25 @@ final class JobQueueEngineCancelEventsTests: XCTestCase {
     // MARK: - Оснастка
 
     /// Читает РОВНО `count` событий — весь объявленный пакет сценария, а не «до первого
-    /// подходящего» (возврат РП по MEE-350, К68). Без таймаута НАРОЧНО: счётчик — не
-    /// приблизительная граница, а число событий, которое сценарий действительно публикует
-    /// (см. вызовы в К68) — после `waitUntilIdle()` они уже все лежат в буфере
-    /// `AsyncStream` (`JobEventBroadcaster.publish` — синхронный `continuation.yield`), и
-    /// лишнего `next()` сверх этого числа здесь нет. `AsyncStream`, которую никто не
-    /// `finish()`ит, на лишний `next()` не вернёт `nil` — виснет навсегда, поэтому счётчик
-    /// обязан РОВНО совпадать, а не превышать его «на всякий случай».
+    /// подходящего» (возврат РП по MEE-350, К68). Счётчик — не приблизительная граница, а
+    /// число событий, которое сценарий действительно публикует (см. вызовы в К68) — после
+    /// `waitUntilIdle()` они уже все лежат в буфере `AsyncStream` (`JobEventBroadcaster.
+    /// publish` — синхронный `continuation.yield`), и лишнего `next()` сверх этого числа
+    /// здесь нет.
+    ///
+    /// MEE-377 (аудит, возврат РП на приёмке #93): раньше — БЕЗ дедлайна нарочно, тем же
+    /// доводом «счётчик обязан ровно совпадать». Расхождение (реализация публикует МЕНЬШЕ
+    /// событий, чем ждёт счётчик) тонуло тогда в таймауте `swift test` (300 с, MEE-329) без
+    /// единого слова о причине — `AsyncStream`, которую никто не `finish()`ит, на лишний
+    /// `next()` не вернёт `nil`, а зависнет НАВСЕГДА. `nextOrFail` — тот же счётчик, но с
+    /// явным предохранителем: расхождение теперь падает `XCTFail`'ом с именем места, а не
+    /// зависанием без диагностики.
     private func drainExactly(
         _ iterator: inout AsyncStream<JobEvent>.AsyncIterator, count: Int
     ) async -> [JobEvent] {
         var collected: [JobEvent] = []
         for _ in 0..<count {
-            guard let event = await iterator.next() else { break }
+            guard let event = await nextOrFail(iterator) else { break }
             collected.append(event)
         }
         return collected

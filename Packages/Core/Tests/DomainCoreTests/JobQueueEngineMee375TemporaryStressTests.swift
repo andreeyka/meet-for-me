@@ -4,17 +4,23 @@
 //  за 250 строк без комментариев/пустых — тот же довод, что уже развёл `JobQueueEngineReview
 //  .swift`/`Lifecycle.swift`, здесь применён к тестовому файлу).
 //
-//  РП на приёмке #93 (прогон 36012909776) увидел зависание на 300 с (лимит MEE-329) на ОБОИХ
-//  работах CI, в местах, не относящихся к диффу MEE-375, и предположил незакрытое
-//  обязательство `activeRevisitPasses`/`isRevisitLoopRunning` после правки «снять
-//  revisitPassRequested до проверки isRunning» (`JobQueueEngineReview.swift`). Каждая ветка
-//  выхода `performRevisitSweep()`/`fulfillRequestedRevisitSweep()`/`runRevisitPass()`
+//  РП на приёмке #93 дважды видел зависание на 300 с (лимит MEE-329) на ОБЕИХ работах CI, в
+//  местах, не относящихся к диффу MEE-375 (InMemoryTranscriptRepositoryTests, DetectorTests,
+//  IntegerReadingTests — три разных, друг с другом не связанных места за два прогона). Каждая
+//  ветка выхода `performRevisitSweep()`/`fulfillRequestedRevisitSweep()`/`runRevisitPass()`
 //  перепроверена вручную (компилятора на этой машине нет) — на каждый `+= 1` нашёлся свой
-//  `-= 1` (`defer` либо парная ветка `guard`). Этот тест гоняет ровно сценарий
+//  `-= 1`. Найденный и уже исправленный корень — `FakePowerPort.events()`, не дождавшийся
+//  `finishEvents()`, вешает `for await` НАВСЕГДА (см. `FakePowerPort.swift`, `deinit`).
+//  Аудит MEE-377 добавил вторую, независимую причину того же симптома «зависание вместо
+//  падения»: `iterator.next()` без дедлайна на той же `AsyncStream` — см. `nextOrFail`
+//  (`JobQueueEngineTestSupport.swift`), которым этот тест теперь тоже пользуется вместо
+//  голого `next()`.
+//
+//  Этот тест гоняет ровно сценарий
 //  `test_mee375_stopClearsPendingRevisitRequestSoNextStartDoesNotDoubleBlock` 50 раз подряд
 //  со свежим `rig` на каждом повторе: недетерминированная гонка/утечка счётчика уронила бы
-//  один из 50 либо привела бы к зависанию самого шага — 50 быстрых зелёных повторов эту
-//  гипотезу закрывают для НОВОГО кода этой правки.
+//  один из 50 (или упала бы `XCTFail` от `nextOrFail`, а не зависла) — 50 быстрых зелёных
+//  повторов эту гипотезу закрывают для НОВОГО кода этой правки.
 
 import XCTest
 @testable import DomainCore
@@ -29,11 +35,11 @@ final class JobQueueEngineMee375TemporaryStressTests: XCTestCase {
                 payload: .summarize(meetingId: UUID(), transcriptId: UUID(), profileId: "p")
             ))
             let stream = rig.queue.events()
-            var iterator = stream.makeAsyncIterator()
-            _ = await iterator.next()   // submitted — не предмет этого теста
+            let iterator = stream.makeAsyncIterator()
+            _ = await nextOrFail(iterator)   // submitted — не предмет этого теста
 
             await rig.queue.start()
-            _ = await iterator.next()   // blocked(.noHandler) обычного захода
+            _ = await nextOrFail(iterator)   // blocked(.noHandler) обычного захода
             await rig.queue.stop()
 
             await rig.queue.performRevisitSweepForTest(withPendingRequest: true)
@@ -41,7 +47,7 @@ final class JobQueueEngineMee375TemporaryStressTests: XCTestCase {
             XCTAssertFalse(stillRequested, "повтор \(iteration): заявка обязана сняться")
 
             await rig.queue.start()
-            let afterRestart = await iterator.next()
+            let afterRestart = await nextOrFail(iterator)
             XCTAssertEqual(
                 afterRestart, .blocked(jobId: summarizeId, type: .summarize, reason: .noHandler),
                 "повтор \(iteration): ровно один blocked, не два"
