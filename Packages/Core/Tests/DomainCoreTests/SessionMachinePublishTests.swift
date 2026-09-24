@@ -120,6 +120,19 @@ final class SessionMachinePublishTests: XCTestCase {
     ///
     /// Потеря решения на этом векторе ЗАКОННА: контракт назвал границу окна точно, и пункт
     /// проверяет границу, а не отсутствие окна.
+    ///
+    /// MEE-378 (аудит MEE-377) переспросил эту паузу как потенциально угаданную — довод здесь
+    /// именно такой намеренный случай, а не тот. `bound` — не оценка «сколько подождать,
+    /// чтобы вероятно успело», а сама проверяемая ВЕЛИЧИНА: `setStatus` зависшего стенда
+    /// повешен на 3600 реальных секунд (`stand.meetings.hang`), так что «не вернулась за
+    /// bound» истинно с огромным запасом при ЛЮБОМ дрожании раннера — задержка увеличивает
+    /// запас, а не риск ложного падения. Положительный контроль (`control`/`controlTask`
+    /// выше) обратным образом доказывает, что тот же самый `bound` — не завышенная граница,
+    /// маскирующая иную поломку: без искусственного зависания та же команда укладывается в
+    /// него с запасом. Заменить фиксированную паузу continuation-сигналом «всё ещё
+    /// приостановлено» здесь нечем — единственный сигнал, который дала бы такая continuation
+    /// («операция вернулась»), это ровно то событие, отсутствие которого пункт проверяет;
+    /// ждать его наступления значило бы дождаться исхода, обратного самому смыслу вектора.
     func test_k81_iii_theCommandDoesNotReturnWhileTheWriteHasNotReturned() async throws {
         let bound: UInt64 = 300_000_000  // 0,3 с
 
@@ -164,6 +177,35 @@ final class SessionMachinePublishTests: XCTestCase {
             "и решение действительно не записано — человек подтверждения не получил"
         )
         hanging.cancel()
+    }
+
+    /// Временный тест MEE-378 — снимается перед приёмкой (тот же приём, что
+    /// `test_mee363_temporary_k67RepeatedFiftyTimes` перед приёмкой MEE-363): гоняет ровно
+    /// сценарий `test_k81_iii_...` выше (вектор, без контроля — тот проверен отдельно и не
+    /// является предметом паузы) 50 раз подряд, чтобы подтвердить нулевую нестабильность паузы
+    /// `bound`, оставленной намеренно (см. довод у самого теста).
+    func test_mee378_temporary_k81iiiBoundRepeatedFiftyTimes() async throws {
+        for iteration in 0..<50 {
+            let bound: UInt64 = 300_000_000
+            let stand = try bench()
+            let event = try SessionMachineFixtures.event()
+            stand.seed(event)
+            await stand.machine.tick(now: moment.addingTimeInterval(-900))
+            stand.meetings.hang(on: .setStatus, seconds: 3600)
+
+            let latch = Latch()
+            let machine = stand.machine
+            let meeting = event.id
+            let when = moment.addingTimeInterval(-880)
+            let hanging = Task {
+                try? await machine.skip(meetingId: meeting, now: when)
+                await latch.close()
+            }
+            try await Task.sleep(nanoseconds: bound)
+            let probe = await latch.isClosed
+            XCTAssertFalse(probe, "повтор \(iteration): команда управления не вернула")
+            hanging.cancel()
+        }
     }
 
     // MARK: - К82 (инв. 21)
