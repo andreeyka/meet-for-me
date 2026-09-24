@@ -92,7 +92,12 @@ extension SchemaMigrationTests {
             ExpectedColumn("external_id", "TEXT", notNull: true),
             ExpectedColumn("meeting_id", "TEXT", notNull: true),
             ExpectedColumn("ical_uid", "TEXT"),
-            ExpectedColumn("last_modified", "INTEGER", notNull: true)
+            ExpectedColumn("last_modified", "INTEGER", notNull: true),
+            // IR-126 (MEE-372), C-010 v18, миграция v1-slice2 (MEE-384): колонка добавлена
+            // ПОСЛЕ v1-slice1 — не в тексте C-010 v7 §3, который этот файл иначе переписывает
+            // дословно, а в самой БД, которую К3 в итоге и читает (обе миграции применены
+            // к моменту запроса, `StorageTestSupport.makeDatabase()` гоняет полный `migrator`).
+            ExpectedColumn("raw_payload_json", "TEXT")
         ]),
         ("attendees", [
             ExpectedColumn("meeting_id", "TEXT", notNull: true),

@@ -60,17 +60,27 @@ extension GRDBMeetingRepository {
         let rows = try Row.fetchAll(
             db,
             sql: """
-            SELECT source_connector_id, external_id, ical_uid, last_modified
+            SELECT source_connector_id, external_id, ical_uid, last_modified, raw_payload_json
             FROM meeting_sources WHERE meeting_id = ? ORDER BY last_modified DESC, source_connector_id, external_id
             """,
             arguments: [meetingId]
         )
-        return rows.map { row in
-            MeetingSource(
+        // IR-126 (MEE-372), C-010 v18: raw_payload_json NULL ⇔ payload nil; непустая
+        // колонка читается через DomainJSON (StorageJSON.decodeFromText), тем же путём,
+        // что meetings.dedup_key.
+        return try rows.map { row in
+            let payloadText: String? = row["raw_payload_json"]
+            let payload = try payloadText.map {
+                try StorageJSON.decodeFromText(
+                    MeetingEventPayload.self, from: $0, entity: StorageEntity.meeting, id: meetingId
+                )
+            }
+            return MeetingSource(
                 sourceConnectorId: row["source_connector_id"],
                 externalId: row["external_id"],
                 icalUid: row["ical_uid"],
-                lastModified: EpochTime.date(fromSeconds: row["last_modified"])
+                lastModified: EpochTime.date(fromSeconds: row["last_modified"]),
+                payload: payload
             )
         }
     }

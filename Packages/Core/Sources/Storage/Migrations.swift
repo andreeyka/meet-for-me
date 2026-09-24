@@ -20,6 +20,17 @@ enum StorageMigrations {
         migrator.registerMigration("v1-slice1") { db in
             try db.execute(sql: schemaSQL)
         }
+        // IR-126 (MEE-372), C-010 v18, MEE-384: снимок MeetingEventPayload у каждого
+        // источника (инвариант 31) и сброс курсора коннекторов, чтобы следующий синк
+        // перечитал события заново и заполнил новую колонку у уже существующих строк —
+        // без этого шага старые meeting_sources остались бы без снимка навсегда, а
+        // курсор coннектора продолжил бы синк с прежней точки, ни разу не увидев их.
+        // Правка выпущенной миграции запрещена контрактом (§4) — это НОВАЯ миграция,
+        // v1-slice1 выше не тронута ни строкой.
+        migrator.registerMigration("v1-slice2") { db in
+            try db.execute(sql: "ALTER TABLE meeting_sources ADD COLUMN raw_payload_json TEXT")
+            try db.execute(sql: "UPDATE connectors SET cursor = NULL")
+        }
         return migrator
     }
 

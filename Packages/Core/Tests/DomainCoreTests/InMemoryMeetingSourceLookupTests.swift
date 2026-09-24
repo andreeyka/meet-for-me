@@ -73,14 +73,19 @@ final class InMemoryMeetingSourceLookupTests: XCTestCase {
             lastModified: Date(timeIntervalSince1970: 1_789_041_600)
         )
         let eventA = MeetingEventFixtures.oneOnOneZoom
+        // Своя идентичность — ДОПОЛНИТЕЛЬНЫМ источником рядом с оспариваемой парой: IR-126
+        // (MEE-372), C-010 v18, инвариант 31 — непустой declared без собственной
+        // идентичности события сам по себе бросает constraintViolation
+        // (sourcesIncludingOwnIdentity, MEE-384), а этот тест целится именно в клэш ПАРЫ
+        // между встречами, не в эту более раннюю границу.
         try await repositories.meetings.save(MeetingRecord(
-            event: eventA, dedupKey: nil, status: .scheduled, sources: [source]
+            event: eventA, dedupKey: nil, status: .scheduled, sources: [source, Self.ownSource(of: eventA)]
         ))
 
         let eventB = MeetingEventFixtures.withoutConference
         do {
             try await repositories.meetings.save(MeetingRecord(
-                event: eventB, dedupKey: nil, status: .scheduled, sources: [source]
+                event: eventB, dedupKey: nil, status: .scheduled, sources: [source, Self.ownSource(of: eventB)]
             ))
             XCTFail("ожидался constraintViolation — пара уже занята другой встречей")
         } catch StorageError.constraintViolation {
@@ -106,13 +111,88 @@ final class InMemoryMeetingSourceLookupTests: XCTestCase {
         )
         let event = MeetingEventFixtures.oneOnOneZoom
         try await repositories.meetings.save(MeetingRecord(
-            event: event, dedupKey: nil, status: .scheduled, sources: [source]
+            event: event, dedupKey: nil, status: .scheduled, sources: [source, Self.ownSource(of: event)]
         ))
         try await repositories.meetings.save(MeetingRecord(
-            event: event, dedupKey: nil, status: .armed, sources: [source]
+            event: event, dedupKey: nil, status: .armed, sources: [source, Self.ownSource(of: event)]
         ))
 
         let updated = try await repositories.meetings.meeting(id: event.id)
         XCTAssertEqual(updated?.status, .armed, "второй save той же встречи прошёл и обновил статус")
+    }
+
+    // MARK: - Инвариант 31 (C-010 v18, IR-126/MEE-372) — фейк ведёт себя так же (MEE-384, п. 6)
+
+    /// `payload` дословно, `NULL` ⇔ `nil` — тот же вход, что у GRDB
+    /// (`test_inv31_payloadRoundTripsSaveAndReadVerbatim`).
+    func test_inv31_payloadRoundTripsSaveAndReadVerbatim() async throws {
+        let repositories = InMemoryRepositories()
+        let event = MeetingEventFixtures.oneOnOneZoom
+        let snapshot = MeetingEventPayload(dropping: event)
+        let withPayload = Self.ownSource(of: event, payload: snapshot)
+        let withoutPayload = MeetingSource(
+            sourceConnectorId: "graph:work", externalId: "ext-31-without", icalUid: nil,
+            lastModified: Date(timeIntervalSince1970: 1_789_041_600)
+        )
+        try await repositories.meetings.save(MeetingRecord(
+            event: event, dedupKey: nil, status: .scheduled, sources: [withPayload, withoutPayload]
+        ))
+
+        let read = try await repositories.meetings.meeting(id: event.id)
+        let sources = try XCTUnwrap(read?.sources)
+        let readWith = try XCTUnwrap(sources.first { $0.sourceConnectorId == event.sourceConnectorId })
+        let readWithout = try XCTUnwrap(sources.first { $0.sourceConnectorId == "graph:work" })
+        XCTAssertEqual(readWith.payload, snapshot, "снимок дословно")
+        XCTAssertNil(readWithout.payload, "NULL ⇔ nil")
+    }
+
+    /// Пустой `declared` — снимок `dropping(event)`, тот же вход, что у GRDB
+    /// (`test_inv31_emptyDeclaredSynthesizesDroppingSnapshot`).
+    func test_inv31_emptyDeclaredSynthesizesDroppingSnapshot() async throws {
+        let repositories = InMemoryRepositories()
+        let event = MeetingEventFixtures.oneOnOneZoom
+        try await repositories.meetings.save(MeetingRecord(
+            event: event, dedupKey: nil, status: .scheduled, sources: []
+        ))
+
+        let read = try await repositories.meetings.meeting(id: event.id)
+        let sources = try XCTUnwrap(read?.sources)
+        XCTAssertEqual(sources.count, 1, "ровно один синтезированный источник")
+        let synthesized = try XCTUnwrap(sources.first)
+        XCTAssertEqual(synthesized.sourceConnectorId, event.sourceConnectorId)
+        XCTAssertEqual(synthesized.externalId, event.externalId)
+        XCTAssertEqual(synthesized.payload, MeetingEventPayload(dropping: event), "снимок dropping(event)")
+    }
+
+    /// Непустой `declared` без идентичности — `constraintViolation`, тот же вход, что у
+    /// GRDB (`test_inv31_nonEmptyDeclaredWithoutIdentityThrowsConstraintViolation`).
+    func test_inv31_nonEmptyDeclaredWithoutIdentityThrowsConstraintViolation() async throws {
+        let repositories = InMemoryRepositories()
+        let event = MeetingEventFixtures.oneOnOneZoom
+        let unrelated = MeetingSource(
+            sourceConnectorId: "graph:work", externalId: "ext-31-unrelated", icalUid: nil,
+            lastModified: Date(timeIntervalSince1970: 1_789_041_600)
+        )
+        do {
+            try await repositories.meetings.save(MeetingRecord(
+                event: event, dedupKey: nil, status: .scheduled, sources: [unrelated]
+            ))
+            XCTFail("ожидался constraintViolation — declared без собственной идентичности события")
+        } catch StorageError.constraintViolation {
+            // ожидаемо
+        }
+
+        let created = try await repositories.meetings.meeting(id: event.id)
+        XCTAssertNil(created, "встреча не создана")
+    }
+
+    /// IR-126 (MEE-372), C-010 v18, инвариант 31: собственная идентичность события как
+    /// `MeetingSource` — довесок к предметному источнику там, где тест сам не про
+    /// `sourcesIncludingOwnIdentity` (K91/K92 выше проверяют клэш пары, не эту границу).
+    private static func ownSource(of event: MeetingEvent, payload: MeetingEventPayload? = nil) -> MeetingSource {
+        MeetingSource(
+            sourceConnectorId: event.sourceConnectorId, externalId: event.externalId,
+            icalUid: event.icalUid, lastModified: event.lastModified, payload: payload
+        )
     }
 }
