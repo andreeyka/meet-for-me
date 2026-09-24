@@ -37,8 +37,21 @@ final class ControlSurfaceEntryPointsTests: XCTestCase {
             await flag.markDone()
         }
 
-        // Ждём, пока два незадержанных источника отработали shutdown — третий ещё висит на воротах.
-        await pollUntil { connectors[0].shutdownCallCount > 0 && connectors[1].shutdownCallCount > 0 }
+        // Ждём, пока два незадержанных источника отработали shutdown — третий ещё висит на
+        // воротах. НАЙДЕНО (бисекция CI-зависания, MEE-362 ч.2): без последнего условия —
+        // `delayedConnector.callCount(.shutdown) > 0` — `release(.shutdown)` ниже мог уйти
+        // ДО того, как вызов третьего источника вообще достиг `hangOrGate` (`group.addTask`
+        // не гарантирует порядок старта дочерних задач): `release` без ожидающего продолжения —
+        // no-op (см. его же комментарий в `FakeCalendarConnector`), а когда третий вызов
+        // ПОЗЖЕ всё-таки встаёт в очередь, снять его уже некому — тот самый зависший
+        // `swift test` на CI, найденный маркерами в stderr (сам тест START печатался,
+        // ни одного теста дальше). Тот же приём, что `resolveTimeoutAfterHang`
+        // (`InitializationTests.swift`) — ждать факта вызова (`callCount`), не просто
+        // «соседи уже готовы».
+        await pollUntil {
+            connectors[0].shutdownCallCount > 0 && connectors[1].shutdownCallCount > 0
+                && delayedConnector.callCount(.shutdown) > 0
+        }
         let doneEarly = await flag.isDone()
         XCTAssertFalse(doneEarly, "stop() не возвращается, пока не отработал shutdown третьего источника")
 

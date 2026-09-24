@@ -110,7 +110,15 @@ final class SourceRoutingTests: XCTestCase {
             await harness.hub.stop()
             await flag.markDone()
         }
-        await pollUntil { connectors[0].shutdownCallCount > 0 && connectors[1].shutdownCallCount > 0 }
+        // НАЙДЕНО (бисекция CI-зависания, MEE-362 ч.2, тот же приём, что у К66 —
+        // `ControlSurfaceEntryPointsTests.swift` — там же и полный довод): без условия на
+        // `delayed.callCount(.shutdown) > 0` `release(.shutdown)` ниже мог уйти ДО того, как
+        // третий вызов вообще встал в очередь на `hangOrGate` — no-op, снимать позже уже
+        // некому.
+        await pollUntil {
+            connectors[0].shutdownCallCount > 0 && connectors[1].shutdownCallCount > 0
+                && delayed.callCount(.shutdown) > 0
+        }
         let doneEarly = await flag.isDone()
         XCTAssertFalse(doneEarly, "stop() не возвращается, пока висит задержанный источник")
         delayed.release(.shutdown)
