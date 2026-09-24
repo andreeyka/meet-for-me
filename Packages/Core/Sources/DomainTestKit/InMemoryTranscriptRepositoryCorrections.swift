@@ -86,15 +86,17 @@ extension InMemoryTranscriptRepository {
 
     /// Бросает только по построению (не должно происходить на живом входе): значения,
     /// кроме `text`/`.original`, берутся у уже валидного слова/сегмента без изменений.
+    /// `text` пишется для КАЖДОЙ правки; `.original` — та же пара, что `text`/`textOriginal`
+    /// у сегмента: не переписывается, если уже записан.
     private func replacing(
         _ segment: Transcript.Segment, text: String, corrections: [TextCorrection]
     ) throws -> Transcript.Segment {
         var words = segment.words
-        for correction in corrections where words[correction.wordIndex].original == nil {
+        for correction in corrections {
             let word = words[correction.wordIndex]
             words[correction.wordIndex] = try Transcript.Word(
                 startMs: word.startMs, endMs: word.endMs, text: correction.replacement,
-                confidence: word.confidence, original: correction.original
+                confidence: word.confidence, original: word.original ?? correction.original
             )
         }
         return try Transcript.Segment(

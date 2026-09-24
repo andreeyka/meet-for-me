@@ -113,16 +113,18 @@ extension GRDBTranscriptRepository {
         }
     }
 
-    /// Правка слова — только если `.original` ещё не записан (первая правка выигрывает).
+    /// `text` пишется для КАЖДОЙ правки; `.original` — та же пара, что `text`/`text_original`
+    /// у сегмента: не переписывается, если уже записан (первая правка выигрывает только для
+    /// `.original`, не для `text`).
     private static func applying(
         _ corrections: [TextCorrection], to words: [Transcript.Word]
     ) throws -> [Transcript.Word] {
         var updated = words
-        for correction in corrections where updated[correction.wordIndex].original == nil {
+        for correction in corrections {
             let word = updated[correction.wordIndex]
             updated[correction.wordIndex] = try Transcript.Word(
                 startMs: word.startMs, endMs: word.endMs, text: correction.replacement,
-                confidence: word.confidence, original: correction.original
+                confidence: word.confidence, original: word.original ?? correction.original
             )
         }
         return updated
