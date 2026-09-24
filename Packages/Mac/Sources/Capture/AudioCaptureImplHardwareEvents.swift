@@ -55,8 +55,31 @@ extension AudioCaptureImpl {
                 default:
                     break
                 }
+                self.resumePendingPowerEventContinuations()
             }
         }
+    }
+
+    /// MEE-365: тест зовёт `action` (обычно — `power.emit(...)`) и ждёт, пока цикл выше не
+    /// обработает СЛЕДУЮЩЕЕ событие C-008 целиком (`handleSleep`/`handleWake`/пропуск) —
+    /// вместо фиксированной паузы, угадывающей scheduling-задержку `powerEventsTask`.
+    /// Продолжение регистрируется ДО вызова `action`, внутри той же замыкающей области:
+    /// событие не может быть обработано раньше, чем ожидающий встанет в очередь.
+    func performAndAwaitNextPowerEvent(_ action: () -> Void) async {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            powerEventsLock.lock()
+            pendingPowerEventContinuations.append(continuation)
+            powerEventsLock.unlock()
+            action()
+        }
+    }
+
+    private func resumePendingPowerEventContinuations() {
+        powerEventsLock.lock()
+        let waiting = pendingPowerEventContinuations
+        pendingPowerEventContinuations = []
+        powerEventsLock.unlock()
+        for continuation in waiting { continuation.resume() }
     }
 
     private func handleSleep(_ session: CaptureSessionState, atHostTime: UInt64) {

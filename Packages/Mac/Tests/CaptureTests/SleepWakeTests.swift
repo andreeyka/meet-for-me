@@ -69,7 +69,14 @@ final class SleepWakeTests: CaptureAsyncTestCase {
     /// `.discontinuity`, и эта ранняя запись на секунды-миллисекунды несла на диске `.sleep`
     /// без пары. Правка — `AudioCaptureImplHardwareEvents.swift`/`AudioCaptureImplRebuild.swift`
     /// (`persistManifest`/`persistManifestAfterCapturedProcesses: false` для пути сна): манифест
-    /// пишется один раз, когда пара уже дописана — опрос здесь больше не нужен, читаем сразу.
+    /// пишется один раз, когда пара уже дописана.
+    ///
+    /// MEE-365, малый возврат: фиксированная пауза перед чтением всё ещё угадывала бы
+    /// scheduling-задержку `powerEventsTask`, даже с одной записью. `performAndAwaitNextPowerEvent`
+    /// (`AudioCaptureImplHardwareEvents.swift`) — тестовый крюк: продолжение регистрируется ДО
+    /// `power.emit(...)`, резюмируется циклом обработки сразу после того, как `.willSleep`
+    /// обработан целиком (`handleSleep` вернулся) — чтение с диска идёт по факту обработки, не
+    /// по угаданному времени.
     func test_sleepWritesValidManifestToDiskImmediately() async throws {
         let harness = Harness()
         let directory = try Harness.makeDirectory()
@@ -77,8 +84,7 @@ final class SleepWakeTests: CaptureAsyncTestCase {
         harness.gateway.feed(.samples(.mic, frameCount: 480, channelCount: 1, hostTime: 1_000))
         try await Task.sleep(nanoseconds: 10_000_000)
 
-        harness.power.emit(.willSleep)
-        try await Task.sleep(nanoseconds: 10_000_000)
+        await harness.port.performAndAwaitNextPowerEvent { harness.power.emit(.willSleep) }
 
         let onDisk = try ManifestWriter.read(from: directory)
         XCTAssertTrue(onDisk.markers.contains { $0.kind == .sleep })
