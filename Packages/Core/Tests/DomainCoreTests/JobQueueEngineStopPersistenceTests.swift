@@ -95,45 +95,30 @@ final class JobQueueEngineStopPersistenceTests: XCTestCase {
         let now = rig.clock.now()
 
         let pending = makeRunningRow(attempts: 0, maxAttempts: 3, attemptStartedAt: nil, leaseExpiresAt: nil, now: now)
-        try await rig.repository.update(Job(
-            id: pending.id, type: pending.type, payload: pending.payload, status: .pending,
-            priority: 7, attempts: 0, maxAttempts: 3, runAfter: now, conditions: pending.conditions,
-            dedupKey: "d1", leaseExpiresAt: nil, attemptStartedAt: nil, lastError: nil,
-            createdAt: now, updatedAt: now
-        ))
+        try await upsertTerminalOrPendingRow(
+            rig, base: pending, status: .pending, priority: 7, dedupKey: "d1", now: now
+        )
+
         let running = makeRunningRow(
             attempts: 1, maxAttempts: 5, attemptStartedAt: now,
             leaseExpiresAt: now.addingTimeInterval(50), now: now
         )
         try await rig.repository.insert(running)
+
         let succeeded = makeRunningRow(
             attempts: 1, maxAttempts: 3, attemptStartedAt: nil, leaseExpiresAt: nil, now: now
         )
-        try await rig.repository.update(Job(
-            id: succeeded.id, type: succeeded.type, payload: succeeded.payload, status: .succeeded,
-            priority: 0, attempts: 1, maxAttempts: 3, runAfter: now, conditions: succeeded.conditions,
-            dedupKey: nil, leaseExpiresAt: nil, attemptStartedAt: nil, lastError: nil,
-            createdAt: now, updatedAt: now
-        ))
+        try await upsertTerminalOrPendingRow(rig, base: succeeded, status: .succeeded, now: now)
+
         let failed = makeRunningRow(
-            attempts: 3, maxAttempts: 3, attemptStartedAt: nil, leaseExpiresAt: nil,
-            lastError: "boom", now: now
+            attempts: 3, maxAttempts: 3, attemptStartedAt: nil, leaseExpiresAt: nil, lastError: "boom", now: now
         )
-        try await rig.repository.update(Job(
-            id: failed.id, type: failed.type, payload: failed.payload, status: .failed,
-            priority: 0, attempts: 3, maxAttempts: 3, runAfter: now, conditions: failed.conditions,
-            dedupKey: nil, leaseExpiresAt: nil, attemptStartedAt: nil, lastError: "boom",
-            createdAt: now, updatedAt: now
-        ))
+        try await upsertTerminalOrPendingRow(rig, base: failed, status: .failed, lastError: "boom", now: now)
+
         let cancelled = makeRunningRow(
             attempts: 0, maxAttempts: 3, attemptStartedAt: nil, leaseExpiresAt: nil, now: now
         )
-        try await rig.repository.update(Job(
-            id: cancelled.id, type: cancelled.type, payload: cancelled.payload, status: .cancelled,
-            priority: 0, attempts: 0, maxAttempts: 3, runAfter: now, conditions: cancelled.conditions,
-            dedupKey: nil, leaseExpiresAt: nil, attemptStartedAt: nil, lastError: nil,
-            createdAt: now, updatedAt: now
-        ))
+        try await upsertTerminalOrPendingRow(rig, base: cancelled, status: .cancelled, now: now)
 
         // Новая очередь поверх ТОГО ЖЕ репозитория — прежний экземпляр ничего не хранил
         // в памяти, что понадобилось бы восстановить.
@@ -163,5 +148,21 @@ final class JobQueueEngineStopPersistenceTests: XCTestCase {
         XCTAssertEqual(succeededAfter?.status, .succeeded, "терминальная строка не тронута")
 
         await secondQueue.stop()
+    }
+
+    /// Оснастка К71 — вынесена из тела теста, чтобы уложиться в `function_body_length`
+    /// (50 строк, возврат РП по MEE-350): пять строк отличались только статусом и парой
+    /// полей. `running` через неё не идёт — ей нужны настоящие `attemptStartedAt`/`leaseExpiresAt`,
+    /// а не захардкоженный `nil` этого помощника.
+    private func upsertTerminalOrPendingRow(
+        _ rig: JobQueueTestRig, base: Job, status: JobStatus, priority: Int = 0,
+        dedupKey: String? = nil, lastError: String? = nil, now: Date
+    ) async throws {
+        try await rig.repository.update(Job(
+            id: base.id, type: base.type, payload: base.payload, status: status,
+            priority: priority, attempts: base.attempts, maxAttempts: base.maxAttempts, runAfter: now,
+            conditions: base.conditions, dedupKey: dedupKey, leaseExpiresAt: nil, attemptStartedAt: nil,
+            lastError: lastError, createdAt: now, updatedAt: now
+        ))
     }
 }
