@@ -211,9 +211,14 @@ final class JobQueueEngineCancelEventsTests: XCTestCase {
             "заводить второй"
         )
         await rig.queue.waitUntilIdle()
-        // Второй `start()` этого теста (см. довод выше) иначе оставляет свои `timerTask`/
-        // `powerEventsTask` без парного `stop()` до конца функции — тот же класс утечки,
-        // что предупреждает `deinit` `JobQueueEngine.swift` (найдено РП на приёмке #91).
+        // МЕЕ-378, п. 5 (возврат РП после приёмки #93): после waitUntilIdle() в буфере не
+        // должно остаться НИЧЕГО лишнего — ровно столько событий, сколько названо выше, а не
+        // «хотя бы столько».
+        await assertNoMoreEvents(iterator)
+        // Второй `start()` этого теста иначе оставляет свои `timerTask`/`powerEventsTask`
+        // без парного `stop()` до конца функции — `deinit` `JobQueueEngine.swift` их всё
+        // равно корректно отменяет при освобождении `rig`, но явный `stop()` здесь и так
+        // предмет теста (проверяет ровно возврат из «висящей заявки», не гигиену).
         await rig.queue.stop()
     }
 
@@ -329,12 +334,19 @@ final class JobQueueEngineCancelEventsTests: XCTestCase {
     /// `next()` не вернёт `nil`, а зависнет НАВСЕГДА. `nextOrFail` — тот же счётчик, но с
     /// явным предохранителем: расхождение теперь падает `XCTFail`'ом с именем места, а не
     /// зависанием без диагностики.
+    ///
+    /// MEE-378 (п. 7, возврат РП после приёмки #93): `file`/`line` — свои, не унаследованные
+    /// от `nextOrFail` по умолчанию. Без явной передачи `#filePath`/`#line` `nextOrFail`
+    /// снимались бы в момент ЕГО СОБСТВЕННОГО вызова здесь, внутри `drainExactly`, — одна и
+    /// та же строка на любой вызывающий тест, а не строка теста, где расхождение действительно
+    /// нашлось.
     private func drainExactly(
-        _ iterator: inout AsyncStream<JobEvent>.AsyncIterator, count: Int
+        _ iterator: inout AsyncStream<JobEvent>.AsyncIterator, count: Int,
+        file: StaticString = #filePath, line: UInt = #line
     ) async -> [JobEvent] {
         var collected: [JobEvent] = []
         for _ in 0..<count {
-            guard let event = await nextOrFail(iterator) else { break }
+            guard let event = await nextOrFail(iterator, file: file, line: line) else { break }
             collected.append(event)
         }
         return collected

@@ -16,7 +16,20 @@ import DomainCore
 
 final class PerformanceTests: XCTestCase {
 
+    /// MEE-378 (аудит MEE-377): коэффициент — отношение ДВУХ замеров РЕАЛЬНОГО времени
+    /// (`Date()`/`bestOfThree`), не число операций — под общей нагрузкой гейтящего раннера
+    /// (соседние параллельные работы, троттлинг) обе стороны шумят независимо, и лучшая из
+    /// трёх попыток шум одной стороны не гасит целиком. Замена меры на счёт операций (например,
+    /// инструментирование `validate()` счётчиком сравнений) — отдельная правка ПРОДАКШЕН-кода
+    /// ради теста, шире периметра этой находки; вместо неё тест снят с гейтящего прогона
+    /// (`XCTSkipUnless`) и остаётся доступен явным прогоном:
+    /// `RUN_PERFORMANCE_TESTS=1 swift test --package-path Packages/Core --filter PerformanceTests`.
     func test_p119_validationIsNotQuadratic() throws {
+        try XCTSkipUnless(
+            ProcessInfo.processInfo.environment["RUN_PERFORMANCE_TESTS"] != nil,
+            "измеряет реальное время — шумит под общей нагрузкой гейтящего раннера (МЕЕ-378); " +
+                "запуск явно: RUN_PERFORMANCE_TESTS=1"
+        )
         let bigTranscript = try LoadShapes.transcript(segmentCount: 6_000, wordsPerSegment: 10,
                                                       speakerCount: 8, embeddingSize: 256)
         let smallTranscript = try LoadShapes.transcript(segmentCount: 600, wordsPerSegment: 10,

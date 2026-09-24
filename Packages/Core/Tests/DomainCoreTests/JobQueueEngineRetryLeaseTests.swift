@@ -171,6 +171,14 @@ final class JobQueueEngineRetryLeaseTests: XCTestCase {
 
     /// К62, первая половина: `leaseExpiresAt` продлевается не реже раза в 30 секунд, пока
     /// задача исполняется.
+    ///
+    /// MEE-378 (аудит MEE-377): раньше — фиксированная пауза 350 мс, угаданная сверх периода
+    /// опроса `renewLeaseWhileRunning` (реальные 0.2 с, `JobQueueEngineExecution.swift`) в
+    /// расчёте «должно успеть один раз сработать». Под нагрузкой раннера (см. приёмку MEE-375,
+    /// #93 — там же угаданное время однажды подвело) это не гарантия. Заменено опросом самого
+    /// условия («лизинг продлён») с ограниченным числом попыток — сигнал, а не тайм-аут: тест
+    /// проходит, как только продление ФАКТИЧЕСКИ случилось, и падает по `XCTUnwrap`/`XCTAssert`
+    /// с внятным сообщением, если 50 попыток (около секунды) не хватило, а не виснет.
     func test_k62_leaseIsRenewedWhileExecuting() async throws {
         let rig = JobQueueTestRig(leaseSeconds: 40)
         let handler = FakeJobHandler(type: .transcode)
@@ -181,12 +189,20 @@ final class JobQueueEngineRetryLeaseTests: XCTestCase {
 
         await rig.queue.start()
         rig.clock.set(start.addingTimeInterval(35))
-        try await Task.sleep(nanoseconds: 350_000_000)
 
-        let renewed = try await rig.repository.job(id: jobId)
-        let renewedLease = try XCTUnwrap(renewed?.leaseExpiresAt)
+        let expectedFloor = start.addingTimeInterval(35 + 40 - 1)
+        var renewed: Job?
+        for _ in 0..<50 {
+            renewed = try await rig.repository.job(id: jobId)
+            if let lease = renewed?.leaseExpiresAt, lease >= expectedFloor {
+                break
+            }
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+
+        let renewedLease = try XCTUnwrap(renewed?.leaseExpiresAt, "продление не случилось за 50 опросов (~1 с)")
         XCTAssertGreaterThanOrEqual(
-            renewedLease, start.addingTimeInterval(35 + 40 - 1),
+            renewedLease, expectedFloor,
             "продлено от текущего показания часов, а не от момента старта"
         )
 
