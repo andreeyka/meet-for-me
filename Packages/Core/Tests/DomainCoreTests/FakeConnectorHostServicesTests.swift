@@ -15,12 +15,14 @@ final class FakeConnectorHostServicesTests: XCTestCase {
 
     func test_mee346_fakeConnectorHostServices_secretGetReturnsWhatSecretSetStored() async throws {
         let fake = FakeConnectorHostServices()
-        XCTAssertNil(try await fake.secretGet(key: "token"), "ключ, которого не задавали, не значение")
+        let beforeSet = try await fake.secretGet(key: "token")
+        XCTAssertNil(beforeSet, "ключ, которого не задавали, не значение")
         XCTAssertEqual(fake.callCount("secretGet(key:)"), 1)
 
         try await fake.secretSet(key: "token", value: "abc")
         XCTAssertEqual(fake.callCount("secretSet(key:value:)"), 1)
-        XCTAssertEqual(try await fake.secretGet(key: "token"), "abc")
+        let afterSet = try await fake.secretGet(key: "token")
+        XCTAssertEqual(afterSet, "abc")
         XCTAssertEqual(fake.callCount("secretGet(key:)"), 2, "счёт растёт по вызову, а не по ключу")
     }
 
@@ -31,7 +33,8 @@ final class FakeConnectorHostServicesTests: XCTestCase {
         fake.setSecret("preset", for: "token")
         XCTAssertEqual(fake.callCount("secretGet(key:)"), 0, "задание секрета тестом не вызов порта")
 
-        XCTAssertEqual(try await fake.secretGet(key: "token"), "preset")
+        let value = try await fake.secretGet(key: "token")
+        XCTAssertEqual(value, "preset")
         XCTAssertEqual(fake.callCount("secretGet(key:)"), 1)
         XCTAssertEqual(fake.secret(for: "token"), "preset", "то же значение читается и способом теста")
     }
@@ -45,7 +48,8 @@ final class FakeConnectorHostServicesTests: XCTestCase {
 
         try await fake.secretSet(key: "token", value: nil)
         XCTAssertNil(fake.secret(for: "token"), "ключ удалён — не хранит явный nil")
-        XCTAssertNil(try await fake.secretGet(key: "token"), "secretGet отвечает так же, как у незаданного ключа")
+        let afterRemoval = try await fake.secretGet(key: "token")
+        XCTAssertNil(afterRemoval, "secretGet отвечает так же, как у незаданного ключа")
     }
 
     // MARK: - log
