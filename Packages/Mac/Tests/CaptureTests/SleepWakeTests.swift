@@ -14,14 +14,11 @@ final class SleepWakeTests: CaptureAsyncTestCase {
         try await harness.start(directory: directory)
         await harness.port.awaitPowerEventsSubscribed()
         harness.gateway.feed(.samples(.mic, frameCount: 480, channelCount: 1, hostTime: 1_000))
-        try await Task.sleep(nanoseconds: 10_000_000)
 
         XCTAssertEqual(harness.power.beginActivityCallCount, 1)
 
-        harness.power.emit(.willSleep)
-        try await Task.sleep(nanoseconds: 10_000_000)
-        harness.power.emit(.didWake)
-        try await Task.sleep(nanoseconds: 10_000_000)
+        await harness.port.performAndAwaitNextPowerEvent { harness.power.emit(.willSleep) }
+        await harness.port.performAndAwaitNextPowerEvent { harness.power.emit(.didWake) }
 
         // «После .didWake порт берёт новый токен удержания» — дословно контракт: старый
         // закрыт (недействителен вместе со сном), взят новый — два вызова beginActivity на сеанс.
@@ -47,10 +44,8 @@ final class SleepWakeTests: CaptureAsyncTestCase {
         try await harness.start(directory: directory)
         await harness.port.awaitPowerEventsSubscribed()
         harness.gateway.feed(.samples(.mic, frameCount: 480, channelCount: 1, hostTime: 1_000))
-        try await Task.sleep(nanoseconds: 10_000_000)
 
-        harness.power.emit(.willSleep)
-        try await Task.sleep(nanoseconds: 10_000_000)
+        await harness.port.performAndAwaitNextPowerEvent { harness.power.emit(.willSleep) }
 
         let manifest = try await harness.port.stop()
         XCTAssertTrue(manifest.markers.contains { $0.kind == .sleep })
@@ -93,7 +88,6 @@ final class SleepWakeTests: CaptureAsyncTestCase {
         try await harness.start(directory: directory)
         await harness.port.awaitPowerEventsSubscribed()
         harness.gateway.feed(.samples(.mic, frameCount: 480, channelCount: 1, hostTime: 1_000))
-        try await Task.sleep(nanoseconds: 10_000_000)
 
         await harness.port.performAndAwaitNextPowerEvent { harness.power.emit(.willSleep) }
 
@@ -103,8 +97,7 @@ final class SleepWakeTests: CaptureAsyncTestCase {
         XCTAssertTrue(onDisk.discontinuities.contains { $0.reason == .sleep })
 
         harness.gateway.feed(.samples(.mic, frameCount: 480, channelCount: 1, hostTime: 2_000))
-        harness.power.emit(.didWake)
-        try await Task.sleep(nanoseconds: 10_000_000)
+        await harness.port.performAndAwaitNextPowerEvent { harness.power.emit(.didWake) }
         _ = try await harness.port.stop()
     }
 
@@ -119,20 +112,16 @@ final class SleepWakeTests: CaptureAsyncTestCase {
         try await harness.start(directory: directory)
         await harness.port.awaitPowerEventsSubscribed()
         harness.gateway.feed(.samples(.mic, frameCount: 480, channelCount: 1, hostTime: 1_000))
-        try await Task.sleep(nanoseconds: 10_000_000)
 
         // Пересборка началась (смена микрофона), но не разрешена — pendingRebuild открыт до
         // первого буфера новой сборки.
         harness.gateway.emit(.microphoneChanged(
             MicrophoneHandle(uid: "airpods", name: "AirPods", channelCount: 1), atHostTime: 2_000
         ))
-        try await Task.sleep(nanoseconds: 10_000_000)
 
-        harness.power.emit(.willSleep)
-        try await Task.sleep(nanoseconds: 10_000_000)
+        await harness.port.performAndAwaitNextPowerEvent { harness.power.emit(.willSleep) }
 
         harness.gateway.feed(.samples(.mic, frameCount: 480, channelCount: 1, hostTime: 2_100))
-        try await Task.sleep(nanoseconds: 10_000_000)
 
         let manifest = try await harness.port.stop()
         XCTAssertTrue(manifest.markers.contains { $0.kind == .sleep }, "маркер .sleep безусловен")
