@@ -221,6 +221,16 @@ extension PortDeclarationTests {
         "func shutdown() async"
     ]
 
+    /// C-015 (MEE-23) v9, «Определение» §4, дословно. К51 перечня MEE-382: ровно три
+    /// метода, `forgetProfile` (IR-128) в списке нет.
+    static let attributionPort = [
+        "func attribute(_ input: AttributionInput, thresholds: AttributionThresholds) async throws " +
+        "-> AttributionResult",
+        "func confirm(transcriptId: UUID, cluster: Int, personId: UUID, input: AttributionInput) " +
+        "async throws -> AttributionResult",
+        "func reject(transcriptId: UUID, cluster: Int, input: AttributionInput) async throws -> AttributionResult"
+    ]
+
     /// Протокол, файл его исходника и ожидаемый блок контракта.
     ///
     /// Тип, а не кортеж из трёх членов: `large_tuple` SwiftLint разрешает два,
@@ -259,6 +269,7 @@ extension PortDeclarationTests {
         PortContract(
             name: "ConnectorHostServices", file: "ConnectorHost.swift", expected: connectorHostServices
         ),
-        PortContract(name: "CalendarConnector", file: "ConnectorHost.swift", expected: calendarConnector)
+        PortContract(name: "CalendarConnector", file: "ConnectorHost.swift", expected: calendarConnector),
+        PortContract(name: "AttributionPort", file: "AttributionPort.swift", expected: attributionPort)
     ]
 }
