@@ -221,13 +221,22 @@ final class ControlSurfaceEntryPointsTests: XCTestCase {
     /// только ПОСЛЕ `await task.value` — без фикса (т.е. если `task.cancel()` не долетает до
     /// общей задачи) `await task.value` ждал бы `finishInFlightSync` НАВСЕГДА, поскольку
     /// освободить save-ворота было уже некому — тест сам не дошёл бы до этой строки, а
-    /// повис. Порядок ниже устраняет эту зависимость: ворота отпускаются СРАЗУ, как только
-    /// задача до них дошла (не дожидаясь исхода отмены), — единственный вызывающий уже
-    /// отменённой задачи получает `.cancelled` от `cancelSyncWaiter` независимо от того, что
-    /// сама общая задача при этом дожила своим чередом (её результат больше никого не
-    /// интересует). Без `task.cancel()` (проверено вручную, не в составе теста) единственный
+    /// повис. Без `task.cancel()` (проверено вручную, не в составе теста) единственный
     /// вызывающий получил бы результат ЗАВЕРШИВШЕЙСЯ синхронизации (успех) — сравнение с
     /// `.cancelled` ниже упало бы явной, быстрой ошибкой ассерта, не зависанием CI.
+    ///
+    /// Возврат РП (24.09, приёмка #115, CI красный на первом прогоне первой версии этого
+    /// возврата): `pollUntil { meetingRepositorySaveCallCount(...) >= 1 }` здесь падал
+    /// собственным таймаутом (10с) — при РАБОТАЮЩЕМ фиксе отменённая ДО регистрации задача
+    /// чаще всего НЕ доходит до `save()` вовсе: `cancelSyncWaiter` отменяет её задачу
+    /// (`inFlightSync[source]?.task.cancel()`) почти сразу же, а `ensureInitialized`
+    /// (`raceTimeout`) коротится РАНЬШЕ, во время своей собственной гонки с `FakeWaitSeam.
+    /// sleep` — та тоже отвечает на уже взведённую `Task.isCancelled` и бросает
+    /// `CancellationError`, не дожидаясь ни секунды. «Задача физически не дошла до save-ворот»
+    /// — при этом фиксе ЗАКОННЫЙ, ожидаемый исход, не дефект: `pollUntilOrTimeout` (НЕ
+    /// проваливает тест сам по себе) ждёт КОРОТКО и БЕЗУСЛОВНО отпускает ворота в конце —
+    /// освобождение нужно только как страховка на случай иного порядка (задача всё-таки туда
+    /// дошла), а не как условие для прогресса самого теста.
     func test_defect_soleCallerCancelledBeforeRegistrationStillCancelsSharedTask() async throws {
         let harness = Harness(sourceIds: ["src-1"])
         harness.connectorRepository.seed([Harness.record(id: "src-1")])
@@ -243,9 +252,12 @@ final class ControlSurfaceEntryPointsTests: XCTestCase {
         let task = Task { await harness.hub.sync(trigger: .manual) }
         task.cancel()
 
-        await pollUntil { meetingRepositorySaveCallCount(harness.meetingRepository) >= 1 }
-        harness.meetingRepository.stopGating(on: .save)
-        harness.meetingRepository.release(on: .save)
+        if await pollUntilOrTimeout(timeout: .seconds(1), {
+            meetingRepositorySaveCallCount(harness.meetingRepository) >= 1
+        }) {
+            harness.meetingRepository.stopGating(on: .save)
+            harness.meetingRepository.release(on: .save)
+        }
 
         let results = await task.value
         XCTAssertEqual(results.first?.failure, .cancelled)
@@ -254,6 +266,11 @@ final class ControlSurfaceEntryPointsTests: XCTestCase {
         // save-воротах, которые кооперативную отмену не слушают, и pollUntil упал бы явным
         // таймаутом (не тихим зависанием), доказывая именно этот дефект.
         await pollUntil(timeout: .seconds(2)) { await harness.hub.inFlightSync[source] == nil }
+
+        // Безусловная страховка (возврат РП, «в конце отпускай ворота»): если задача всё же
+        // дошла до save() уже ПОСЛЕ проверки выше, она не останется висеть навсегда.
+        harness.meetingRepository.stopGating(on: .save)
+        harness.meetingRepository.release(on: .save)
     }
 
     /// Пограничный случай 2: после отмены ПОСЛЕДНЕГО ожидающего `inFlightSync[source]`
@@ -325,16 +342,21 @@ final class ControlSurfaceEntryPointsTests: XCTestCase {
     /// `connectorRepository`, как ни в чём не бывало, рискуя переписать уже записанный,
     /// актуальный исход следующего, текущего поколения.
     ///
-    /// Тест доказывает `recordSyncOutcomeIfCurrent` полностью последовательно, без гонки по
-    /// времени: сначала до конца доводит устаревшее (отменённое) поколение — с заведомо
-    /// ОТЛИЧИМЫМ (ошибочным) исходом через `fail(with:on:)`, — затем заводит новое поколение
-    /// и доводит до конца его честный, успешный исход. Проверка — ЧИСТЫЙ СЧЁТЧИК вызовов
-    /// `setSyncOutcome`, а не итоговое значение в хранилище: порядок между двумя независимыми
-    /// continuation одной и той же цепочки `mergeTail` ничем не гарантирован (последовательный
-    /// сценарий этого теста — лишь способ детерминированно ДОВЕСТИ устаревшее поколение до его
-    /// собственной попытки записи, не утверждение о реальном порядке гонки в проде), а без
-    /// фикса счётчик стал бы 2 при ЛЮБОМ порядке — обе попытки записи происходят независимо от
-    /// того, какая из них в итоге осталась видна в `storedRecords`.
+    /// Возврат РП (24.09, приёмка #115, CI красный на первом прогоне): `recordSyncOutcomeIf
+    /// Current`, глуша запись всякий раз, когда `inFlightSync[source]` не совпадает с нашей
+    /// генерацией, ломала `test_syncOne_cancellingBothCallersCancelsSharedTask` — там оба
+    /// вызывающих отменяются, НИКТО не подхватывает, `inFlightSync[source]` становится `nil`
+    /// (не «чужая генерация»), и исход отменённой задачи всё равно обязан быть записан
+    /// (защищать не от кого). Guard в проде поправлен: подавляет ТОЛЬКО когда источник уже в
+    /// ведении ЧУЖОЙ, отличной от нашей, генерации, не когда он просто пуст. Это же меняет
+    /// форму ЭТОГО теста: чтобы устаревшая запись подавлялась, новое поколение обязано быть
+    /// УЖЕ ЗАРЕГИСТРИРОВАНО (`inFlightSync[source]` уже указывает на него) к моменту, когда
+    /// устаревшее доходит до своей попытки записи — поэтому второе поколение заводится ДО
+    /// того, как первое отпускается, не после.
+    ///
+    /// Проверка — ЧИСТЫЙ СЧЁТЧИК вызовов `setSyncOutcome`, а не итоговое значение в
+    /// хранилище: без фикса счётчик стал бы 2 независимо от того, какая из двух попыток в
+    /// итоге осталась видна в `storedRecords`.
     func test_defect_staleGenerationDoesNotWriteSyncOutcome() async throws {
         let harness = Harness(sourceIds: ["src-1"])
         harness.connectorRepository.seed([Harness.record(id: "src-1")])
@@ -357,6 +379,11 @@ final class ControlSurfaceEntryPointsTests: XCTestCase {
         XCTAssertEqual(firstResults.first?.failure, .cancelled)
         await pollUntil(timeout: .seconds(2)) { await harness.hub.inFlightSync[source] == nil }
 
+        // Новое поколение заводим СЕЙЧАС, пока устаревшее ещё физически не отпущено — к
+        // моменту его записи inFlightSync обязан уже указывать на новое, не на nil.
+        let secondTask = Task { await harness.hub.sync(trigger: .manual) }
+        await pollUntil(timeout: .seconds(2)) { await harness.hub.inFlightSync[source] != nil }
+
         // Устаревшее поколение всё ещё физически висит на save-воротах — отпускаем его с
         // заранее взведённым отказом, чтобы у его (потенциальной) записи был заведомо
         // отличимый от честного успеха вид, и ждём его СОБСТВЕННУЮ задачу до конца (не
@@ -370,7 +397,6 @@ final class ControlSurfaceEntryPointsTests: XCTestCase {
         harness.meetingRepository.stopGating(on: .save)
         harness.meetingRepository.clearFailure(on: .save)
 
-        let secondTask = Task { await harness.hub.sync(trigger: .manual) }
         let secondResults = await secondTask.value
         XCTAssertNil(secondResults.first?.failure, "новое поколение обязано завершиться успешно")
 

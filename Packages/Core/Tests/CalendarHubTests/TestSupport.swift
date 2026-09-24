@@ -51,6 +51,24 @@ func pollUntil(
     }
 }
 
+/// Как `pollUntil`, но НЕ проваливает тест по истечении срока — возвращает, стало ли условие
+/// истинным. Нужен, когда истечение — законный, не дефектный исход: возврат РП (24.09,
+/// приёмка #115, CI красный на первом прогоне) —
+/// `test_defect_soleCallerCancelledBeforeRegistrationStillCancelsSharedTask`
+/// (`ControlSurfaceEntryPointsTests.swift`) ждал, что отменённая ДО регистрации общая задача
+/// дойдёт до `save()`, но при работающем фиксе она чаще коротится РАНЬШЕ, во время
+/// `ensureInitialized` (гонка `raceTimeout`/`FakeWaitSeam.sleep`, тот тоже отвечает на уже
+/// взведённую `Task.isCancelled`) — `pollUntil` с его безусловным `XCTFail` превращал
+/// законное «не дошла» в ложный красный прогон, ждущий полных 10 секунд.
+func pollUntilOrTimeout(timeout: Duration = .seconds(2), _ condition: () async -> Bool) async -> Bool {
+    let deadline = ContinuousClock.now + timeout
+    while await !condition() {
+        if ContinuousClock.now >= deadline { return false }
+        try? await Task.sleep(for: .milliseconds(2))
+    }
+    return true
+}
+
 /// Обёртка над `AsyncStream.Iterator` для гонки с таймаутом в `nextOrTimeout` (возврат РП,
 /// приёмка #94, п. 5) — actor, не `inout`: `next()` мутирует структуру-итератор, а
 /// `TaskGroup.addTask` не умеет захватывать `inout`-параметр из внешней области.

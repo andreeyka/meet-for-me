@@ -198,11 +198,21 @@ extension CalendarPortImpl {
     /// уже мог обслуживать СЛЕДУЮЩЕЕ, более новое поколение с собственным, уже записанным
     /// исходом. Гонка по времени: если устаревшая запись физически проигрывает свежей (её
     /// `await` в глубине `fetchAndApply` просто медленнее), она перетирает корректный исход
-    /// новой синхронизации неверным. Guard здесь — тот же приём, что `finishInFlightSync`: не
-    /// наша генерация (источник уже не в её ведении, `inFlightSync[source]` либо `nil`, либо
-    /// указывает на чужую) — писать нечего, наш исход больше никого не касается.
+    /// новой синхронизации неверным.
+    ///
+    /// Возврат РП (24.09, приёмка #115, CI красный на первом прогоне): guard `inFlightSync
+    /// [source]?.generation == generation` глушил запись и тогда, когда `inFlightSync[source]`
+    /// стал `nil` (отменённый вызывающий был ПОСЛЕДНИМ — часть 3в, `cancelSyncWaiter`), а
+    /// новый вызывающий так и не пришёл — источник просто больше никем не обслуживается,
+    /// защищать не от кого. `test_syncOne_cancellingBothCallersCancelsSharedTask`
+    /// (`ControlSurfaceEntryPointsTests.swift`) как раз про этот случай — оба вызывающих
+    /// отменились, НИКТО не подхватил, а исход отменённой задачи всё равно обязан попасть в
+    /// `connectorRepository` (тот же довод, что у дефекта 4). Подавлять нужно ТОЛЬКО когда
+    /// источник уже в ведении ЧУЖОЙ, отличной от нашей, генерации — не когда он просто пуст.
     private func recordSyncOutcomeIfCurrent(source: CalendarSourceId, generation: UUID, error: String?) async {
-        guard inFlightSync[source]?.generation == generation else { return }
+        if let current = inFlightSync[source], current.generation != generation {
+            return
+        }
         try? await connectorRepository.setSyncOutcome(at: Date(), error: error, connectorId: source.rawValue)
     }
 
