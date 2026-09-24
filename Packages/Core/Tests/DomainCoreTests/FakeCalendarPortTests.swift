@@ -333,4 +333,42 @@ final class FakeCalendarPortTests: XCTestCase {
         await port.stop()
         XCTAssertEqual(port.stopCallCount, 2)
     }
+
+    // MARK: - (л) журнал вызовов пишет все шесть новых методов
+
+    /// Возврат РП по MEE-357: журнал (условие `Н`) обязан видеть все шесть методов
+    /// управляющей поверхности источника, а не только семь прежних. `configure` пишет
+    /// в журнал и сами настройки, а не только адрес источника — иначе К77-подобный
+    /// критерий, спрашивающий «с чем позвали», не читается по журналу вовсе.
+    func test_mee357_fakeCalendarPort_journalRecordsAllSixNewMethods() async throws {
+        let port = FakeCalendarPort()
+        let challenge = AuthChallenge(authUrl: URL(string: "https://example.com/auth")!, redirectScheme: "meetforme")
+        let health = ConnectorHealth(status: .ok, message: nil, lastSuccessfulSyncAt: nil)
+        port.setAuthChallenge(challenge, for: eventKit)
+        port.setConnectorHealth(health, for: eventKit)
+        port.setSettingsSchema(Data("schema".utf8), for: eventKit)
+
+        _ = try await port.beginAuth(source: eventKit)
+        _ = try await port.completeAuth(source: eventKit, callbackUrl: URL(string: "meetforme://callback")!)
+        _ = try await port.settingsSchema(source: eventKit)
+        try await port.configure(source: eventKit, settings: Data(#"{"pollSeconds":60}"#.utf8))
+        _ = try await port.healthCheck(source: eventKit)
+        await port.stop()
+
+        XCTAssertEqual(port.callLog.signatures, [
+            "CalendarPort.beginAuth(source:)",
+            "CalendarPort.completeAuth(source:callbackUrl:)",
+            "CalendarPort.settingsSchema(source:)",
+            "CalendarPort.configure(source:settings:)",
+            "CalendarPort.healthCheck(source:)",
+            "CalendarPort.stop()"
+        ])
+        let configureCall = try XCTUnwrap(
+            port.callLog.calls(port: "CalendarPort").first { $0.method == "configure(source:settings:)" }
+        )
+        XCTAssertEqual(
+            configureCall.arguments, [eventKit.rawValue, #"{"pollSeconds":60}"#],
+            "настройки видны в журнале, а не только источник"
+        )
+    }
 }

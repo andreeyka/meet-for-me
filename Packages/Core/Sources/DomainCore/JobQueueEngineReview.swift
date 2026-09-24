@@ -13,7 +13,10 @@ extension JobQueueEngine {
     func runRevisitPass() async {
         guard isRunning else { return }
         activeRevisitPasses += 1
-        defer { activeRevisitPasses -= 1 }
+        defer {
+            activeRevisitPasses -= 1
+            notifyIdleIfNeeded()
+        }
         await reclaimExpiredLeases()
         guard isRunning else { return }
 

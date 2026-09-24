@@ -143,17 +143,23 @@ final class JobQueueEngineCancelEventsTests: XCTestCase {
         // Пересмотры 3 и 4 — summarizeId остаётся единственным кандидатом: блокируется на
         // каждом внешнем start(), ни один пересмотр не зависает.
         for _ in 0..<2 {
-            await rig.queue.start()
-            let pass = await drainExactly(&iterator, count: 1)
-            XCTAssertEqual(pass, [.blocked(jobId: summarizeId, type: .summarize, reason: .noHandler)])
-            let summarizeJob = try await rig.repository.job(id: summarizeId)
-            XCTAssertEqual(summarizeJob?.status, .pending)
-            XCTAssertEqual(summarizeJob?.attempts, 0)
-            await rig.queue.waitUntilIdle()
+            try await assertNextPassOnlyBlocksNoHandler(rig, summarizeId: summarizeId, iterator: &iterator)
         }
 
         let ready = try await rig.repository.job(id: readyId)
         XCTAssertEqual(ready?.status, .succeeded, "пересмотр не встал на noHandler")
+    }
+
+    private func assertNextPassOnlyBlocksNoHandler(
+        _ rig: JobQueueTestRig, summarizeId: UUID, iterator: inout AsyncStream<JobEvent>.AsyncIterator
+    ) async throws {
+        await rig.queue.start()
+        let pass = await drainExactly(&iterator, count: 1)
+        XCTAssertEqual(pass, [.blocked(jobId: summarizeId, type: .summarize, reason: .noHandler)])
+        let summarizeJob = try await rig.repository.job(id: summarizeId)
+        XCTAssertEqual(summarizeJob?.status, .pending)
+        XCTAssertEqual(summarizeJob?.attempts, 0)
+        await rig.queue.waitUntilIdle()
     }
 
     /// К68: ровно одна финальная последовательность на исполненную задачу —
