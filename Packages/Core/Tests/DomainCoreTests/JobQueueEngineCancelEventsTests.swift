@@ -1,7 +1,7 @@
 //  Группа M перечня MEE-189 (отмена, регистрация, события) — К64…К69. C-013 v8, MEE-350.
 
 import XCTest
-import DomainCore
+@testable import DomainCore
 import DomainTestKit
 
 final class JobQueueEngineCancelEventsTests: XCTestCase {
@@ -98,7 +98,7 @@ final class JobQueueEngineCancelEventsTests: XCTestCase {
     /// `readyId` в итоге дошла до `succeeded`. Теперь читается событие `blocked(.noHandler)`
     /// САМО, и то, что `started(readyId)` публикуется в пересмотре 1, а не отложен.
     ///
-    /// MEE-370 (найдено красным main после #86, дважды): `start()` НЕ ждёт исполнение
+    /// MEE-363 (найдено красным main после #86, дважды): `start()` НЕ ждёт исполнение
     /// `readyId` — оно идёт отдельной `Task` (§7, `beginExecuting`), и эта `Task` — НАСТОЯЩИЙ
     /// параллелизм (кооперативный пул Swift даёт ей отдельный поток, а не только очередь
     /// приостановок ОДНОГО актора): с фейковым нулевым временем исполнения она может успеть
@@ -162,6 +162,49 @@ final class JobQueueEngineCancelEventsTests: XCTestCase {
 
         let ready = try await rig.repository.job(id: readyId)
         XCTAssertEqual(ready?.status, .succeeded, "пересмотр не встал на noHandler")
+    }
+
+    /// MEE-375 (найдено РП на приёмке #91, MEE-363): заявка `revisitPassRequested`,
+    /// оставленная гонкой ровно в момент, когда пересмотр уже видит `isRunning == false`,
+    /// была бы у СТАРОГО кода прочитана и НЕ сброшена — `guard revisitPassRequested,
+    /// isRunning else { return }` выходил на ветке `isRunning == false`, не долистав до
+    /// строки сброса, стоявшей ПОСЛЕ него. Повисшая заявка переживала `stop()`, и следующий
+    /// явный `start()` видел её как СВОЮ, только что оставленную, — заводил пересмотр,
+    /// которого никто не просил, и публиковал лишний `blocked(.noHandler)`.
+    ///
+    /// Сама гонка — та же истинная параллельность (readyId с нулевой задержкой), что в
+    /// MEE-363, и настолько же недетерминированна на публичном API. Здесь она воспроизведена
+    /// напрямую: `performRevisitSweep()` (обычно вызываемый только из мест, уже проверивших
+    /// `isRunning` — `runRevisitPass()`, `fulfillRequestedRevisitSweep()`, хвост
+    /// `executeAndFinish`) позван в обход этих guard'ов, ПОСЛЕ `stop()`, с уже выставленной
+    /// заявкой — то есть проверяется именно тело метода на границе `isRunning == false`,
+    /// а не удача гонки с планировщиком.
+    func test_mee375_stopClearsPendingRevisitRequestSoNextStartDoesNotDoubleBlock() async throws {
+        let rig = JobQueueTestRig()
+        let summarizeId = try await rig.queue.submit(makeSubmission(
+            payload: .summarize(meetingId: UUID(), transcriptId: UUID(), profileId: "p")
+        ))
+        let stream = rig.queue.events()
+        var iterator = stream.makeAsyncIterator()
+        _ = await drainExactly(&iterator, count: 1)   // submitted — не предмет этого теста
+
+        await rig.queue.start()
+        _ = await drainExactly(&iterator, count: 1)   // blocked(.noHandler) обычного захода
+        await rig.queue.stop()
+
+        await rig.queue.revisitPassRequested = true
+        await rig.queue.performRevisitSweep()
+        let stillRequested = await rig.queue.revisitPassRequested
+        XCTAssertFalse(stillRequested, "МЕЕ-375: заявка обязана сняться, даже когда isRunning уже false")
+
+        await rig.queue.start()
+        let afterRestart = await drainExactly(&iterator, count: 1)
+        XCTAssertEqual(
+            afterRestart, [.blocked(jobId: summarizeId, type: .summarize, reason: .noHandler)],
+            "МЕЕ-375: ровно один blocked на явный запуск — повисшая заявка не должна " +
+            "заводить второй"
+        )
+        await rig.queue.waitUntilIdle()
     }
 
     private func assertNextPassOnlyBlocksNoHandler(
