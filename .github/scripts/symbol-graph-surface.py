@@ -57,6 +57,23 @@ BASELINE_MODULES = {
     "FoundationNetworking",             # Linux-половина Foundation; C-014 §6 её и называет
 }
 
+# Решение архитектора — IR-124 (MEE-367): разрешены ГЛОБАЛЬНО, для всех таргетов и
+# контрактов, а не только для того, у которого нашлись первым. Это не выбор автора
+# модуля, который список контракта обязан ловить, а неотделимый довесок компилятора
+# к любому `public actor`: конформанс `Actor`/`AnyActor` и три метода проверки
+# изоляции по умолчанию из stdlib (`assumeIsolated`/`assertIsolated`/
+# `preconditionIsolated`), несущие `file: StaticString`/`line: UInt`, — появляются у
+# ЛЮБОГО публичного актора в ЛЮБОМ модуле детерминированно, без исключения и без
+# способа отказаться, оставшись актором. Список контракта существует, чтобы ловить
+# чужой тип, который автор мог не заметить в своей сигнатуре, — этих четырёх там
+# заметить нечего: они не в исходниках модуля ни одной строкой.
+ACTOR_BASELINE_TYPES = {
+    ("_Concurrency", "Actor"),
+    ("_Concurrency", "AnyActor"),
+    ("Swift", "StaticString"),
+    ("Swift", "UInt"),
+}
+
 # Единственное место, где шаг называет таргет по имени. Основание — инвариант 32
 # C-014 дословно: «`@_exported import` любого модуля … запрещён здесь дословно»,
 # и там же: «запрет обязан проверяться чтением строк `import`, потому что графом
@@ -277,8 +294,14 @@ def type_allowed(module, spelling, target, repo_modules, allowed_entry):
     (MEE-166), этой правкой не тронутый: любой модуль ЭТОГО репозитория
     (`repo_modules`) или базовый набор (`BASELINE_MODULES`) — возврат РП
     указывал находку только для таргетов со списком, не для непокрытых.
+
+    IR-124 (MEE-367): пары из `ACTOR_BASELINE_TYPES` разрешены раньше и списка,
+    и барьера по модулю — они не пример решения автора, который список обязан
+    ловить, а компиляторный довесок к `public actor`, одинаковый для всех.
     """
     if module == target:
+        return True
+    if (module, spelling) in ACTOR_BASELINE_TYPES:
         return True
     if allowed_entry is not None:
         return (module, spelling) in allowed_entry["types"]
@@ -512,6 +535,13 @@ def self_test():
         ("Foundation", "Date", "Storage", entry, True),                # пара совпадает — да
         ("GRDB", "Date", "Storage", entry, False),                     # имя совпадает, модуль — нет: отказ
         ("Storage", "PrivateOwnType", "Storage", entry, True),         # свой модуль таргета — список ни при чём
+        # IR-124 (MEE-367): довесок `public actor` разрешён раньше списка — не в
+        # `entry["types"]` (см. `entry` выше) ни одной из четырёх пар, а ожидание всё
+        # равно «да».
+        ("_Concurrency", "Actor", "Storage", entry, True),
+        ("_Concurrency", "AnyActor", "Storage", entry, True),
+        ("Swift", "StaticString", "Storage", entry, True),
+        ("Swift", "UInt", "Storage", entry, True),
     ]
     type_failures = [
         (module, spelling, expected, type_allowed(module, spelling, target, repo_modules, allowed_entry))
