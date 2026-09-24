@@ -87,6 +87,7 @@ jobs:
             python3 --version
             ls -l .github/scripts
             python3 .github/scripts/symbol-graph-surface.py --self-test
+            python3 .github/scripts/undefined-symbols.py --self-test
             graph_dir="$RUNNER_TEMP/symbol-graph-core"
             rm -rf "$graph_dir"
             mkdir -p "$graph_dir"
@@ -102,6 +103,7 @@ jobs:
             python3 .github/scripts/symbol-graph-surface.py \
               --graph-dir "$graph_dir" \
               --sources Packages/Core/Sources \
+              --allowed-types-dir .github/scripts/allowed-types \
               --job "Core (Linux)"
           ) 2>&1 | tee "$log" || status=$?
           # Свой вердикт — число таргетов и число нарушений — разбор графа
@@ -389,6 +391,7 @@ jobs:
             command -v python3
             python3 --version
             python3 .github/scripts/symbol-graph-surface.py --self-test
+            python3 .github/scripts/undefined-symbols.py --self-test
             # `|| inner=$?` несущий, как и у SwiftLint выше: вердикт по второму
             # пакету не должен пропадать из-за отказа по первому.
             inner=0
@@ -430,6 +433,7 @@ jobs:
               python3 .github/scripts/symbol-graph-surface.py \
                 --graph-dir "$graph_dir" \
                 --sources "Packages/$pkg/Sources" \
+                --allowed-types-dir .github/scripts/allowed-types \
                 --job "Core + Mac (macos-14) · Packages/$pkg" || inner=$?
             done
             exit $inner
@@ -442,6 +446,28 @@ jobs:
             echo "build_ok=true" >> "$GITHUB_OUTPUT"
           fi
           bash .github/scripts/annotate.sh "Символьный граф · Core + Mac" "$status" "$log" || true
+          exit $status
+
+      # MEE-191, «второй дефект»: способ, который называет инвариант 27 C-010
+      # (К44 перечня MEE-189), — разбор таблицы неопределённых символов
+      # таргета `Storage` — не стоял в ci.yml ни одним шагом. Это ДРУГАЯ
+      # таблица, чем публичная поверхность (шаг выше): та смотрит, что модуль
+      # ПОКАЗЫВАЕТ наружу, эта — что он ВЫЗЫВАЕТ у чужого кода (см. шапку
+      # .github/scripts/undefined-symbols.py). Только на macOS: `Storage`
+      # объявляется в манифесте только не на Linux (MEE-321), на `Core (Linux)`
+      # этого таргета в графе SwiftPM нет вовсе.
+      - name: Таблица неопределённых символов (Storage)
+        if: ${{ !cancelled() && steps.graph.outputs.build_ok == 'true' }}
+        shell: bash
+        run: |
+          set -o pipefail
+          log="$RUNNER_TEMP/undefined-symbols-storage.log"
+          status=0
+          python3 .github/scripts/undefined-symbols.py \
+            --build-dir Packages/Core/.build \
+            --target Storage \
+            --job "Core + Mac (macos-14)" 2>&1 | tee "$log" || status=$?
+          bash .github/scripts/annotate.sh "Неопределённые символы · Storage" "$status" "$log" || true
           exit $status
 
       # Исход шага называл таргет, а не вектор: в сессии без сырых логов
