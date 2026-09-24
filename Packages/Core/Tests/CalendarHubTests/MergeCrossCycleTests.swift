@@ -80,7 +80,11 @@ final class MergeCrossCycleTests: XCTestCase {
         let snapshotC = stored.first?.sources.first { $0.sourceConnectorId == "C" }?.payload
         XCTAssertEqual(snapshotC?.location, "Y", "снимок C (цикл 1) обязан пережить циклы 2 и 3, где C молчит")
         let snapshotA = stored.first?.sources.first { $0.sourceConnectorId == "A" }?.payload
-        XCTAssertNil(snapshotA?.location, "снимок A (цикл 2, location == nil) обязан пережить цикл 3, где A молчит")
+        // Возврат РП (приёмка #109, 19:25 UTC): XCTAssertNil(snapshotA?.location) проходит и
+        // при ПОТЕРЯННОМ снимке — nil?.location тоже nil. XCTAssertNotNil(snapshotA) отдельно
+        // доказывает, что снимок A вообще ЖИВ (а не просто его поле location случайно nil).
+        XCTAssertNotNil(snapshotA, "снимок A (цикл 2) обязан пережить цикл 3, где A молчит, а не пропасть вовсе")
+        XCTAssertNil(snapshotA?.location, "у снимка A location == nil по построению цикла 2 — не потеря снимка")
     }
 
     /// Перенос снимков между циклами (инв. 10): цикл, в котором сообщил только B, не трогает
