@@ -262,8 +262,13 @@ final class JobQueueEngineReadinessTests: XCTestCase {
             XCTAssertEqual(rig.catalog.callCount, 0)
         }
         // (ii) два задания с ОДНИМ profileId в одном пересмотре — счётчик равен единице.
+        // Обработчики обоих типов зарегистрированы — иначе `noHandler` отсекает условие
+        // готовности профиля раньше, чем очередь дойдёт до каталога (порядок случаев
+        // `JobBlockReason`), и счётчик остался бы нулём независимо от намерения теста.
         do {
             let rig = JobQueueTestRig()
+            try await rig.queue.register(handler: FakeJobHandler(type: .transcribe))
+            try await rig.queue.register(handler: FakeJobHandler(type: .diarize))
             _ = try await rig.queue.submit(makeSubmission(
                 payload: .transcribe(recordingId: UUID(), profileId: "same", language: nil),
                 requiresProfileReady: "same"
@@ -277,6 +282,8 @@ final class JobQueueEngineReadinessTests: XCTestCase {
         // (iii) два задания с РАЗНЫМИ profileId — счётчик равен двум.
         do {
             let rig = JobQueueTestRig()
+            try await rig.queue.register(handler: FakeJobHandler(type: .transcribe))
+            try await rig.queue.register(handler: FakeJobHandler(type: .diarize))
             _ = try await rig.queue.submit(makeSubmission(
                 payload: .transcribe(recordingId: UUID(), profileId: "a", language: nil), requiresProfileReady: "a"
             ))
