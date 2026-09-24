@@ -10,9 +10,12 @@
 import DomainCore
 import Foundation
 
-enum ManifestWriter {
+/// `package`, не `public` — та же точка входа, что использует харнесс-писатель (К27б, план
+/// MEE-315 §6) для записи `manifest.json` тем же путём, каким его пишет реализация: второй
+/// источник истины дублированием этого кода во втором месте был бы дороже.
+package enum ManifestWriter {
 
-    static func writeAtomically(_ manifest: RecordingManifest, to directory: URL) throws {
+    package static func writeAtomically(_ manifest: RecordingManifest, to directory: URL) throws {
         let bytes = try DomainJSON.encode(manifest)
         let destination = directory.appendingPathComponent("manifest.json")
         let temporary = directory.appendingPathComponent(".manifest.json.\(UUID().uuidString).tmp")
