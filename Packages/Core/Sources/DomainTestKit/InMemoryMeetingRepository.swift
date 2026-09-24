@@ -179,11 +179,20 @@ public final class InMemoryMeetingRepository: MeetingRepository, @unchecked Send
         try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
     }
 
+    /// Возврат РП (приёмка #109, 19:25 UTC): проверка `gatedMethods.contains(method)` и
+    /// регистрация continuation были ДВУМЯ отдельными `locked` — между ними `release(on:)`
+    /// мог застать словарь ещё пустым (no-op, снимать нечего) и уйти, а континьюация,
+    /// зарегистрированная МОМЕНТОМ позже, уже никогда не будет отпущена — то же зависание,
+    /// что документировано у К66/К75 (`ControlSurfaceEntryPointsTests.swift`) для
+    /// `FakeCalendarConnector.release`. Здесь — одна атомарная проверка-и-регистрация.
     private func waitIfGated(_ method: MeetingRepositoryMethod) async {
-        guard locked({ gatedMethods.contains(method) }) else { return }
-        let key = UUID()
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-            locked { gateContinuations[method, default: [:]][key] = continuation }
+            let isGated = locked { () -> Bool in
+                guard gatedMethods.contains(method) else { return false }
+                gateContinuations[method, default: [:]][UUID()] = continuation
+                return true
+            }
+            if !isGated { continuation.resume() }
         }
     }
 

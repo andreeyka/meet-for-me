@@ -124,20 +124,29 @@ public final class FakeCalendarConnector: CalendarConnector, @unchecked Sendable
     /// `swift test`, найденный на CI (MEE-362, красный прогон после пуша хоста). Отмена здесь
     /// бросает `CancellationError`, который ничья сторона не читает (раса уже решена другой
     /// задачей) — важно только то, что задача завершается, а не то, чем именно.
+    /// Возврат РП (приёмка #109, 19:25 UTC): `hangingMethods.contains(method)` и регистрация
+    /// continuation были ДВУМЯ отдельными `locked` — между ними `release(_:)` мог застать
+    /// словарь ещё пустым (no-op, снимать нечего) и уйти, а continuation, зарегистрированная
+    /// МОМЕНТОМ позже, уже никогда не будет отпущена (тот же класс зависания, что бисекция
+    /// К66/К75 уже нашла и задокументировала выше по файлу для самого `release`). Три исхода
+    /// одной атомарной проверки: `.resume` (не взведено — сразу дальше), `.cancel` (уже
+    /// отменена до регистрации), `.wait` (зарегистрирована, ждёт `release`/отмену).
     private func hangOrGate(_ method: CalendarConnectorMethod) async throws {
-        guard locked({ hangingMethods.contains(method) }) else { return }
         let key = UUID()
         try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-                // Уже отменена ДО регистрации (onCancel сработал первым, до store) — не
-                // хранить запись, которую `onCancel` больше никогда не увидит и не снимет:
-                // без этой проверки продолжение осталось бы висеть навсегда.
-                let alreadyCancelled = locked { () -> Bool in
-                    guard !Task.isCancelled else { return true }
+                enum Outcome { case resume, cancel, wait }
+                let outcome = locked { () -> Outcome in
+                    guard hangingMethods.contains(method) else { return .resume }
+                    guard !Task.isCancelled else { return .cancel }
                     gateContinuations[method, default: [:]][key] = continuation
-                    return false
+                    return .wait
                 }
-                if alreadyCancelled { continuation.resume(throwing: CancellationError()) }
+                switch outcome {
+                case .resume: continuation.resume()
+                case .cancel: continuation.resume(throwing: CancellationError())
+                case .wait: break
+                }
             }
         } onCancel: {
             let cancelled = locked { () -> CheckedContinuation<Void, Error>? in
