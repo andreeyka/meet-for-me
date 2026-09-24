@@ -72,11 +72,13 @@ public final class FakeTranscriptionServicePort: TranscriptionServicePort, @unch
 
     public func ping() async throws -> String { "fake-transcription-service" }
 
-    /// `Task.sleep` — не занятость: сон прерывается немедленно и совместно `CancellationError`
-    /// при отмене объемлющего `Task`, ровно тем же приёмом, что `FakeTranscriptionEngine`
-    /// (EngineKit) уже использует для «работать долго» — здесь длительность не нужна, только
-    /// сама точка ожидания, поэтому сон — на весь диапазон `UInt64`.
+    /// Возврат РП на #120: `Task.sleep(nanoseconds: .max)` на Linux (Swift 5.10, docker
+    /// `swift:5.10`) возвращался немедленно, без отмены, — судя по всему, переполнение при
+    /// расчёте срока сна. Точки ожидания на Linux не было вовсе, и гонка К44/К45 оставалась
+    /// (CI был зелёным лишь потому, что `cancel()` почти всегда успевал раньше). Ограниченный
+    /// срок — 5 секунд, не весь `UInt64`, — даёт настоящую точку ожидания на обеих платформах
+    /// И страховку: без отмены тест упадёт понятным `.permanentFailure`, а не повиснет.
     private func waitUntilCancelled() async {
-        try? await Task.sleep(nanoseconds: .max)
+        try? await Task.sleep(nanoseconds: 5_000_000_000)
     }
 }
