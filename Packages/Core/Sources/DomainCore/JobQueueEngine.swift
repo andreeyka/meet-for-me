@@ -42,6 +42,15 @@ public actor JobQueueEngine: JobQueue {
 
     var isRunning = false
     var isRecordingInProgress = false
+
+    /// Число пересмотров (`runRevisitPass()`), идущих ПРЯМО СЕЙЧАС — считает не только
+    /// вызванные явно (`start()`, `submit()`), но и тот, что запускает на себя завершение
+    /// задачи (`executeAndFinish`, конец §7): его никто, кроме этого счётчика, не ждёт.
+    /// MEE-363: `waitUntilIdle()` без этого счётчика возвращался, пока такой пересмотр УЖЕ
+    /// занял кандидата без обработчика (`claimNext`), но ЕЩЁ НЕ вернул его строку в `pending`
+    /// (`noHandler`, §7) — прямое чтение репозитория в этот миг ловило `running` вместо
+    /// ожидаемого `pending`.
+    var activeRevisitPasses = 0
     var timerTask: Task<Void, Never>?
     var powerEventsTask: Task<Void, Never>?
 

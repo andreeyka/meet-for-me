@@ -97,11 +97,21 @@ extension JobQueueEngine {
     /// MEE-311: без него утверждение сразу после `start()`/`submit()` гонится с фоновой
     /// задачей, которую они запустили и не ждут. Цикл — не разовое ожидание: исполнение,
     /// закончившись, само может запустить следующее (пересмотр по завершении).
+    ///
+    /// MEE-363: `runningTasks.isEmpty` одна не гарантирует «пересмотра нет ни одного» —
+    /// `executeAndFinish` (§7) снимает завершённую задачу из `runningTasks` ДО своего же
+    /// `await runRevisitPass()`, и по этой строке `waitUntilIdle` мог вернуться, пока тот
+    /// пересмотр уже занял кандидата без обработчика (`claimNext`), но ещё не отдал его
+    /// обратно в `pending` (`noHandler`). `activeRevisitPasses` закрывает это окно.
     public func waitUntilIdle() async {
-        while !runningTasks.isEmpty {
-            let tasks = Array(runningTasks.values)
-            for entry in tasks {
-                await entry.task.value
+        while !runningTasks.isEmpty || activeRevisitPasses > 0 {
+            if !runningTasks.isEmpty {
+                let tasks = Array(runningTasks.values)
+                for entry in tasks {
+                    await entry.task.value
+                }
+            } else {
+                await Task.yield()
             }
         }
     }

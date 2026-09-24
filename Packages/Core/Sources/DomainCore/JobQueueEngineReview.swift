@@ -12,6 +12,8 @@ extension JobQueueEngine {
     /// `skipped`, пока не вернётся `nil` либо не кончатся свободные слоты (§7, шаги 1—5).
     func runRevisitPass() async {
         guard isRunning else { return }
+        activeRevisitPasses += 1
+        defer { activeRevisitPasses -= 1 }
         await reclaimExpiredLeases()
         guard isRunning else { return }
 
