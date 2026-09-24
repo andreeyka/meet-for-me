@@ -68,7 +68,10 @@ final class AggregateRuntime: @unchecked Sendable {
         return runtime
     }
 
-    private struct Composition {
+    /// Возврат MEE-317 (четвёртый круг): видимость поднята с `private` до `internal` — `Composition`
+    /// теперь возвращает и тестируемая чистая функция `assembleComposition` (см. ниже), а тесту
+    /// нужно читать поля результата.
+    struct Composition {
         var subDevices: [[String: Any]] = []
         var tapList: [[String: Any]] = []
         var mainUID: String?
@@ -89,33 +92,49 @@ final class AggregateRuntime: @unchecked Sendable {
     }
 
     // Состав саб-устройств и tap-ов: микрофон (или, без него, выход по умолчанию — только ради
-    // часов, см. шапку файла) плюс единственный tap этого сеанса.
-    //
-    // `driftCompensation` доходит до HAL-словаря буквально (`kAudioSubTapDriftCompensationKey`) —
-    // возврат MEE-317 (второй круг): аргумент раньше не участвовал в сборке вовсе.
-    //
-    // СТРОКА: IR-114 (MEE-332) — см. шапку файла. Опорный элемент ниже держит
-    // `kAudioSubDeviceDriftCompensationKey: 0` безусловно, независимо от `driftCompensation`;
-    // значение для НЕ опорного tap вынесено в `nonReferenceDriftCompensationValue` — чистая
-    // функция, тестируемая без живого HAL (сама сборка словаря зависит от `HALObject.devices()`
-    // и настоящего tap-объекта, недостижимых в CI без TCC).
+    // часов, см. шапку файла) плюс единственный tap этого сеанса. Поиск устройств через HAL —
+    // здесь (`HALObject.devices()`, `HALTap.uid(of:)`); сама сборка словаря из уже готовых UID —
+    // в чистой `assembleComposition` ниже (возврат MEE-317, четвёртый круг: прежде обе части были
+    // слиты в одной нетестируемой функции — тест мог проверить только константу `0`/`1`, которую
+    // порт сам же передавал, ни разу не пройдя через код, реально складывающий словарь).
     private func buildComposition(microphoneUID: String?, driftCompensation: Bool) -> Composition {
-        var result = Composition()
+        var resolvedMicrophoneUID: String?
         if let micUID = microphoneUID, let micDevice = HALObject.devices().first(where: {
             HALObject.string($0, kAudioDevicePropertyDeviceUID) == micUID
         }) {
-            result.subDevices.append([kAudioSubDeviceUIDKey: micUID, kAudioSubDeviceDriftCompensationKey: 0])
-            result.mainUID = micUID
+            resolvedMicrophoneUID = micUID
             installMicrophoneListeners(micDevice)
-        } else if let output = HALObject.defaultOutputForClock() {
-            result.subDevices.append([kAudioSubDeviceUIDKey: output, kAudioSubDeviceDriftCompensationKey: 0])
-            result.mainUID = output
         }
-        if let tapObject, let uid = HALTap.uid(of: tapObject) {
+        let defaultOutputUID = resolvedMicrophoneUID == nil ? HALObject.defaultOutputForClock() : nil
+        let tapUID = tapObject.flatMap(HALTap.uid(of:))
+        return Self.assembleComposition(microphoneUID: resolvedMicrophoneUID, defaultOutputUID: defaultOutputUID,
+                                        tapUID: tapUID, driftCompensation: driftCompensation)
+    }
+
+    /// Сборка HAL-словаря из ГОТОВЫХ UID — чистая функция, ни одного обращения к HAL (поиск
+    /// устройств и tap-а остаётся в `buildComposition` выше). Возврат MEE-317 (четвёртый круг):
+    /// тестируется напрямую в CI без TCC и живого звука — у каждого элемента, кроме опорного
+    /// (первого назначенного `mainUID`), `drift` обязан быть `nonReferenceDriftCompensationValue`,
+    /// у самого опорного — `0` безусловно (см. `// СТРОКА: IR-114` в шапке файла).
+    ///
+    /// `driftCompensation` доходит до HAL-словаря буквально (`kAudioSubTapDriftCompensationKey`) —
+    /// возврат MEE-317 (второй круг): аргумент раньше не участвовал в сборке вовсе.
+    static func assembleComposition(
+        microphoneUID: String?, defaultOutputUID: String?, tapUID: String?, driftCompensation: Bool
+    ) -> Composition {
+        var result = Composition()
+        if let microphoneUID {
+            result.subDevices.append([kAudioSubDeviceUIDKey: microphoneUID, kAudioSubDeviceDriftCompensationKey: 0])
+            result.mainUID = microphoneUID
+        } else if let defaultOutputUID {
+            result.subDevices.append([kAudioSubDeviceUIDKey: defaultOutputUID, kAudioSubDeviceDriftCompensationKey: 0])
+            result.mainUID = defaultOutputUID
+        }
+        if let tapUID {
             let tapIsReference = result.mainUID == nil
-            let compensationValue = tapIsReference ? 0 : Self.nonReferenceDriftCompensationValue(driftCompensation)
-            result.tapList.append([kAudioSubTapUIDKey: uid, kAudioSubTapDriftCompensationKey: compensationValue])
-            if tapIsReference { result.mainUID = uid }
+            let compensationValue = tapIsReference ? 0 : nonReferenceDriftCompensationValue(driftCompensation)
+            result.tapList.append([kAudioSubTapUIDKey: tapUID, kAudioSubTapDriftCompensationKey: compensationValue])
+            if tapIsReference { result.mainUID = tapUID }
         }
         return result
     }

@@ -3,6 +3,7 @@
 //  а не только сам факт вызова `buildAggregate` — тест утверждает «true» на каждом из них,
 //  а не «вызов случился».
 
+import CoreAudio
 import DomainCore
 import Foundation
 import XCTest
@@ -63,5 +64,50 @@ final class DriftCompensationTests: CaptureAsyncTestCase {
     func test_k06_nonReferenceDriftCompensationValueMatchesFlag() {
         XCTAssertEqual(AggregateRuntime.nonReferenceDriftCompensationValue(true), 1)
         XCTAssertEqual(AggregateRuntime.nonReferenceDriftCompensationValue(false), 0)
+    }
+
+    // MARK: - К6 (четвёртый круг) — сборка HAL-словаря из готовых UID
+
+    /// Возврат MEE-317 (четвёртый круг): прежние тесты проверяли только константу, которую порт
+    /// передавал шву, ни разу не пройдя через код, реально складывающий HAL-словарь
+    /// (`AggregateRuntime.assembleComposition`). Эта функция — чистая (не требует живого HAL, см.
+    /// её описание в `CoreAudioAggregate.swift`), тестируется напрямую: у элемента, который НЕ
+    /// опорный (микрофон — опорный, tap — нет), `drift` обязан быть 1 при `driftCompensation: true`
+    /// — реализация, подставляющая здесь константу `0`, эту проверку не пройдёт.
+    func test_k06_assembleCompositionGivesNonReferenceTapDriftOne() {
+        let composition = AggregateRuntime.assembleComposition(
+            microphoneUID: "mic-uid", defaultOutputUID: nil, tapUID: "tap-uid", driftCompensation: true
+        )
+        let tapDrift = composition.tapList.first?[kAudioSubTapDriftCompensationKey] as? Int
+        XCTAssertEqual(tapDrift, 1, "НЕ опорный tap при driftCompensation=true обязан нести drift=1, "
+                       + "не 0 — иначе инвариант 6 («выключить нечем») нарушен молча")
+        let micDrift = composition.subDevices.first?[kAudioSubDeviceDriftCompensationKey] as? Int
+        XCTAssertEqual(micDrift, 0, "опорный элемент (микрофон) — drift=0 безусловно, см. IR-114")
+        XCTAssertEqual(composition.mainUID, "mic-uid")
+    }
+
+    /// То же самое без микрофона — опорный элемент становится выходом по умолчанию, tap остаётся
+    /// НЕ опорным и обязан получить ту же единицу.
+    func test_k06_assembleCompositionWithoutMicrophoneStillGivesNonReferenceTapDriftOne() {
+        let composition = AggregateRuntime.assembleComposition(
+            microphoneUID: nil, defaultOutputUID: "output-uid", tapUID: "tap-uid", driftCompensation: true
+        )
+        let tapDrift = composition.tapList.first?[kAudioSubTapDriftCompensationKey] as? Int
+        XCTAssertEqual(tapDrift, 1, "НЕ опорный tap — drift=1 и без микрофона в составе")
+        let outputDrift = composition.subDevices.first?[kAudioSubDeviceDriftCompensationKey] as? Int
+        XCTAssertEqual(outputDrift, 0, "опорный элемент (выход по умолчанию) — drift=0 безусловно")
+    }
+
+    /// Без микрофона и без выхода по умолчанию единственным элементом состава остаётся сам tap —
+    /// он становится опорным (см. вилку `// СТРОКА: IR-114` в шапке `CoreAudioAggregate.swift`) и
+    /// несёт drift=0, несмотря на `driftCompensation: true` — опорному элементу компенсация
+    /// относительно себя не полагается ни в одном из двух рогов вилки.
+    func test_k06_assembleCompositionTapAloneBecomesReferenceWithDriftZero() {
+        let composition = AggregateRuntime.assembleComposition(
+            microphoneUID: nil, defaultOutputUID: nil, tapUID: "tap-uid", driftCompensation: true
+        )
+        let tapDrift = composition.tapList.first?[kAudioSubTapDriftCompensationKey] as? Int
+        XCTAssertEqual(tapDrift, 0, "единственный элемент состава — сам себе опорный, drift=0")
+        XCTAssertEqual(composition.mainUID, "tap-uid")
     }
 }
