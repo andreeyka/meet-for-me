@@ -1,6 +1,17 @@
 # Карта модулей
 
-Версия 1.13. Утверждена пользователем (MEE-1). Источник: `docs/architecture.md` v0.7.
+Версия 1.14. Утверждена пользователем (MEE-1). Источник: `docs/architecture.md` v0.7.
+Изменение против v1.13: IR-125 (MEE-368) — приёмка перечня secret-store-keychain (MEE-366) нашла два
+пробела: (1) публичный `init()` без параметров не давал тестам способа направить запись в keychain, не
+задевая login keychain разработчика/раннера CI — добавление временного keychain в список поиска решает
+ТОЛЬКО чтение (`SecItemCopyMatching`), запись (`SecItemAdd` без `kSecUseKeychain`) идёт в keychain по
+умолчанию независимо от списка поиска; (2) протокол `SecretStore` объявлен `async throws` без единого
+слова о том, что бросает. Решено: внутренний (не публичный) `init(keychain: SecKeychain?)` — тестовый
+шов, каждый вызов явно называет свой keychain (`kSecUseKeychain`/`kSecMatchSearchList`), без глобального
+состояния процесса; собственный внутренний `enum` ошибки (два случая — заблокирован/отклонён, и
+«неожиданный `OSStatus`»), `get` на `errSecItemNotFound` отдаёт `nil`, `set(value: nil)` на отсутствующей
+записи — успех без действия. Раздел «МОДУЛЬ: secret-store-keychain» дополнен (не переписан — новые
+абзацы, старый текст не тронут). Провод `host/secrets.*` — правка C-006 v13, отдельным изданием.
 Изменение против v1.12: малый возврат РП по IR-122 (MEE-358), комментарий 74c0216c — раздел «МОДУЛЬ:
 secret-store-keychain» (§3) был внутренне противоречив: CI обещал round-trip на файловом keychain, а список
 ручных проверок называл `keychain-access-group` и синхронизацию iCloud — это признаки Data Protection
@@ -348,6 +359,30 @@ Mac. Работа `Core (Linux)` `storage` не проверяет вовсе; �
   этого Mac (C-010), синхронизация не даёт выгоды и добавляет поверхность даром. `value: nil` в `set` удаляет
   элемент (`SecItemDelete`) — то же правило, что уже действует в `ConnectorHostServices.secretSet` (MEE-346,
   PR #71). Решение и цена — IR-122, [MEE-358](<https://linear.app/easypto/issue/MEE-358>)
+- **Тестовый шов (IR-125, [MEE-368](<https://linear.app/easypto/issue/MEE-368>)).** Публичный `init()` без
+  параметров (composition root вызывает его же) делегирует `internal init(keychain: SecKeychain?)` со
+  значением `nil`; тесты того же модуля (`@testable import SecretStoreKeychain`) вызывают внутренний
+  инициализатор с временным keychain напрямую. `internal`-объявление публичной поверхности не касается
+  вовсе (граф символов снимается на публичном уровне доступа — C-006 инвариант 21 уже называет это тем же
+  доводом для другого модуля) — цена решения: ноль строк в разрешённом списке контракта. Отвергнутый
+  вариант — держать временный keychain в списке поиска процесса (`SecKeychainSetSearchList`) и полагаться
+  на него: список поиска решает, ГДЕ ИСКАТЬ (`SecItemCopyMatching`), а не КУДА ПИСАТЬ (`SecItemAdd` без
+  `kSecUseKeychain` пишет в keychain по умолчанию независимо от списка поиска) — находка самой постановки
+  IR-125. Решено вместо этого: непустой `keychain` передаётся явно в каждый вызов — `kSecUseKeychain:
+  keychain` в `SecItemAdd`, `kSecMatchSearchList: [keychain]` в `SecItemCopyMatching`/`SecItemUpdate`/
+  `SecItemDelete` — без глобального состояния процесса и обязанности его восстанавливать после теста.
+- **Ошибки (IR-125, [MEE-368](<https://linear.app/easypto/issue/MEE-368>)).** Собственный `enum` модуля,
+  не `ConnectorError` (C-006 §6 — тот для обратного направления, ошибка ПЛАГИНА, а не хранилища ХОСТА) и не
+  тип `domain-core`: тем же приёмом, что и сам протокол `SecretStore` — без публичной поверхности (`internal`,
+  контракта не касается). Два случая: `errSecInteractionNotAllowed`/`errSecAuthFailed` (keychain заблокирован
+  или доступ отклонён — диалог показать некому в headless/CI) и любой другой `OSStatus` — «неожиданный».
+  `get(key:namespace:)` на `errSecItemNotFound` отдаёт `nil`, не бросает — это ответ по типу метода (`String?`),
+  а не отказ. `set(key:value: nil, namespace:)` на отсутствующей записи — успех без действия (`errSecItemNotFound`
+  от `SecItemDelete` не пробрасывается): удаление уже отсутствующего идемпотентно, тем же доводом, что уже
+  принят строкой выше для `ConnectorHostServices.secretSet` (MEE-346, PR #71). По проводу (`host/secrets.*`,
+  C-006 §4) — правка C-006 v13: отказ хранилища становится JSON-RPC `-32603 internal error`, `message` —
+  описание ошибки; ни `ConnectorError`, ни `CalendarError` не заводят под это нового случая (таблица §5.1 —
+  только для методов §3, обратного направления).
 - Потребляет контракты: `SecretStore` (объявлен `calendar-hub`) — единственная зависимость сверх Foundation/Security
 - Запрещено: любая бизнес-логика хоста (нормализация, дедуп, расписание опроса — это `calendar-hub`); хранить
   что-либо, кроме пары (`namespace`, `key`) → значение, в форме, отличной от Keychain generic-password
