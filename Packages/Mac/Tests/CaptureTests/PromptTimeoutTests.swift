@@ -72,6 +72,14 @@ final class PromptTimeoutTests: CaptureAsyncTestCase {
         await harness.gateway.awaitTapRequested()
         let tap = TapHandle()
         harness.gateway.resolveTap(with: .created(tap))
+        // `resolveTap` только БУДИТ приостановленный `requestSystemAudioTap` — само решение
+        // гонки (`race()`, CapturePromptRace.swift: значение против `deadline.wait`, ни одна
+        // сторона не отменяется) исполняется отдельной задачей и требует шага планировщика.
+        // `awaitMicrophoneRequested()` — деталь, что `acquireTap` уже ВЕРНУЛ хэндл (иначе до
+        // `acquireMicrophone`/`requestMicrophone` очередь не дошла бы вовсе): без этого шага
+        // `expireNow()` мог обогнать ещё не решённую гонку tap и подложить ей `.timedOut`
+        // вместо `.value`.
+        await harness.gateway.awaitMicrophoneRequested()
         harness.deadline.expireNow()
 
         do {
