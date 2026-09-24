@@ -17,13 +17,16 @@ final class LoopbackTransportMalformedRequestTests: XCTestCase {
     /// сегмента и слов подобраны БЕЗ повторяющихся числовых литералов — правка одного
     /// значения не задевает другое случайным совпадением текста.
     private func makeBaseRequest() throws -> (jobId: EngineJobId, request: EngineRequest) {
+        // Точные двоичные дроби (0.875 = 7/8, 0.625 = 5/8): PropertyListEncoder печатает
+        // НЕТОЧНУЮ дробь (0.9, …) полной точностью double, а не короткой формой — обнаружено
+        // CI (прогон 36048940544), цель "<real>0.9</real>" не находилась в тексте вовсе.
         let words = [
-            try Transcript.Word(startMs: 50, endMs: 450, text: "раз", confidence: 0.9, original: nil),
-            try Transcript.Word(startMs: 850, endMs: 1_250, text: "два", confidence: 0.75, original: nil)
+            try Transcript.Word(startMs: 50, endMs: 450, text: "раз", confidence: 0.875, original: nil),
+            try Transcript.Word(startMs: 850, endMs: 1_250, text: "два", confidence: 0.625, original: nil)
         ]
         let segment = try Transcript.Segment(
             startMs: 10, endMs: 1_300, channel: .mic, speakerCluster: nil,
-            text: "раз два", textOriginal: nil, textConfidence: 0.75, words: words
+            text: "раз два", textOriginal: nil, textConfidence: 0.625, words: words
         )
         let transcript = try Transcript(
             recordingId: EngineFixtures.recordingId, language: "ru", engine: "fake-asr",
@@ -86,7 +89,8 @@ final class LoopbackTransportMalformedRequestTests: XCTestCase {
 
     func test_k32_wordConfidenceOutOfRangeThrowsDomainValidationError() throws {
         let (_, request) = try makeBaseRequest()
-        let text = try encodedXML(request).replacingOccurrences(of: "<real>0.9</real>", with: "<real>1.0000001</real>")
+        let text = try encodedXML(request)
+            .replacingOccurrences(of: "<real>0.875</real>", with: "<real>1.0000001</real>")
         do {
             try makeTransport().receive(try data(from: text))
             XCTFail("ожидался DomainValidationError")
@@ -118,7 +122,7 @@ final class LoopbackTransportMalformedRequestTests: XCTestCase {
 
     func test_k32_unrepresentableWordConfidenceThrowsDecodingError() throws {
         let (_, request) = try makeBaseRequest()
-        let text = try encodedXML(request).replacingOccurrences(of: "<real>0.9</real>", with: "<real>1e400</real>")
+        let text = try encodedXML(request).replacingOccurrences(of: "<real>0.875</real>", with: "<real>1e400</real>")
         do {
             try makeTransport().receive(try data(from: text))
             XCTFail("ожидался DecodingError.dataCorrupted")
@@ -147,6 +151,6 @@ final class LoopbackTransportMalformedRequestTests: XCTestCase {
     func test_k32_vectorOfNonEmptiness_encodedRequestActuallyContainsBothConfidences() throws {
         let (_, request) = try makeBaseRequest()
         let text = try encodedXML(request)
-        XCTAssertTrue(text.contains("<real>0.9</real>"), "эталон несёт значение, которое правят все три вектора")
+        XCTAssertTrue(text.contains("<real>0.875</real>"), "эталон несёт значение, которое правят все три вектора")
     }
 }

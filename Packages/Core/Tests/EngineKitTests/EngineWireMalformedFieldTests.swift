@@ -3,6 +3,11 @@
 //  валидное значение, заменить один числовой литерал на непредставимый, декодировать
 //  напрямую `EngineWire.decode` — без транспорта и без `EngineXPCClient` (эта часть
 //  критерия — чистый факт провода, macOS-половина того же критерия сюда не входит).
+//
+//  Дробные цели замены — только точные двоичные дроби (0.25, 0.5, …): `PropertyListEncoder`
+//  печатает НЕТОЧНУЮ двоичную дробь (0.9, 0.4, …) полной точностью double, а не короткой
+//  формой, — обнаружено CI (test_k40i, прогон 36048940544): `PlistSurgery.data` честно
+//  бросил targetNotFound("<real>0.4</real>") — цели в тексте не было вовсе.
 
 import XCTest
 import DomainCore
@@ -137,9 +142,9 @@ final class EngineWireMalformedFieldTests: XCTestCase {
     /// бросает, дальше кадр не попадает никуда.
     func test_k40i_corruptedProgressFrameFailsToDecode() throws {
         let message = EngineProgressMessage(
-            jobId: EngineJobId(rawValue: UUID()), progress: .advanced(stage: .asr, fraction: 0.4)
+            jobId: EngineJobId(rawValue: UUID()), progress: .advanced(stage: .asr, fraction: 0.5)
         )
-        let data = try PlistSurgery.data(for: message, replacing: "<real>0.4</real>", with: "<real>1e400</real>")
+        let data = try PlistSurgery.data(for: message, replacing: "<real>0.5</real>", with: "<real>1e400</real>")
         assertDataCorrupted(EngineProgressMessage.self, data)
     }
 }

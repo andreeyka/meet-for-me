@@ -50,13 +50,21 @@ final class EngineKitSourceSurfaceTests: XCTestCase {
 
     /// Отдельный вход и отдельный механизм (возврат РП, 24.09 14:40, п. 6): `NSError`
     /// существует и на Linux — одной сборки таргета этой строке недостаточно.
+    ///
+    /// Проверка — по самому ОБЪЯВЛЕНИЮ (код без строк `//`), не по всему файлу: шапка файла
+    /// сама называет `NSError` по имени, объясняя, почему тип его не оборачивает (CI,
+    /// прогон 36048940544, поймал именно этот случай — проверка по всему тексту красна
+    /// по построению).
     func test_k16_engineTransportFaultDeclarationNeverMentionsNSError() throws {
         let sources = try sourceFiles()
         guard let file = sources.first(where: { $0.name == "EngineTransportFault.swift" }) else {
             XCTFail("EngineTransportFault.swift не найден")
             return
         }
-        XCTAssertFalse(file.text.contains("NSError"), "объявление EngineTransportFault не содержит NSError")
+        let code = file.text.components(separatedBy: "\n")
+            .filter { !$0.trimmingCharacters(in: .whitespaces).hasPrefix("//") }
+            .joined(separator: "\n")
+        XCTAssertFalse(code.contains("NSError"), "объявление EngineTransportFault не содержит NSError")
     }
 
     // MARK: - К49 (инв. 17)
