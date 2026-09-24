@@ -30,11 +30,6 @@ extension CalendarPortImpl {
         }
     }
 
-    /// Внутренняя, непубличная операция развилки Р6 — обходит ОДИН источник, не все
-    /// (публичный `sync(trigger:)` параметра источника не несёт). Вызывается и публичным
-    /// `sync`, и push-обработчиком (`notify(.changesAvailable)`, К61) напрямую.
-    /// Не-реентерантна на источник (К35) — второй параллельный вызов для того же
-    /// источника получает результат уже идущего, не запускает второй.
     // НАЙДЕНО (бисекция CI-зависания, MEE-362 ч.2 — К67, не среди семи дефектов приёмки
     // #85, обнаружено ЭТИМ новым тестом): `Task { await self.performSync(...) }` —
     // неструктурная задача; `await task.value`/`await running.value` сами по себе НЕ
@@ -47,6 +42,11 @@ extension CalendarPortImpl {
     // `withTaskCancellationHandler` пробрасывает `.cancel()` явно на саму `task`/
     // `running` — тем же приёмом, что `hangOrGate`/`FakeWaitSeam.sleep` уже используют
     // сами по себе, только на один уровень выше.
+    /// Внутренняя, непубличная операция развилки Р6 — обходит ОДИН источник, не все
+    /// (публичный `sync(trigger:)` параметра источника не несёт). Вызывается и публичным
+    /// `sync`, и push-обработчиком (`notify(.changesAvailable)`, К61) напрямую.
+    /// Не-реентерантна на источник (К35) — второй параллельный вызов для того же
+    /// источника получает результат уже идущего, не запускает второй.
     func syncOne(source: CalendarSourceId, trigger: CalendarSyncTrigger) async -> CalendarSyncResult {
         if let running = inFlightSync[source] {
             return await withTaskCancellationHandler {
