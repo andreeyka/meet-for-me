@@ -26,11 +26,14 @@ import CalendarHub
 /// (приёмка #85, дефект 7): `resolveTimeoutAfterHang` (`InitializationTests.swift`) висела
 /// бы вечно, если бы условие никогда не стало истинным (реальный дефект реализации, не
 /// зависший коннектор теста) — тест обязан упасть явно, не полагаться на внешний таймаут CI.
-/// `condition` — `@autoclosure`, перевычисляется на каждой итерации; допускает побочный
+/// `condition` — обычное замыкание, не `@autoclosure`: CI (Swift на раннере) отказывается
+/// компилировать `await` внутри асинхронного `@autoclosure` («await in an autoclosure that
+/// does not support concurrency») — обычное замыкание с явным `{ ... }` на месте вызова не
+/// подвержено этому ограничению. Перевызывается на каждой итерации; допускает побочный
 /// эффект (например, `waitSeam.resolveNext()`), тем же приёмом, что было в исходном цикле.
 func pollUntil(
-    _ condition: @autoclosure () async -> Bool, timeout: Duration = .seconds(10),
-    file: StaticString = #filePath, line: UInt = #line
+    timeout: Duration = .seconds(10), file: StaticString = #filePath, line: UInt = #line,
+    _ condition: () async -> Bool
 ) async {
     let deadline = ContinuousClock.now + timeout
     while await !condition() {

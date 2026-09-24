@@ -37,14 +37,15 @@ final class ControlSurfaceEntryPointsTests: XCTestCase {
         }
 
         // Ждём, пока два незадержанных источника отработали shutdown — третий ещё висит на воротах.
-        await pollUntil(connectors[0].shutdownCallCount > 0 && connectors[1].shutdownCallCount > 0)
+        await pollUntil { connectors[0].shutdownCallCount > 0 && connectors[1].shutdownCallCount > 0 }
         let doneEarly = await flag.isDone()
         XCTAssertFalse(doneEarly, "stop() не возвращается, пока не отработал shutdown третьего источника")
 
         delayedConnector.release(.shutdown)
         await stopTask.value
 
-        XCTAssertTrue(await flag.isDone())
+        let doneAfterRelease = await flag.isDone()
+        XCTAssertTrue(doneAfterRelease)
         for connector in connectors {
             XCTAssertEqual(connector.shutdownCallCount, 1)
         }
@@ -66,7 +67,7 @@ final class ControlSurfaceEntryPointsTests: XCTestCase {
         // Опрашиваем именно задержку ПОВТОРА (5с), не гонку таймаута fetchEvents (120с,
         // `raceTimeout`) — обе идут через один и тот же Ш3, различать по значению обязательно
         // (тот же довод, что у `resolveTimeoutAfterHang` в InitializationTests.swift).
-        await pollUntil(harness.waitSeam.durations.contains(.seconds(5)))
+        await pollUntil { harness.waitSeam.durations.contains(.seconds(5)) }
         task.cancel()
 
         let results = await task.value

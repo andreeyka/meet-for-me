@@ -148,8 +148,8 @@ final class InitializationTests: XCTestCase {
         Task {
             // Возврат РП (приёмка #85, дефект 7): `pollUntil` ограничен по времени — раньше
             // эти два цикла висели без предела, если условие никогда не становилось истинным.
-            await pollUntil(connector.callCount(method) > 0)
-            await pollUntil(waitSeam.resolveNext())
+            await pollUntil { connector.callCount(method) > 0 }
+            await pollUntil { waitSeam.resolveNext() }
         }
     }
 

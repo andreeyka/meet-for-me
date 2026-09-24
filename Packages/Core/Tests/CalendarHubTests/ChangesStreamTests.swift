@@ -5,7 +5,7 @@ import Foundation
 import XCTest
 import DomainCore
 import DomainTestKit
-import CalendarHub
+@testable import CalendarHub
 
 final class ChangesStreamTests: XCTestCase {
 
