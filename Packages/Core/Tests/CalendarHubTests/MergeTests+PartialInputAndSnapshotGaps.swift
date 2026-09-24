@@ -81,24 +81,7 @@ extension MergeTests {
         let harness = Harness.mergeReady(sourceIds: ["a-conn", "b-conn", "c-conn"])
         let base = Date(timeIntervalSince1970: 1_700_000_000)
 
-        harness.connector("a-conn").setFetchEvents([
-            try mergeTestPayload(
-                connectorId: "a-conn", externalId: "evt-a", lastModified: base.addingTimeInterval(3),
-                attendees: [try mergeTestAttendee(name: "Alice", email: "alice@example.com")]
-            )
-        ])
-        harness.connector("b-conn").setFetchEvents([
-            try mergeTestPayload(
-                connectorId: "b-conn", externalId: "evt-b", lastModified: base.addingTimeInterval(2),
-                location: "X", attendees: [try mergeTestAttendee(name: "Bob", email: "bob@example.com")]
-            )
-        ])
-        harness.connector("c-conn").setFetchEvents([
-            try mergeTestPayload(
-                connectorId: "c-conn", externalId: "evt-c", lastModified: base.addingTimeInterval(1),
-                location: "Y", attendees: [try mergeTestAttendee(name: "Carol", email: "carol@example.com")]
-            )
-        ])
+        try seedK76FirstCycle(harness, base: base)
         let firstResults = await harness.hub.sync(trigger: .manual)
         XCTAssertTrue(firstResults.allSatisfy { $0.failure == nil })
         let firstStored = try XCTUnwrap(harness.meetingRepository.storedRecords.first)
@@ -188,4 +171,28 @@ extension MergeTests {
                 "sourceConnectorId (a-conn), не b-conn"
         )
     }
+}
+
+/// Первый цикл рабочего примера К76 (a-conn/b-conn/c-conn) — вынесено свободной функцией,
+/// не телом теста: SwiftLint `function_body_length` (предел 50 строк) считает только код
+/// самого теста, не оснастку, вызванную из него одной строкой.
+private func seedK76FirstCycle(_ harness: Harness, base: Date) throws {
+    harness.connector("a-conn").setFetchEvents([
+        try mergeTestPayload(
+            connectorId: "a-conn", externalId: "evt-a", lastModified: base.addingTimeInterval(3),
+            attendees: [try mergeTestAttendee(name: "Alice", email: "alice@example.com")]
+        )
+    ])
+    harness.connector("b-conn").setFetchEvents([
+        try mergeTestPayload(
+            connectorId: "b-conn", externalId: "evt-b", lastModified: base.addingTimeInterval(2),
+            location: "X", attendees: [try mergeTestAttendee(name: "Bob", email: "bob@example.com")]
+        )
+    ])
+    harness.connector("c-conn").setFetchEvents([
+        try mergeTestPayload(
+            connectorId: "c-conn", externalId: "evt-c", lastModified: base.addingTimeInterval(1),
+            location: "Y", attendees: [try mergeTestAttendee(name: "Carol", email: "carol@example.com")]
+        )
+    ])
 }
