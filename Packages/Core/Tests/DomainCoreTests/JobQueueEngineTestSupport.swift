@@ -120,19 +120,35 @@ func makeRunningRow(
 /// `AsyncStream.AsyncIterator`, что и снаружи: обе читают из одного общего буфера потока,
 /// второй параллельный потребитель не заводится (буфер — разделяемое хранилище позади
 /// итератора, не сам итератор).
+///
+/// Проигравшую задачу-таймер (`timeoutTask`) обязательно `cancel()`ить, когда `next()`
+/// побеждает первой (обычный случай — событие уже лежит в буфере): найдено первым же
+/// прогоном на CI (#93) — без этого КАЖДЫЙ вызов `nextOrFail` во ВСЕХ тестах
+/// `JobQueueEngine` (через `drainExactly`) на 10 честных секунд оставлял позади себя один
+/// не отменённый `Task.sleep`; сотни таких висящих таймеров за один прогон `swift test`
+/// перегружали общий планировщик настолько, что даже УЖЕ буферизованное событие переставало
+/// успевать за 10 с — тот самый симптом (зависание вместо честного падения), который этот
+/// же предохранитель должен был устранить. `cancel()` победившей `next()`-задачи, когда
+/// побеждает таймер (настоящий, не связанный с этим предохранителем хвост), оставляет её
+/// висящей НАВСЕГДА тем же приёмом, что и остальной код этого файла, — иного пути нет
+/// (см. довод выше, `withTaskGroup`).
 func nextOrFail(
     _ iterator: AsyncStream<JobEvent>.AsyncIterator, seconds: UInt64 = 10,
     file: StaticString = #filePath, line: UInt = #line
 ) async -> JobEvent? {
     let outcome = DrainRaceOutcome()
-    Task {
+    let racer = Task {
         var iterator = iterator
         let event = await iterator.next()
         await outcome.resolve(.some(event))
     }
-    Task {
+    let timeoutTask = Task {
         try? await Task.sleep(nanoseconds: seconds * 1_000_000_000)
         await outcome.resolve(.none)
+    }
+    defer {
+        racer.cancel()
+        timeoutTask.cancel()
     }
     guard let event = await outcome.wait() else {
         XCTFail(
