@@ -7,6 +7,11 @@
 //  Считает только ОБЩЕЕ число вызовов `missingModels`: «не чаще одного вызова на различный
 //  profileId за пересмотр» (инвариант 20) — свойство КЭША в самой очереди, а не заглушки;
 //  заглушка честно отражает, сколько раз её действительно спросили.
+//
+//  С MEE-395 (исход (б) развилки, полный порт C-014 v6) `ModelCatalogPort` несёт ещё
+//  шестнадцать требований — эта заглушка их не проверяет и не эмулирует: очередь зовёт
+//  только `missingModels` (C-013 §1.1). Остальные — `preconditionFailure`: тест этого
+//  файла, дозвавшийся до одного из них, ошибся портом, а не проверяет то, что думает.
 
 import Foundation
 import DomainCore
@@ -80,4 +85,25 @@ final class StubModelCatalogPort: ModelCatalogPort, @unchecked Sendable {
         }
         return locked { missing[profileId] } ?? []
     }
+
+    private static func unused(_ method: String) -> Never {
+        preconditionFailure("StubModelCatalogPort.\(method) не эмулирует C-014 — им пользуется только missingModels")
+    }
+
+    func refreshCatalog() async throws { Self.unused("refreshCatalog") }
+    func models() async -> [ModelDescriptor] { Self.unused("models") }
+    func model(id: String, version: String) async -> ModelDescriptor? { Self.unused("model(id:version:)") }
+    func state(id: String, version: String) async -> ModelState { Self.unused("state(id:version:)") }
+    func download(id: String, version: String) async throws { Self.unused("download") }
+    func cancelDownload(id: String, version: String) async { Self.unused("cancelDownload") }
+    func verify(id: String, version: String) async throws { Self.unused("verify") }
+    func delete(id: String, version: String) async throws { Self.unused("delete") }
+    func diskUsage() async -> [ModelDiskUsage] { Self.unused("diskUsage") }
+    func beginUse(_ bundles: [ModelBundle]) async throws -> ModelUseToken { Self.unused("beginUse") }
+    func endUse(_ token: ModelUseToken) async { Self.unused("endUse") }
+    func profiles() async -> [TranscriptionProfile] { Self.unused("profiles") }
+    func saveProfile(_ profile: TranscriptionProfile) async throws { Self.unused("saveProfile") }
+    func deleteProfile(id: String) async throws { Self.unused("deleteProfile") }
+    func resolve(profileId: String) async throws -> ResolvedProfile { Self.unused("resolve") }
+    func events() -> AsyncStream<ModelCatalogEvent> { Self.unused("events") }
 }
