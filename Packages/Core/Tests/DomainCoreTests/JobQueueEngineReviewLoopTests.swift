@@ -31,7 +31,7 @@ final class JobQueueEngineReviewLoopTests: XCTestCase {
         let rig = JobQueueTestRig()
         try await rig.queue.register(handler: FakeJobHandler(type: .transcode))
         let attributeHandler = FakeJobHandler(type: .attribute)
-        attributeHandler.workLong(seconds: 5)
+        attributeHandler.workLong(seconds: 0.3)
         try await rig.queue.register(handler: attributeHandler)
 
         let transcodeId = try await rig.queue.submit(makeSubmission(priority: 50, forbidWhileRecording: true))
@@ -108,10 +108,10 @@ final class JobQueueEngineReviewLoopTests: XCTestCase {
     func test_k77_revisitStartsMoreThanOneJobWhileSlotsAreFree() async throws {
         let rig = JobQueueTestRig(globalConcurrencyLimit: 2, perTypeConcurrencyLimit: 1)
         let transcodeHandler = FakeJobHandler(type: .transcode)
-        transcodeHandler.workLong(seconds: 5)
+        transcodeHandler.workLong(seconds: 0.3)
         try await rig.queue.register(handler: transcodeHandler)
         let attributeHandler = FakeJobHandler(type: .attribute)
-        attributeHandler.workLong(seconds: 5)
+        attributeHandler.workLong(seconds: 0.3)
         try await rig.queue.register(handler: attributeHandler)
         try await rig.queue.register(handler: FakeJobHandler(type: .diarize))
 

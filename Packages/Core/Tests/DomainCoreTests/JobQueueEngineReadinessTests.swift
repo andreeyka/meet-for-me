@@ -46,7 +46,7 @@ final class JobQueueEngineReadinessTests: XCTestCase {
         do {
             let rig = JobQueueTestRig(globalConcurrencyLimit: 2, perTypeConcurrencyLimit: 1)
             let handler = FakeJobHandler(type: .transcode)
-            handler.workLong(seconds: 5)
+            handler.workLong(seconds: 0.3)
             try await rig.queue.register(handler: handler)
             _ = try await rig.queue.submit(makeSubmission(priority: 10))
             let secondId = try await rig.queue.submit(makeSubmission(priority: 5))
@@ -58,7 +58,7 @@ final class JobQueueEngineReadinessTests: XCTestCase {
         do {
             let rig = JobQueueTestRig(globalConcurrencyLimit: 1, perTypeConcurrencyLimit: 1)
             let transcodeHandler = FakeJobHandler(type: .transcode)
-            transcodeHandler.workLong(seconds: 5)
+            transcodeHandler.workLong(seconds: 0.3)
             try await rig.queue.register(handler: transcodeHandler)
             try await rig.queue.register(handler: FakeJobHandler(type: .attribute))
             _ = try await rig.queue.submit(makeSubmission(priority: 10))
@@ -85,7 +85,7 @@ final class JobQueueEngineReadinessTests: XCTestCase {
         do {
             let rig = JobQueueTestRig()
             let handler = FakeJobHandler(type: .transcode)
-            handler.workLong(seconds: 5)
+            handler.workLong(seconds: 0.3)
             try await rig.queue.register(handler: handler)
             let id = try await rig.queue.submit(makeSubmission())
             await rig.queue.start()
@@ -120,7 +120,7 @@ final class JobQueueEngineReadinessTests: XCTestCase {
             thermalPressure: .nominal, checkedAt: Date(timeIntervalSince1970: 0)
         ))
         let handler = FakeJobHandler(type: .transcode)
-        handler.workLong(seconds: 5)
+        handler.workLong(seconds: 0.3)
         try await rig.queue.register(handler: handler)
 
         let blockedId = try await rig.queue.submit(makeSubmission(priority: 50, requiresACPower: true))
@@ -198,7 +198,7 @@ final class JobQueueEngineReadinessTests: XCTestCase {
     func test_k57_profilePredicateIsTotalOverCatalogOutcome() async throws {
         let rig = JobQueueTestRig(globalConcurrencyLimit: 10, perTypeConcurrencyLimit: 10)
         let handler = FakeJobHandler(type: .transcribe)
-        handler.workLong(seconds: 5)
+        handler.workLong(seconds: 0.3)
         try await rig.queue.register(handler: handler)
 
         rig.catalog.setMissingModels([], for: "ready")
