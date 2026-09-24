@@ -110,6 +110,10 @@ public final class FakeDiarizationEngine: DiarizationEngine, @unchecked Sendable
     public var simulatedWorkNanoseconds: Int = 1_000_000
     public var modelVersion = "fake-1.0"
     public var forcedResult: (() throws -> DiarizationResult)?
+    /// C-011 «Фейк для тестов»: длительность канала на шкале записи — ни `DiarizationRequest`,
+    /// ни `AudioRef` не несут явного поля длительности, поэтому делится не входом, а этим
+    /// настраиваемым значением; по умолчанию совпадает со старой длиной единственной реплики.
+    public var totalDurationMs: Int = 1_000
 
     public init(engineId: String = "fake-diarization") {
         self.engineId = engineId
@@ -130,7 +134,7 @@ public final class FakeDiarizationEngine: DiarizationEngine, @unchecked Sendable
             throw EngineError.cancelled
         }
         do {
-            let result = try forcedResult?() ?? makeResult()
+            let result = try forcedResult?() ?? makeResult(expectedSpeakers: request.expectedSpeakers)
             progress(.finished(stage: .diarization))
             return result
         } catch let error as DomainValidationError {
@@ -138,13 +142,22 @@ public final class FakeDiarizationEngine: DiarizationEngine, @unchecked Sendable
         }
     }
 
-    private func makeResult() throws -> DiarizationResult {
-        try DiarizationResult(
-            turns: [try DiarizationResult.Turn(startMs: 0, endMs: 1_000, cluster: 0)],
-            speakers: [try Transcript.Speaker(cluster: 0, embedding: nil,
-                                              embeddingModelVersion: nil, totalMs: 1_000)],
-            modelVersion: modelVersion
-        )
+    /// C-011 «Фейк для тестов»: канал делится на `expectedSpeakers` (по умолчанию 1) равными
+    /// интервалами — i-й интервал получает кластер `i`, так что число реплик и раздельных
+    /// говорящих отслеживает вход, а не всегда одну реплику/кластер 0.
+    private func makeResult(expectedSpeakers: Int?) throws -> DiarizationResult {
+        let clusterCount = max(1, expectedSpeakers ?? 1)
+        let intervalMs = max(1, totalDurationMs / clusterCount)
+        var turns: [DiarizationResult.Turn] = []
+        var speakers: [Transcript.Speaker] = []
+        for cluster in 0..<clusterCount {
+            let startMs = cluster * intervalMs
+            let endMs = cluster == clusterCount - 1 ? totalDurationMs : startMs + intervalMs
+            turns.append(try DiarizationResult.Turn(startMs: startMs, endMs: endMs, cluster: cluster))
+            speakers.append(try Transcript.Speaker(cluster: cluster, embedding: nil,
+                                                   embeddingModelVersion: nil, totalMs: endMs - startMs))
+        }
+        return try DiarizationResult(turns: turns, speakers: speakers, modelVersion: modelVersion)
     }
 }
 
@@ -162,13 +175,18 @@ public final class FakeEmbeddingEngine: EmbeddingEngine, @unchecked Sendable {
 
     public func embed(_ request: EmbeddingRequest) async throws -> EmbeddingResult {
         do {
-            return try forcedResult?() ?? EmbeddingResult(
-                vector: [Float](repeating: 0.1, count: dimension), dimension: dimension,
-                modelVersion: modelVersion
-            )
+            return try forcedResult?() ?? makeResult(for: request)
         } catch let error as DomainValidationError {
             throw EngineError.invalidResult(error)
         }
+    }
+
+    /// C-011 «Фейк для тестов»: вектор строится из `startMs` среза, не из константы — разные
+    /// срезы дают разные векторы, не совпадающие случайно.
+    private func makeResult(for request: EmbeddingRequest) throws -> EmbeddingResult {
+        let base = Float(request.slice.startMs)
+        let vector = (0..<dimension).map { index in base + Float(index) }
+        return try EmbeddingResult(vector: vector, dimension: dimension, modelVersion: modelVersion)
     }
 }
 
