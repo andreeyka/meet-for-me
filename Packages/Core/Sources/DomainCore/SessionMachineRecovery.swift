@@ -50,38 +50,50 @@ extension SessionMachine {
 
     /// Перечень А. Ответ — записи, судьбу которых он решил: перечень Б их не перерешает.
     ///
-    /// Читается `unfinalized()` (C-010) — предикат «`RecordingStatus` не равен
-    /// `.finalized`», то есть ровно `.recording`, `.stopping` и `.failed`. Записи в
-    /// `.finalized` в этот ответ не входят вовсе, и разбирает их перечень Б через встречу,
-    /// которой они принадлежат.
+    /// Источник — ОБЪЕДИНЕНИЕ `unfinalized()` (C-010, инвариант 28: `.recording`,
+    /// `.stopping`, `.failed`, любой `meetingId`) и `adHoc()` (инвариант 29: колонка
+    /// `meeting_id IS NULL`, любой `RecordingStatus`) — издание v8 (MEE-276, §10). Записи,
+    /// отданные ОБОИМИ методами разом (ad-hoc-запись в `.recording`/`.stopping`/`.failed`),
+    /// разбираются один раз — вторичное обнаружение той же строки исхода не меняет.
     ///
-    /// СТРОКА: записи в `.finalized` с `manifest.meetingId == nil` (ad-hoc) не достижимы
-    /// ничем. `unfinalized()` их не отдаёт, а перечня всех записей C-010 не объявляет ни
-    /// одним методом: `recording(id:)` требует номера, `recordings(meetingId:)` — встречи,
-    /// которой у ad-hoc-записи нет (§1.3). Отсюда ad-hoc-запись, чья цепочка оборвалась
-    /// ПОСЛЕ финализации, остаётся в `processing`-без-сессии навсегда. **Владелец —
-    /// архитектор C-018** (перечень А тотален по `RecordingStatus`, а средства обойти его
-    /// нет), **условие снятия:** либо C-010 объявляет чтение записей без встречи, либо §10
-    /// называет читателя `.finalized` поимённо. **Срок — ближайшее издание C-018.** Живой
-    /// вход у неё есть: ad-hoc-запись, дошедшая до `processing`, и перезапуск после него.
+    /// `origin` ЗАПИСИ ОПРЕДЕЛЯЕТСЯ УЧАСТИЕМ В ОТВЕТЕ `adHoc()`, А НЕ ЗНАЧЕНИЕМ
+    /// `manifest.meetingId` (издание v8, «Ломающие изменения против v7», место 1): запись,
+    /// отданная `adHoc()`, получает `origin == .adHoc` и `meetingId == nil` даже если её
+    /// `manifest.meetingId` не пуст — так восстанавливается запись, осиротевшая каскадом
+    /// (C-010 v8, инвариант 7): встреча удалена, колонка обнулена, а манифест, будучи
+    /// неизменяемым, несёт прежний `meetingId` (К77, различающий вектор издания v8). Флаг
+    /// `isAdHoc`, вычисленный здесь по членству в `adHoc()`, идёт дальше каждым из трёх
+    /// путей заведения и решает это в одном месте — `openRecovered(isAdHoc:)`.
+    ///
+    /// `.finalized` ДОСТИЖИМА ТОЛЬКО ЧЕРЕЗ `adHoc()`: `unfinalized()` исключает её своим
+    /// предикатом (C-010, инвариант 28), и потому всякая запись этой ветви здесь —
+    /// изначально ad-hoc либо осиротевшая каскадом (закрывает находку 1, MEE-307: до
+    /// издания v8 такая запись не поднималась ничем и висела в `processing` без сессии
+    /// после каждого перезапуска).
     private func recoverRecordings(now: Date) async -> Set<UUID> {
         var handled: Set<UUID> = []
         let unfinalized = (try? await recordings.unfinalized()) ?? []
-        for record in unfinalized.sorted(by: { SessionMachineOrder.ascending(
+        let adHoc = (try? await recordings.adHoc()) ?? []
+        let adHocIds = Set(adHoc.map(\.manifest.recordingId))
+        var byId: [UUID: RecordingRecord] = [:]
+        for record in unfinalized { byId[record.manifest.recordingId] = record }
+        for record in adHoc { byId[record.manifest.recordingId] = record }
+        let merged = byId.values.sorted(by: { SessionMachineOrder.ascending(
             $0.manifest.recordingId, $1.manifest.recordingId
-        ) }) {
+        ) })
+        for record in merged {
             handled.insert(record.manifest.recordingId)
+            let isAdHoc = adHocIds.contains(record.manifest.recordingId)
             switch record.status {
             case .recording, .stopping:
-                await recoverInterrupted(record, now: now)
+                await recoverInterrupted(record, isAdHoc: isAdHoc, now: now)
             case .failed:
-                // Сессии не заводит. Строка уже в терминальном для записи состоянии,
-                // и приводить её не к чему.
+                // Сессии не заводит на всех трёх видах происхождения порознь: значение
+                // `.failed` терминально для перечня А независимо от того, кем запись
+                // отдана (К77).
                 continue
             case .finalized:
-                // В ответ `unfinalized()` не входит по его предикату; ветвь оставлена ради
-                // тотальности перебора по `RecordingStatus` (инвариант 22).
-                continue
+                await recoverFinalized(record, isAdHoc: isAdHoc, now: now)
             }
         }
         return handled
@@ -111,16 +123,16 @@ extension SessionMachine {
     /// исход «удалось» стоит на ВОЗВРАЩЁННОМ манифесте, и там, где манифеста нет, второй
     /// ветви взяться неоткуда; молчаливое проглатывание прочих отказов оставило бы запись
     /// в `.recording` навсегда — ровно тот дефект, который издание v4 чинило.
-    private func recoverInterrupted(_ record: RecordingRecord, now: Date) async {
+    private func recoverInterrupted(_ record: RecordingRecord, isAdHoc: Bool, now: Date) async {
         let recordingId = record.manifest.recordingId
         do {
             let recovered = try await capture.recover(directory: recordingDirectory(recordingId))
             try await recordings.save(RecordingRecord(manifest: recovered, status: .finalized))
-            await openRecovered(manifest: recovered, state: .processing, now: now)
+            await openRecovered(manifest: recovered, isAdHoc: isAdHoc, state: .processing, now: now)
             await submitFirstUnreached(recordingId: recovered.recordingId, now: now)
         } catch {
             try? await recordings.save(RecordingRecord(manifest: record.manifest, status: .failed))
-            await openRecovered(manifest: record.manifest, state: .failed, now: now)
+            await openRecovered(manifest: record.manifest, isAdHoc: isAdHoc, state: .failed, now: now)
         }
     }
 
@@ -178,7 +190,10 @@ extension SessionMachine {
             $0.manifest.recordingId, $1.manifest.recordingId
         ) }) where !handled.contains(recording.manifest.recordingId) {
             guard recording.status == .finalized else { continue }
-            await recoverFinalized(recording, now: now)
+            // Найдена через `recordings(meetingId:)` — у ad-hoc-записи `meetingId` нет,
+            // и этим путём она не приходит никогда; `isAdHoc: false` здесь не выбор, а
+            // следствие способа поиска.
+            await recoverFinalized(recording, isAdHoc: false, now: now)
         }
     }
 
@@ -186,20 +201,21 @@ extension SessionMachine {
     /// этой записи не дошла до успешной `attribute` И ни одна её задача не завершилась
     /// отказом или отменой.
     ///
-    /// Определяется это ЗАДАЧАМИ ЗАПИСИ (`jobs(status:)`, C-013), а не статусом встречи, —
-    /// и теми же задачами §8.7 выбирает первую недошедшую: второго чтения и второго
-    /// источника не заводится. Есть задача, завершившаяся отказом или отменой, — сессия
-    /// входит в `failed`: это тот же исход, который строка 15 даёт живой машине, и
-    /// повторную обработку заводит команда пользователя, а не восстановление (К77).
-    private func recoverFinalized(_ record: RecordingRecord, now: Date) async {
+    /// Определяется это ЗАДАЧАМИ ЗАПИСИ (`jobs(status:)`, C-013), а не статусом встречи и
+    /// не видом происхождения, — и теми же задачами §8.7 выбирает первую недошедшую:
+    /// второго чтения и второго источника не заводится. Есть задача, завершившаяся отказом
+    /// или отменой, — сессия входит в `failed`: это тот же исход, который строка 15 даёт
+    /// живой машине, и повторную обработку заводит команда пользователя, а не
+    /// восстановление (К77).
+    private func recoverFinalized(_ record: RecordingRecord, isAdHoc: Bool, now: Date) async {
         let jobs = await jobsOfChain(recordingId: record.manifest.recordingId)
         if jobs.contains(where: { $0.status == .failed || $0.status == .cancelled }) {
-            await openRecovered(manifest: record.manifest, state: .failed, now: now)
+            await openRecovered(manifest: record.manifest, isAdHoc: isAdHoc, state: .failed, now: now)
             return
         }
         let done = jobs.filter { $0.status == .succeeded }.map(\.type)
         guard !done.contains(.attribute) else { return }
-        await openRecovered(manifest: record.manifest, state: .processing, now: now)
+        await openRecovered(manifest: record.manifest, isAdHoc: isAdHoc, state: .processing, now: now)
         await submitFirstUnreached(recordingId: record.manifest.recordingId, now: now)
     }
 
@@ -241,31 +257,37 @@ extension SessionMachine {
 
     /// Восстановительное заведение сессии перечнем А: вход в `processing` и вход в `failed`.
     ///
-    /// `origin` берётся из `manifest.meetingId`: `nil` — `.adHoc` (К77, К97 ветвь (б)), и
-    /// этим держится инвариант 4 первой половиной — `meetingId == nil` тогда и только
-    /// тогда, когда `origin == .adHoc`.
+    /// `origin` РЕШАЕТ ВЫЗЫВАЮЩИЙ, ПЕРЕДАВАЯ `isAdHoc` — ПО УЧАСТИЮ ЗАПИСИ В ОТВЕТЕ
+    /// `adHoc()` (издание v8), А НЕ ПО `manifest.meetingId`: запись, осиротевшая каскадом,
+    /// несёт непустой `manifest.meetingId`, указывающий на встречу, которой в хранилище
+    /// больше нет ни одной строки, — и чтение `origin` из этого поля дало бы ей
+    /// `.scheduled` с висящим `meetingId` (К77, различающий вектор издания v8). Отсюда
+    /// `meetingId` сессии — тоже `isAdHoc ? nil : manifest.meetingId`, а не поле манифеста
+    /// напрямую: этим держится инвариант 4 первой половиной — `meetingId == nil` тогда и
+    /// только тогда, когда `origin == .adHoc`.
     ///
     /// ИНВАРИАНТ 18 ИСПОЛНЕН ЗДЕСЬ ЖЕ, И ПОРЯДОК ЗНАЧИМ: `setStatus` идёт ПРЕЖДЕ публикации
     /// снимка, иначе потребитель, прочитавший хранилище по событию, прочтёт прежнее
     /// значение (К81). У ad-hoc-сессии `setStatus` не зовётся ни разу — `meetingId` у неё
     /// `nil`, и менять нечего (К95, К81 вход (iv)).
-    private func openRecovered(manifest: RecordingManifest, state: MeetingStatus, now: Date) async {
+    private func openRecovered(manifest: RecordingManifest, isAdHoc: Bool, state: MeetingStatus, now: Date) async {
         let identifier = UUID()
-        if let meetingId = manifest.meetingId {
+        let meetingId = isAdHoc ? nil : manifest.meetingId
+        if let meetingId {
             try? await meetings.setStatus(state, meetingId: meetingId)
             storedStatuses[meetingId] = state
         }
         let session = SessionMachineSession(
             sessionId: identifier,
-            origin: manifest.meetingId == nil ? .adHoc : .scheduled,
-            meetingId: manifest.meetingId,
+            origin: isAdHoc ? .adHoc : .scheduled,
+            meetingId: meetingId,
             state: state,
             recordingId: manifest.recordingId,
             target: nil,
             estimate: 0,
             enteredStateAt: now,
             updatedAt: now,
-            event: manifest.meetingId.flatMap { knownEvents[$0] },
+            event: meetingId.flatMap { knownEvents[$0] },
             promptId: nil,
             recordAnswered: false,
             commandGaveTarget: false,
