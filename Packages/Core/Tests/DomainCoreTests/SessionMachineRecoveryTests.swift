@@ -11,6 +11,11 @@ import XCTest
 @testable import DomainCore
 import DomainTestKit
 
+/// Заведена только ради полноты перебора К77: перечень А обязан быть проверен на КАЖДОМ
+/// значении, и `allCases` ловит добавление нового значения сборкой, а не молчаливым
+/// сужением перебора.
+extension RecordingStatus: CaseIterable {}
+
 final class SessionMachineRecoveryTests: XCTestCase {
 
     private let moment = SessionMachineFixtures.start
@@ -22,11 +27,24 @@ final class SessionMachineRecoveryTests: XCTestCase {
         )
     }
 
-    // MARK: - К77 (§10, перечень А; инв. 22, половина по `RecordingStatus`)
+    // MARK: - К77 (§10, перечень А; инв. 22, целиком — источник и `origin` под издание v8)
+
+    /// Три вида происхождения записи (издание v8): (i) непустой `meeting_id`, встреча
+    /// существует; (ii) `meeting_id` пуст с рождения записи; (iii) встреча удалена, колонка
+    /// обнулена каскадом (C-010, инвариант 7) — доменными средствами неотличим от (ii)
+    /// (инвариант 29) и не обязан различаться этим методом, но оснастка теста собирает его
+    /// отдельно, чтобы поймать реализацию, читающую `origin` из `manifest.meetingId`.
+    private enum OriginKind: CaseIterable {
+        case scheduledExisting
+        case originallyAdHoc
+        case orphanedByCascade
+    }
 
     /// `.recording` и `.stopping`: `recover` удался — запись приводится к `.finalized`
-    /// ПРЕЖДЕ входа в `processing` и ПРЕЖДЕ постановки задачи. Перебор идёт по самому
-    /// перечислению, а не по счёту его значений.
+    /// ПРЕЖДЕ входа в `processing` и ПРЕЖДЕ постановки задачи. Порядок наблюдается журналом
+    /// вызовов, а не конечным состоянием (К77), и виду происхождения он не зависит —
+    /// `recoverInterrupted` зовёт `recover`/`save`/`submit` в этом порядке при любом
+    /// `isAdHoc`, и потому проверен здесь один раз, а не перебором по видам.
     func test_k77_recoveringStatusesFinalizeTheRecordBeforeEnteringProcessing() async throws {
         for status in [RecordingStatus.recording, .stopping] {
             let stand = try bench()
@@ -42,7 +60,7 @@ final class SessionMachineRecoveryTests: XCTestCase {
             let live = try unwrap(await stand.machine.sessions().first)
             XCTAssertEqual(live.state, .processing, "\(status): сессия вошла в `processing`")
             XCTAssertEqual(live.recordingId, recordingId, "и несёт номер той самой записи")
-            XCTAssertEqual(live.origin, .adHoc, "`manifest.meetingId == nil` → `.adHoc`")
+            XCTAssertEqual(live.origin, .adHoc, "отдана `adHoc()` (нет привязки к встрече) → `.adHoc`")
             XCTAssertNil(live.meetingId, "инвариант 4 первой половиной")
 
             XCTAssertTrue(
@@ -58,7 +76,7 @@ final class SessionMachineRecoveryTests: XCTestCase {
     }
 
     /// `recover` бросил — запись приводится к `.failed`, сессия входит в `failed`, задача
-    /// не ставится ни одна.
+    /// не ставится ни одна; `origin` тем же правилом, что и на удавшемся `recover`.
     func test_k77_aFailedRecoveryLeadsToFailedRecordAndFailedSession() async throws {
         let stand = try bench()
         let recordingId = UUID()
@@ -81,24 +99,81 @@ final class SessionMachineRecoveryTests: XCTestCase {
         let session = try unwrap(published.first?.session)
         XCTAssertEqual(session.state, .failed, "сессия вошла в `failed`")
         XCTAssertEqual(session.recordingId, recordingId, "и несёт номер той самой записи")
+        XCTAssertEqual(session.origin, .adHoc, "отдана `adHoc()` → `.adHoc`, тем же правилом, что и удавшийся `recover`")
         XCTAssertEqual(stand.queue.submissions.count, 0, "задача не ставится ни одна")
         await stand.machine.stop()
     }
 
-    /// `.failed`: сессии не заводит, `recover` не зовёт.
-    func test_k77_aFailedRecordOpensNoSessionAtAll() async throws {
+    /// Перебор исчерпывающий по самому перечислению `RecordingStatus` (`CaseIterable`,
+    /// заведённый рядом только для теста) × трём видам происхождения порознь — добавление
+    /// значения либо вида ломает сборку этого `switch`-а без `default`, а не расширяет
+    /// перебор молча.
+    func test_k77_everyRecordingStatusTimesEveryOriginKindAnswersAsListA() async throws {
+        for status in RecordingStatus.allCases {
+            for kind in OriginKind.allCases {
+                try await assertListA(status: status, kind: kind)
+            }
+        }
+    }
+
+    /// Вход и ответ перечня А (издание v8) для одной пары (`RecordingStatus`, вид
+    /// происхождения). Меет `.recording` у сопутствующей встречи, помимо (ii), — техническая
+    /// деталь оснастки: она держит вид (i) на всех четырёх статусах вне ветки перечня Б
+    /// «заводить заново» (§9.1), не влияя на РЕШЕНИЕ перечня А, которое читает запись, а не
+    /// статус встречи.
+    private func assertListA(status: RecordingStatus, kind: OriginKind) async throws {
         let stand = try bench()
-        let manifest = try SessionMachineFixtures.manifest(recordingId: UUID(), meetingId: nil)
-        stand.repositories.recordings.seed([RecordingRecord(manifest: manifest, status: .failed)])
+        let recordingId = UUID()
+        let meetingId = kind == .originallyAdHoc ? nil : UUID()
+        let manifest = try SessionMachineFixtures.manifest(recordingId: recordingId, meetingId: meetingId)
+        stand.repositories.recordings.seed([RecordingRecord(manifest: manifest, status: status)])
+        if let meetingId, kind == .scheduledExisting {
+            stand.seed(try SessionMachineFixtures.event(id: meetingId), status: .recording)
+        }
+        if let meetingId, kind == .orphanedByCascade {
+            stand.seed(try SessionMachineFixtures.event(id: meetingId), status: .scheduled)
+            try await stand.repositories.meetings.delete(meetingIds: [meetingId])
+        }
+        stand.capture.setRecoverManifest(manifest)
+        let label = "\(status)/\(kind)"
 
-        await stand.machine.start(now: moment)
-
-        let sessions = await stand.machine.sessions()
-        XCTAssertTrue(sessions.isEmpty, "сессии не заводит")
-        XCTAssertNil(
-            stand.log.firstIndex(of: "AudioCapturePort.recover(directory:)"), "`recover` не зван"
-        )
+        switch status {
+        case .recording, .stopping:
+            await stand.machine.start(now: moment)
+            let live = try unwrap(await stand.machine.sessions().first { $0.recordingId == recordingId }, label)
+            XCTAssertEqual(live.state, .processing, "\(label): удавшийся `recover` вводит в `processing`")
+            assertOrigin(live, kind: kind, meetingId: meetingId, label: label)
+        case .failed:
+            await stand.machine.start(now: moment)
+            let sessions = await stand.machine.sessions()
+            XCTAssertTrue(sessions.isEmpty, "\(label): `.failed` терминален для перечня А на любом виде")
+        case .finalized:
+            await stand.machine.start(now: moment)
+            let live = try unwrap(await stand.machine.sessions().first { $0.recordingId == recordingId }, label)
+            XCTAssertEqual(
+                live.state, .processing,
+                "\(label): `.finalized` без дошедшей `attribute` и без отказавшей/отменённой задачи — `processing`"
+            )
+            assertOrigin(live, kind: kind, meetingId: meetingId, label: label)
+        }
         await stand.machine.stop()
+    }
+
+    private func assertOrigin(_ live: SessionSnapshot, kind: OriginKind, meetingId: UUID?, label: String) {
+        switch kind {
+        case .scheduledExisting:
+            XCTAssertEqual(live.origin, .scheduled, "\(label): вид (i), не отдана `adHoc()` → `.scheduled`")
+            XCTAssertEqual(live.meetingId, meetingId, "\(label): и `meetingId`, равный `manifest.meetingId`")
+        case .originallyAdHoc, .orphanedByCascade:
+            XCTAssertEqual(
+                live.origin, .adHoc,
+                "\(label): виды (ii) и (iii) отданы `adHoc()` одинаково → `.adHoc`"
+            )
+            XCTAssertNil(
+                live.meetingId,
+                "\(label): `meetingId == nil`, несмотря на непустой `manifest.meetingId` у вида (iii)"
+            )
+        }
     }
 
     /// РАЗЛИЧАЮЩИЙ ВЕКТОР ИЗДАНИЯ v4: два `start(now:)` подряд на одной и той же записи.

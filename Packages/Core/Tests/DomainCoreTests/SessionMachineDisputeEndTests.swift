@@ -1,6 +1,10 @@
 //  Окончание спора без ответа и занятая цель — К98, К94, и правка К24 издания v7.
 //  MEE-307, часть C. Пункты плана MEE-288 §3, раздел Д.
 //
+//  К99 (§3.1 `SessionPrompt.expiresAt` вида `.whichMeeting`) заведён изданием v8 (MEE-276,
+//  «Новые места v8», MEE-341) и живёт здесь же — оснастка спора уже есть в этом файле, и
+//  второго её описания не заводится.
+//
 //  ДВА ПУНКТА ЗДЕСЬ НЕ ПОДАВАЛИСЬ ДЕРЕВОМ НИ ОДНИМ ВЕКТОРОМ. К98 заведён изданием v7 и не
 //  мог иметь их по построению; К94 требует, чтобы держателем занятой цели выступала
 //  ad-hoc-сессия, а до правила `1а` §5.4 у ad-hoc-сессии не было цели вовсе.
@@ -230,6 +234,78 @@ final class SessionMachineDisputeEndTests: XCTestCase {
             XCTAssertNotEqual(session.state, .recording, "и ни одна не записывает")
         }
         XCTAssertEqual(stand.capture.recordedCalls.count, 0, "захват не зван ни разу")
+        await stand.machine.stop()
+    }
+
+    // MARK: - К99 (§3.1 `SessionPrompt.expiresAt`, вид `.whichMeeting`; издание v8)
+
+    /// `expiresAt == nil` во всякий момент жизни спроса `.whichMeeting`, без исключения:
+    /// сразу после подъёма, посреди спора (до истечения `graceEndsAt` любого кандидата, тем
+    /// же входом, что и К98, отрицательный вектор) и по его завершении. Спрос при этом
+    /// снимается СОБЫТИЕМ МАШИНЫ в момент, когда спор кончается (способ (б) §5.4, К98) —
+    /// а не истечением срока, которого у самого спроса нет ни одного.
+    func test_k99_whichMeetingPromptNeverCarriesAnExpiryAtAnyMomentOfItsLife() async throws {
+        let now = moment.addingTimeInterval(400)
+        let staged = try standWithTwoSessionsOfOneProvider()
+        let stand = staged.stand
+        stand.allowCaptureStart()
+        await stand.machine.start(now: now)
+        await stand.machine.tick(now: now)
+        await stand.deliver(SessionMachineFixtures.audioOutput(
+            appKey: "us.zoom.xos", observedAt: now, provider: "zoom"
+        ))
+        await stand.machine.tick(now: now)
+
+        let raised = try unwrap(await stand.machine.prompts().first)
+        guard case .whichMeeting = raised.kind else {
+            return XCTFail("оснастка: вид спроса — `.whichMeeting`")
+        }
+        XCTAssertNil(raised.expiresAt, "сразу после подъёма")
+        let promptId = raised.promptId
+
+        // Посреди спора: цель опубликована снова до истечения `graceEndsAt` любой стороны —
+        // спор жив, спрос тот же.
+        let midway = now.addingTimeInterval(10)
+        await stand.deliver(SessionMachineFixtures.audioOutput(
+            appKey: "us.zoom.xos", observedAt: midway, provider: "zoom"
+        ))
+        await stand.machine.tick(now: midway)
+        let stillRaised = try unwrap(await stand.machine.prompts().first { $0.promptId == promptId })
+        XCTAssertEqual(stillRaised.promptId, promptId, "оснастка: спрос всё ещё тот же")
+        XCTAssertNil(stillRaised.expiresAt, "посреди спора, до истечения `graceEndsAt` любого кандидата")
+
+        // Завершение способом (б) §5.4: одна сторона стала терминальной командой человека.
+        try await stand.machine.skip(meetingId: staged.first.id, now: midway)
+        let after = midway.addingTimeInterval(1)
+        await stand.deliver(SessionMachineFixtures.audioOutput(
+            appKey: "us.zoom.xos", observedAt: after, provider: "zoom"
+        ))
+        await stand.machine.tick(now: after)
+
+        XCTAssertTrue(
+            await stand.machine.prompts().isEmpty,
+            "спрос снят по завершении спора — событием машины, а не истечением `expiresAt`"
+        )
+        await stand.machine.stop()
+    }
+
+    /// ОТРИЦАТЕЛЬНЫЙ ВЕКТОР К99: тот же прогон на спросе `.recordThisMeeting` (К60, К95) —
+    /// значение то же (`nil`), и ПО ТОЙ ЖЕ ПРИЧИНЕ КЛАССА (§3.1: «держится, пока держится
+    /// причина»), а не совпадением. В дереве нет ни одного места, строящего `SessionPrompt`
+    /// с непустым `expiresAt`, ни для одного вида.
+    func test_k99_negative_recordThisMeetingPromptAnswersTheSameNilByTheSameReason() async throws {
+        let stand = try bench(policy: .ask)
+        let event = try SessionMachineFixtures.event()
+        stand.seed(event)
+
+        await stand.machine.tick(now: moment.addingTimeInterval(-90))   // askAt = T − 90
+
+        let prompt = try unwrap(await stand.machine.prompts().first)
+        XCTAssertEqual(prompt.kind, .recordThisMeeting, "оснастка: вид спроса")
+        XCTAssertNil(
+            prompt.expiresAt,
+            "то же `nil`, что и у `.whichMeeting`, по той же причине класса, а не отдельным совпадением"
+        )
         await stand.machine.stop()
     }
 }
