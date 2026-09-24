@@ -81,6 +81,22 @@ public actor JobQueueEngine: JobQueue {
         self.perTypeConcurrencyLimit = perTypeConcurrencyLimit
     }
 
+    /// Без этого `timerTask`/`powerEventsTask` не запертого `stop()`-ом актора (в тесте,
+    /// не вызвавшем его, — легальный вход: `stop()` не часть готовности каждого теста)
+    /// переживают сам актор: `[weak self]` внутри них не разрывает `for await` над
+    /// `AsyncStream`, чья `Continuation` при этом молча деинициализируется вместе с
+    /// `FakePowerPort`, ничего не подавая, — та же задача остаётся подвешенной НАВСЕГДА
+    /// (`AsyncStream.Continuation` без явного `finish()` итерацию не завершает). Найдено
+    /// прогонами CI на этой ветке: сотни таких зависших `for await` от тестов без `stop()`
+    /// копятся в процессе `swift test` и, начиная с некоторого числа, останавливают
+    /// планировщик Swift Concurrency целиком — зависание проявляется в СЛУЧАЙНОМ, не
+    /// обязательно моём, тесте (симптом наблюдался и в тестах вне DomainCore/JobQueue).
+    /// `cancel()` здесь не изолирован актором и потому легален в `deinit`.
+    deinit {
+        timerTask?.cancel()
+        powerEventsTask?.cancel()
+    }
+
     // MARK: - §2, регистрация
 
     public func register(handler: JobHandler) throws {
