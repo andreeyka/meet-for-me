@@ -519,25 +519,3 @@ jobs:
         # Подстраховка снаружи скрипта — тот же довод, что у Core (Linux).
         timeout-minutes: 7
         run: *run-swift-test-with-timeout
-
-      # МЕЕ-374/379, возврат РП 24.09 18:05 — ВРЕМЕННЫЙ шаг: правка коснулась
-      # production-кода (счётчик склейки в PermissionsCore, инжекция часов в
-      # PermissionsCore/AudioCaptureImpl) и завела новый примитив синхронизации
-      # (withDeadline) — тот же приём, что у первого раунда MEE-374/379 (снят
-      # коммитом 738a281) и у MEE-378 (095cfb3): 50 повторов только тестов,
-      # которых коснулась ЭТА правка. Снимается следующим коммитом после
-      # подтверждения зелёным прогоном.
-      - name: МЕЕ-374/379 временно (2) · c20+c06+k25 x50
-        if: ${{ !cancelled() && steps.graph.outputs.build_ok == 'true' }}
-        shell: bash
-        timeout-minutes: 10
-        run: |
-          set -euo pipefail
-          filter='test_c20_mechanicalHalf_parallelRequests_promptOnce_sameOutcome'
-          filter+='|test_c06_checkedAt_isSnapshotTime_notNoteTime'
-          filter+='|test_k25_levelsThrottledByDeliveryTimeNotByBufferHostTime'
-          for i in $(seq 1 50); do
-            echo "::group::c20+c06+k25 повтор $i/50"
-            swift test --package-path Packages/Mac --filter "$filter"
-            echo "::endgroup::"
-          done
