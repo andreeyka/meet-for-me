@@ -94,6 +94,23 @@ enum PlistSurgery {
     }
 }
 
+/// Собирает `EngineProgress` из `@Sendable`-замыкания прогресса: простой `var`,
+/// захваченный такой закрытием, компилятор не может статически доказать
+/// непересекающимся ("mutation of captured var in concurrently-executing code").
+final class ProgressCollector: @unchecked Sendable {
+    private let lock = NSLock()
+    private var items: [EngineProgress] = []
+
+    func append(_ item: EngineProgress) {
+        lock.lock(); items.append(item); lock.unlock()
+    }
+
+    var all: [EngineProgress] {
+        lock.lock(); defer { lock.unlock() }
+        return items
+    }
+}
+
 /// `EngineError`/`DomainValidationError` не сравниваются напрямую в проверках ниже —
 /// сравнение по структурным полям, как того требует К2 дословно.
 func assertInvalidResult(

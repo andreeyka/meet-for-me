@@ -55,10 +55,11 @@ final class DiarizationAndProgressTests: XCTestCase {
             .started(stage: .prepare), .advanced(stage: .prepare, fraction: 0.5), .finished(stage: .prepare),
             .started(stage: .asr), .finished(stage: .asr)
         ]
-        var events: [EngineProgress] = []
+        let collector = ProgressCollector()
         let request = try EngineFixtures.transcriptionRequest()
-        _ = try await engine.transcribe(request, progress: { events.append($0) })
+        _ = try await engine.transcribe(request, progress: { collector.append($0) })
 
+        let events = collector.all
         let started = events.compactMap { event -> EngineStage? in
             guard case .started(let stage) = event else { return nil }
             return stage
@@ -76,16 +77,17 @@ final class DiarizationAndProgressTests: XCTestCase {
         let engine = FakeTranscriptionEngine()
         engine.progressScript = [.started(stage: .asr)]
         engine.failAfterScript = .runtimeFailure(message: "имитированный сбой")
-        var events: [EngineProgress] = []
+        let collector = ProgressCollector()
         let request = try EngineFixtures.transcriptionRequest()
         do {
-            _ = try await engine.transcribe(request, progress: { events.append($0) })
+            _ = try await engine.transcribe(request, progress: { collector.append($0) })
             XCTFail("ожидался брошенный EngineError")
         } catch EngineError.runtimeFailure {
             // ожидаемо
         } catch {
             XCTFail("неверная ошибка: \(error)")
         }
+        let events = collector.all
         XCTAssertTrue(events.contains(EngineProgress.started(stage: .asr)))
         XCTAssertFalse(events.contains(EngineProgress.finished(stage: .asr)),
                        ".finished(.asr) не образуется — этап не доведён до конца")
