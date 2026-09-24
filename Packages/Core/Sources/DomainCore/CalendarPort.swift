@@ -20,6 +20,14 @@
 //  это по C-001 §0.2 п. 9, и `Int(...)` в `startEpochSeconds(for:)` безопасен по построению
 //  (замечание к инварианту 3). Нормализация join-URL — шесть шагов «Определения» дословно.
 //
+//  Шесть методов управляющей поверхности источника (`beginAuth`, `completeAuth`,
+//  `settingsSchema`, `configure`, `healthCheck`, `stop`) добавлены MEE-355 (IR-120, MEE-354,
+//  C-005 v6→v8): 1:1 к `CalendarConnector` (C-006 §6), кроме `stop()` — тот без адреса
+//  источника, фанает `shutdown()` на все инициализированные источники и возвращается только
+//  после того, как ответили все. `AuthChallenge`/`ConnectorHealth` объявлены в
+//  `ConnectorHost.swift` (MEE-346, PR #71) — не здесь: они общие с C-006, а не собственные
+//  типы этого контракта.
+//
 //  Порядок типов и порядок полей внутри типа — дословно по «Определению» контракта
 //  (порядок значим: правило обхода C-001 §0.2 п. 9).
 
@@ -113,6 +121,14 @@ public protocol CalendarPort: Sendable {
     func event(id: UUID) async throws -> MeetingEvent?
     func sync(trigger: CalendarSyncTrigger) async -> [CalendarSyncResult]
     func changes() -> AsyncStream<CalendarChange>
+
+    // v6, IR-120 (MEE-354): управляющая поверхность источника, 1:1 к CalendarConnector (C-006 §6)
+    func beginAuth(source: CalendarSourceId) async throws -> AuthChallenge
+    func completeAuth(source: CalendarSourceId, callbackUrl: URL) async throws -> String?
+    func settingsSchema(source: CalendarSourceId) async throws -> Data
+    func configure(source: CalendarSourceId, settings: Data) async throws
+    func healthCheck(source: CalendarSourceId) async throws -> ConnectorHealth
+    func stop() async   // shutdown() каждому инициализированному источнику, возврат — после всех
 }
 
 /// Ключ дедупликации. Две составляющие в каждой ветви: чем встреча опознаётся между

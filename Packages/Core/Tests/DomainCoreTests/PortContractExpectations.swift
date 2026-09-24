@@ -26,7 +26,7 @@ extension PortDeclarationTests {
         "func recover(directory: URL) async throws -> RecordingManifest"
     ]
 
-    /// C-005 (MEE-9), «Определение».
+    /// C-005 (MEE-9) v8, «Определение». Шесть последних — MEE-355 (IR-120, MEE-354).
     static let calendarPort = [
         "func listSources() async -> [CalendarSourceId]",
         "func listCalendars(source: CalendarSourceId) async throws -> [CalendarInfo]",
@@ -34,7 +34,13 @@ extension PortDeclarationTests {
         "func events(from: Date, to: Date) async throws -> [MeetingEvent]",
         "func event(id: UUID) async throws -> MeetingEvent?",
         "func sync(trigger: CalendarSyncTrigger) async -> [CalendarSyncResult]",
-        "func changes() -> AsyncStream<CalendarChange>"
+        "func changes() -> AsyncStream<CalendarChange>",
+        "func beginAuth(source: CalendarSourceId) async throws -> AuthChallenge",
+        "func completeAuth(source: CalendarSourceId, callbackUrl: URL) async throws -> String?",
+        "func settingsSchema(source: CalendarSourceId) async throws -> Data",
+        "func configure(source: CalendarSourceId, settings: Data) async throws",
+        "func healthCheck(source: CalendarSourceId) async throws -> ConnectorHealth",
+        "func stop() async"
     ]
 
     /// C-010 (MEE-18), «Определение» §5. `meeting(sourceConnectorId:externalId:)` — C-010 v10,

@@ -27,11 +27,34 @@
 //  так тест, подающий событие, точно знает, войдёт оно или нет, и граница проверяема
 //  двумя вызовами вместо перебора. Это решение фейка, а не утверждение о порте.
 //
+//  ШЕСТЬ МЕТОДОВ УПРАВЛЯЮЩЕЙ ПОВЕРХНОСТИ ИСТОЧНИКА добавлены MEE-355 (IR-120, MEE-354,
+//  C-005 v8 §«Фейк для тестов» дословно): канонические `AuthChallenge`/`ConnectorHealth`/
+//  схема настроек (`Data`) на источник для `beginAuth`/`healthCheck`/`settingsSchema` —
+//  умолчания НЕТ НАМЕРЕННО, тот же довод, что у `FakePowerPort(snapshot:)` («умолчания нет
+//  намеренно» — пустого значения не существует, и тест обязан задать его сам): вызов на
+//  источнике без заданного канонического значения — `preconditionFailure`, а не тихая
+//  подделка. `completeAuth` в этот список не входит — контракт не даёт тесту канонического
+//  значения на его ответ, только отказ, и фейк отвечает `nil`, пока не отказывает. Отказ
+//  любого из пяти бросающих методов (`beginAuth`, `completeAuth`, `settingsSchema`,
+//  `configure`, `healthCheck`) — заданной `CalendarError`, на ВЫБРАННОМ источнике или на
+//  всяком (`source: nil`), тем же приёмом, что `failSync(with:for:)`. `stop()` — только
+//  счётчик вызовов: он объявлен без `throws`, и фейку бросать ему нечем.
+//
+//  `configuredSettings(for:)` — та же наблюдаемость, что `selectedCalendars(for:)` у
+//  `setSelectedCalendars`, тем же доводом: контракт её не называет пофамильно, но без неё
+//  `configure` нечем проверить, кроме «не упал».
+//
 //  `@unchecked Sendable` с замком, а не актор: `CalendarPort` объявлен `: Sendable`,
 //  а его методы — не `async` целиком (`changes()` синхронен), и актором протокол не покрыть.
 
 import Foundation
 import DomainCore
+
+/// Один из пяти бросающих методов управляющей поверхности источника (C-005 v8 §«Фейк для
+/// тестов»). `stop()` сюда не входит: он объявлен без `throws`, и фейку бросать ему нечем.
+public enum CalendarPortThrowingMethod: String, Sendable, CaseIterable {
+    case beginAuth, completeAuth, settingsSchema, configure, healthCheck
+}
 
 /// Фейк календарного порта. Всё поведение задаёт тест.
 public final class FakeCalendarPort: CalendarPort, @unchecked Sendable {
@@ -49,6 +72,13 @@ public final class FakeCalendarPort: CalendarPort, @unchecked Sendable {
     private var syncFailures: [String: CalendarError] = [:]
     private var syncCallsByTrigger: [CalendarSyncTrigger: Int] = [:]
     private var continuations: [AsyncStream<CalendarChange>.Continuation] = []
+
+    private var authChallengesBySource: [String: AuthChallenge] = [:]
+    private var connectorHealthBySource: [String: ConnectorHealth] = [:]
+    private var settingsSchemaBySource: [String: Data] = [:]
+    private var configuredSettingsBySource: [String: Data] = [:]
+    private var throwFailures: [CalendarPortThrowingMethod: (source: String?, error: CalendarError)] = [:]
+    private var stopCalls = 0
 
     /// Момент, который фейк ставит в `startedAt` и `finishedAt` каждого `CalendarSyncResult`.
     /// Умолчание — начало эпохи: всякое значение здесь есть вход теста, а не решение фейка,
@@ -139,6 +169,57 @@ public final class FakeCalendarPort: CalendarPort, @unchecked Sendable {
         locked { selectedBySource[source.rawValue] }
     }
 
+    /// Канонический ответ `beginAuth(source:)` для этого источника. Умолчания нет: без
+    /// вызова этого метода `beginAuth` на источнике падает `preconditionFailure`.
+    public func setAuthChallenge(_ challenge: AuthChallenge, for source: CalendarSourceId) {
+        locked { authChallengesBySource[source.rawValue] = challenge }
+    }
+
+    /// Канонический ответ `healthCheck(source:)` для этого источника. Умолчания нет —
+    /// тот же довод, что у `setAuthChallenge(_:for:)`.
+    public func setConnectorHealth(_ health: ConnectorHealth, for source: CalendarSourceId) {
+        locked { connectorHealthBySource[source.rawValue] = health }
+    }
+
+    /// Канонический ответ `settingsSchema(source:)` для этого источника. Умолчания нет —
+    /// тот же довод, что у `setAuthChallenge(_:for:)`.
+    public func setSettingsSchema(_ schema: Data, for source: CalendarSourceId) {
+        locked { settingsSchemaBySource[source.rawValue] = schema }
+    }
+
+    /// Что в последний раз пришло в `configure(source:settings:)` — та же наблюдаемость,
+    /// что `selectedCalendars(for:)` у `setSelectedCalendars`, тем же доводом.
+    public func configuredSettings(for source: CalendarSourceId) -> Data? {
+        locked { configuredSettingsBySource[source.rawValue] }
+    }
+
+    /// Заставить один из пяти бросающих методов вернуть заданную `CalendarError`.
+    /// `source == nil` — отказ на всяком источнике; иначе только на названном.
+    public func fail(
+        with error: CalendarError, on method: CalendarPortThrowingMethod, source: CalendarSourceId? = nil
+    ) {
+        locked { throwFailures[method] = (source: source?.rawValue, error: error) }
+    }
+
+    public func clearFailure(on method: CalendarPortThrowingMethod) {
+        locked { throwFailures[method] = nil }
+    }
+
+    /// Число вызовов `stop()` — только счётчик, без возможности задать ему ошибку.
+    public var stopCallCount: Int {
+        locked { stopCalls }
+    }
+
+    // MARK: - Оснастка
+
+    private func throwFailureIfAny(_ method: CalendarPortThrowingMethod, source: String) -> CalendarError? {
+        locked { () -> CalendarError? in
+            guard let failure = throwFailures[method] else { return nil }
+            guard let wanted = failure.source else { return failure.error }
+            return wanted == source ? failure.error : nil
+        }
+    }
+
     // MARK: - CalendarPort
 
     public func listSources() async -> [CalendarSourceId] {
@@ -207,5 +288,65 @@ public final class FakeCalendarPort: CalendarPort, @unchecked Sendable {
         return AsyncStream { continuation in
             locked { continuations.append(continuation) }
         }
+    }
+
+    public func beginAuth(source: CalendarSourceId) async throws -> AuthChallenge {
+        log.record(port: Self.portName, method: "beginAuth(source:)", arguments: [source.rawValue])
+        if let error = throwFailureIfAny(.beginAuth, source: source.rawValue) {
+            throw error
+        }
+        guard let challenge = locked({ authChallengesBySource[source.rawValue] }) else {
+            preconditionFailure("тест обязан задать AuthChallenge через setAuthChallenge(_:for:) до beginAuth(source:)")
+        }
+        return challenge
+    }
+
+    public func completeAuth(source: CalendarSourceId, callbackUrl: URL) async throws -> String? {
+        log.record(
+            port: Self.portName, method: "completeAuth(source:callbackUrl:)",
+            arguments: [source.rawValue, callbackUrl.absoluteString]
+        )
+        if let error = throwFailureIfAny(.completeAuth, source: source.rawValue) {
+            throw error
+        }
+        // Контракт не даёт тесту канонического значения на этот ответ (в отличие от
+        // beginAuth/healthCheck/settingsSchema) — только отказ. `nil` — единственный
+        // ответ, не требующий входа теста.
+        return nil
+    }
+
+    public func settingsSchema(source: CalendarSourceId) async throws -> Data {
+        log.record(port: Self.portName, method: "settingsSchema(source:)", arguments: [source.rawValue])
+        if let error = throwFailureIfAny(.settingsSchema, source: source.rawValue) {
+            throw error
+        }
+        guard let schema = locked({ settingsSchemaBySource[source.rawValue] }) else {
+            preconditionFailure("тест обязан задать схему через setSettingsSchema(_:for:) до settingsSchema(source:)")
+        }
+        return schema
+    }
+
+    public func configure(source: CalendarSourceId, settings: Data) async throws {
+        log.record(port: Self.portName, method: "configure(source:settings:)", arguments: [source.rawValue])
+        if let error = throwFailureIfAny(.configure, source: source.rawValue) {
+            throw error
+        }
+        locked { configuredSettingsBySource[source.rawValue] = settings }
+    }
+
+    public func healthCheck(source: CalendarSourceId) async throws -> ConnectorHealth {
+        log.record(port: Self.portName, method: "healthCheck(source:)", arguments: [source.rawValue])
+        if let error = throwFailureIfAny(.healthCheck, source: source.rawValue) {
+            throw error
+        }
+        guard let health = locked({ connectorHealthBySource[source.rawValue] }) else {
+            preconditionFailure("тест обязан задать ConnectorHealth через setConnectorHealth(_:for:) до healthCheck")
+        }
+        return health
+    }
+
+    public func stop() async {
+        log.record(port: Self.portName, method: "stop()")
+        locked { stopCalls += 1 }
     }
 }
