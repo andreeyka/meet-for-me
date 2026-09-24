@@ -17,8 +17,13 @@ final class FakeStatusSource: StatusSource, @unchecked Sendable {
     private var statuses: [PermissionKind: PermissionStatus]
     private var answers: [PermissionKind: Bool] = [:]
     private var prompted: [PermissionKind] = []
-    /// Пауза перед ответом на промпт, секунды — чтобы два параллельных `request` перекрылись.
-    var promptDelay: TimeInterval = 0
+    /// MEE-379 (аудит MEE-377, п.1): вместо фикс. паузы, угадывающей когда второй `request`
+    /// столкнётся с первым, — явный gate. Когда `true`, `prompt(_:)` сигналит `promptStarted`
+    /// (тест видит, что первый вызов реально ВОШЁЛ в промпт) и висит до `releasePrompt()`.
+    var holdPromptUntilReleased = false
+    private var startedKinds: Set<PermissionKind> = []
+    private var promptStartedContinuations: [(PermissionKind, CheckedContinuation<Void, Never>)] = []
+    private var releaseContinuations: [CheckedContinuation<Void, Never>] = []
 
     init(_ statuses: [PermissionKind: PermissionStatus] = [:]) {
         self.statuses = statuses
@@ -29,6 +34,26 @@ final class FakeStatusSource: StatusSource, @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         return prompted
+    }
+
+    /// Ждёт момента, когда `prompt(kind)` реально вызван (вошёл, не обязательно ответил) —
+    /// сигнал «первый вызов стартовал», не оценка времени.
+    func awaitPromptStarted(_ kind: PermissionKind) async {
+        lock.lock()
+        if startedKinds.contains(kind) { lock.unlock(); return }
+        await withCheckedContinuation { continuation in
+            promptStartedContinuations.append((kind, continuation))
+            lock.unlock()
+        }
+    }
+
+    /// Отпускает все вызовы `prompt(_:)`, повисшие на `holdPromptUntilReleased`.
+    func releasePrompt() {
+        lock.lock()
+        let pending = releaseContinuations
+        releaseContinuations = []
+        lock.unlock()
+        for continuation in pending { continuation.resume() }
     }
 
     func set(_ status: PermissionStatus, for kind: PermissionKind) {
@@ -49,10 +74,22 @@ final class FakeStatusSource: StatusSource, @unchecked Sendable {
     }
 
     func prompt(_ kind: PermissionKind) async -> Bool {
-        if promptDelay > 0 {
-            try? await Task.sleep(nanoseconds: UInt64(promptDelay * 1_000_000_000))
+        markPromptStarted(kind)
+        if holdPromptUntilReleased {
+            await withCheckedContinuation { continuation in
+                lock.lock(); releaseContinuations.append(continuation); lock.unlock()
+            }
         }
         return recordPrompt(kind)
+    }
+
+    private func markPromptStarted(_ kind: PermissionKind) {
+        lock.lock()
+        startedKinds.insert(kind)
+        let waiters = promptStartedContinuations.filter { $0.0 == kind }
+        promptStartedContinuations.removeAll { $0.0 == kind }
+        lock.unlock()
+        for (_, continuation) in waiters { continuation.resume() }
     }
 
     private func current(_ kind: PermissionKind) -> PermissionStatus {

@@ -24,12 +24,11 @@ final class DriftCompensationTests: CaptureAsyncTestCase {
         // продакшене — монотонные часы): `beginRebuild` считает `atHostTime - session.hostOrigin`
         // без перевода в знаковый тип (в отличие от `resolveRebuild`), и невозрастающее значение
         // здесь — не сценарий продакшена, а ловушка беззнакового вычитания в самом тесте.
+        // MEE-374 (аудит MEE-377): `emit`/`feed` синхронны до конца — пауз между ними не нужно.
         for index in 0..<10 {
             let invalidatedAt = UInt64(1_000 + index * 100)
             harness.gateway.emit(.tapInvalidated(atHostTime: invalidatedAt))
-            try await Task.sleep(nanoseconds: 5_000_000)
             harness.gateway.feed(.samples(.mic, frameCount: 480, channelCount: 1, hostTime: invalidatedAt + 50))
-            try await Task.sleep(nanoseconds: 5_000_000)
         }
 
         _ = try await harness.port.stop()

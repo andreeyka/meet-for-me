@@ -14,15 +14,14 @@ final class DiscontinuityTests: CaptureAsyncTestCase {
         let directory = try Harness.makeDirectory()
         try await harness.start(directory: directory)
 
+        let stream = harness.port.events()
         let collector = Task { () -> CaptureDiscontinuity? in
-            for await event in harness.port.events() {
+            for await event in stream {
                 if case .discontinuity(let discontinuity) = event { return discontinuity }
             }
             return nil
         }
-        try await Task.sleep(nanoseconds: 10_000_000)
         harness.gateway.emit(.tapInvalidated(atHostTime: 9_000))
-        try await Task.sleep(nanoseconds: 10_000_000)
         harness.gateway.feed(.samples(.system, frameCount: 480, channelCount: 2, hostTime: 9_120))
 
         let collected = await collector.value
@@ -84,15 +83,14 @@ final class DiscontinuityTests: CaptureAsyncTestCase {
         let directory = try Harness.makeDirectory()
         try await harness.start(directory: directory)
 
+        let stream = harness.port.events()
         let collector = Task { () -> RecordingManifest.DiscontinuityReason? in
-            for await event in harness.port.events() {
+            for await event in stream {
                 if case .discontinuity(let discontinuity) = event { return discontinuity.reason }
             }
             return nil
         }
-        try await Task.sleep(nanoseconds: 10_000_000)
         trigger(harness)
-        try await Task.sleep(nanoseconds: 10_000_000)
         harness.gateway.feed(.samples(.system, frameCount: 480, channelCount: 2, hostTime: 9_200))
         let collected = await collector.value
         return try XCTUnwrap(collected)

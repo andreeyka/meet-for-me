@@ -86,12 +86,14 @@ extension Harness {
         // проверить путь без группы вообще, пока не подменялись молча).
         let request = Harness.request(directory: directory, group: group, input: input)
         async let started = port.start(request)
-        try await Task.sleep(nanoseconds: 20_000_000)
+        // MEE-374 (аудит MEE-377): gate вместо фикс. паузы — `resolveTap`/`resolveMicrophone`
+        // до регистрации continuation теряют разрешение молча (см. `FakeHardwareGateway`).
         if request.group != nil {
+            await gateway.awaitTapRequested()
             gateway.resolveTap(with: .created(TapHandle()))
         }
-        try await Task.sleep(nanoseconds: 5_000_000)
         if request.input != .none {
+            await gateway.awaitMicrophoneRequested()
             gateway.resolveMicrophone(with: .opened(MicrophoneHandle(uid: "BuiltInMicrophoneDevice",
                                                                       name: "MacBook Pro Microphone", channelCount: 1)))
         }

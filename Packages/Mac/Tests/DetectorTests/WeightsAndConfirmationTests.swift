@@ -152,6 +152,19 @@ final class WeightsAndConfirmationTests: XCTestCase {
     /// то, что драйвер зовёт шаги. С часами машины момент снимка и «сколько сейчас» приходят от
     /// одного источника, как их берёт живая работа, и срок снова решает, когда идёт подтверждение.
     func test_timerDriver_confirmsHoldingStateWithoutTestSteps() async throws {
+        // MEE-379 (аудит MEE-377, п.4): реальные часы и реальный `TimerDriver` здесь — часть
+        // самого предмета теста (см. докстринг выше: часы мира заменить не с кем, иначе момент
+        // снимка и «сколько сейчас» разъезжаются на несоизмеримые шкалы). Число подтверждений
+        // здесь всё равно зависит от факта срабатывания таймера по расписанию ОС — под общей
+        // нагрузкой гейтящего раннера это шумит так же, как измерение реального времени, поэтому
+        // тест снят с гейтящего прогона тем же приёмом, что и `PerformanceTests` (MEE-378):
+        // явный прогон `RUN_PERFORMANCE_TESTS=1 swift test --package-path Packages/Mac --filter
+        // WeightsAndConfirmationTests`.
+        try XCTSkipUnless(
+            ProcessInfo.processInfo.environment["RUN_PERFORMANCE_TESTS"] != nil,
+            "реальный таймер — шумит под общей нагрузкой гейтящего раннера (MEE-379); " +
+                "запуск явно: RUN_PERFORMANCE_TESTS=1"
+        )
         let world = TestWorld(clock: SystemClock())
         world.set(chrome, bundleIds: SignalStreamTests.chromeBundles)
         let values = try ReferenceTables.received(

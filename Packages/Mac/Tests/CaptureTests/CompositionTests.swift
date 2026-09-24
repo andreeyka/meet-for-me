@@ -19,13 +19,13 @@ final class CompositionTests: CaptureAsyncTestCase {
             let hostTime = UInt64(1_000 + index * 100)
             harness.gateway.emit(.microphoneFormatChanged(channelCount: index.isMultiple(of: 2) ? 1 : 3,
                                                            atHostTime: hostTime))
-            try await Task.sleep(nanoseconds: 5_000_000)
             // Пересборка остаётся «в процессе» (pendingRebuild), пока не пришёл первый буфер новой
             // сборки — resolveRebuild зовётся из handleBuffer. Без этого следующий emit молча
             // отбрасывается guard'ом beginRebuild (pendingRebuild == nil), и рebuild не считается.
+            // MEE-374 (аудит MEE-377): оба вызова синхронны до конца (`handleHardwareEvent`,
+            // `handleBuffer`) — пауз между ними не нужно.
             harness.gateway.feed(.samples(.mic, frameCount: 480,
                                           channelCount: index.isMultiple(of: 2) ? 1 : 3, hostTime: hostTime + 10))
-            try await Task.sleep(nanoseconds: 5_000_000)
         }
 
         XCTAssertEqual(harness.gateway.tapRequestCount, 1, "tap создан ровно один раз за сеанс")
@@ -45,7 +45,6 @@ final class CompositionTests: CaptureAsyncTestCase {
         harness.gateway.emit(.microphoneChanged(
             MicrophoneHandle(uid: "airpods", name: "AirPods Pro", channelCount: 1), atHostTime: 2_000
         ))
-        try await Task.sleep(nanoseconds: 20_000_000)
 
         XCTAssertEqual(harness.gateway.tapRequestCount, tapCallsBefore, "устройство сменилось — tap не трогается")
         XCTAssertEqual(harness.gateway.aggregateBuildCount, aggregateCallsBefore + 1, "ровно одна пересборка aggregate")
@@ -57,24 +56,23 @@ final class CompositionTests: CaptureAsyncTestCase {
         let harness = Harness()
         let directory = try Harness.makeDirectory()
 
+        let stream = harness.port.events()
         let collector = Task { () -> [CaptureEvent] in
             var collected: [CaptureEvent] = []
-            for await event in harness.port.events() {
+            for await event in stream {
                 collected.append(event)
                 if case .discontinuity = event { break }
             }
             return collected
         }
-        try await Task.sleep(nanoseconds: 10_000_000)
         // Формат микрофона по умолчанию (Harness.request) — 48 кГц/1 канал.
         let started = try await harness.start(directory: directory)
         XCTAssertEqual(started.tracks.first { $0.channel == .mic }?.channelCount, 1)
 
         // Источник переключился на 3 канала (voice processing в чужом процессе) посреди сеанса.
+        // MEE-374 (аудит MEE-377): оба вызова синхронны, `collector.value` ниже — уже синхронизация.
         harness.gateway.emit(.microphoneFormatChanged(channelCount: 3, atHostTime: 5_000))
-        try await Task.sleep(nanoseconds: 20_000_000)
         harness.gateway.feed(.samples(.mic, frameCount: 480, channelCount: 3, hostTime: 5_050))
-        try await Task.sleep(nanoseconds: 20_000_000)
 
         let events = await collector.value
         // Возврат MEE-317 (24.09): не только факт события — реальные `from`/`to`, а не любые

@@ -21,6 +21,17 @@ final class FakeHardwareGateway: HardwareGateway, @unchecked Sendable {
     private let lock = NSLock()
     private var tapContinuations: [CheckedContinuation<TapAttempt, Never>] = []
     private var micContinuations: [CheckedContinuation<MicrophoneAttempt, Never>] = []
+    /// MEE-374 (аудит MEE-377): явный gate вместо фикс. паузы, угадывающей момент, когда
+    /// `AudioCaptureImpl` реально дошёл до `requestSystemAudioTap`/`requestMicrophone` и
+    /// зарегистрировал continuation — `resolveTap`/`resolveMicrophone` до этого момента теряют
+    /// разрешение молча (см. их же `pending = []`).
+    private var tapRequestedContinuations: [CheckedContinuation<Void, Never>] = []
+    private var micRequestedContinuations: [CheckedContinuation<Void, Never>] = []
+    /// Тот же довод для позднего пути (К17): `handleLateTap`/`handleLateMicrophone` зовут
+    /// `releaseTap`/`releaseMicrophone` из СОБСТВЕННОГО фонового `Task` — сигнал «релиз
+    /// действительно случился» вместо угадывания паузой.
+    private var tapReleasedContinuations: [CheckedContinuation<Void, Never>] = []
+    private var micReleasedContinuations: [CheckedContinuation<Void, Never>] = []
 
     private(set) var tapRequestArgs: [ProcessGroup?] = []
     private(set) var micRequestArgs: [InputSelection] = []
@@ -70,26 +81,87 @@ final class FakeHardwareGateway: HardwareGateway, @unchecked Sendable {
         for continuation in pending { continuation.resume(returning: result) }
     }
 
+    /// Ждёт момента, когда `requestSystemAudioTap` реально вызван и continuation
+    /// зарегистрирован — сигнал «право tap запрошено», не оценка времени.
+    func awaitTapRequested() async {
+        lock.lock()
+        if !tapContinuations.isEmpty { lock.unlock(); return }
+        await withCheckedContinuation { continuation in
+            tapRequestedContinuations.append(continuation)
+            lock.unlock()
+        }
+    }
+
+    /// Тот же gate для `requestMicrophone`.
+    func awaitMicrophoneRequested() async {
+        lock.lock()
+        if !micContinuations.isEmpty { lock.unlock(); return }
+        await withCheckedContinuation { continuation in
+            micRequestedContinuations.append(continuation)
+            lock.unlock()
+        }
+    }
+
     func requestSystemAudioTap(for group: ProcessGroup?) async -> TapAttempt {
         lock.lock(); tapRequestArgs.append(group); lock.unlock()
         return await withCheckedContinuation { continuation in
-            lock.lock(); tapContinuations.append(continuation); lock.unlock()
+            lock.lock()
+            tapContinuations.append(continuation)
+            let waiters = tapRequestedContinuations
+            tapRequestedContinuations = []
+            lock.unlock()
+            for waiter in waiters { waiter.resume() }
         }
     }
 
     func requestMicrophone(_ selection: InputSelection) async -> MicrophoneAttempt {
         lock.lock(); micRequestArgs.append(selection); lock.unlock()
         return await withCheckedContinuation { continuation in
-            lock.lock(); micContinuations.append(continuation); lock.unlock()
+            lock.lock()
+            micContinuations.append(continuation)
+            let waiters = micRequestedContinuations
+            micRequestedContinuations = []
+            lock.unlock()
+            for waiter in waiters { waiter.resume() }
         }
     }
 
     func releaseTap(_ handle: TapHandle) {
-        lock.lock(); releasedTaps.append(handle); lock.unlock()
+        lock.lock()
+        releasedTaps.append(handle)
+        let waiters = tapReleasedContinuations
+        tapReleasedContinuations = []
+        lock.unlock()
+        for waiter in waiters { waiter.resume() }
     }
 
     func releaseMicrophone(_ handle: MicrophoneHandle) {
-        lock.lock(); releasedMicrophones.append(handle); lock.unlock()
+        lock.lock()
+        releasedMicrophones.append(handle)
+        let waiters = micReleasedContinuations
+        micReleasedContinuations = []
+        lock.unlock()
+        for waiter in waiters { waiter.resume() }
+    }
+
+    /// Ждёт момента, когда `releaseTap` реально вызван — К17, поздний путь.
+    func awaitTapReleased() async {
+        lock.lock()
+        if !releasedTaps.isEmpty { lock.unlock(); return }
+        await withCheckedContinuation { continuation in
+            tapReleasedContinuations.append(continuation)
+            lock.unlock()
+        }
+    }
+
+    /// Тот же gate для `releaseMicrophone`.
+    func awaitMicrophoneReleased() async {
+        lock.lock()
+        if !releasedMicrophones.isEmpty { lock.unlock(); return }
+        await withCheckedContinuation { continuation in
+            micReleasedContinuations.append(continuation)
+            lock.unlock()
+        }
     }
 
     // MARK: - Aggregate

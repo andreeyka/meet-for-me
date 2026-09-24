@@ -29,9 +29,10 @@ final class LevelsTests: CaptureAsyncTestCase {
         let directory = try Harness.makeDirectory()
         try await harness.start(directory: directory)
 
+        let stream = harness.port.events()
         let collector = Task { () -> [ReceivedLevels] in
             var collected: [ReceivedLevels] = []
-            for await event in harness.port.events() {
+            for await event in stream {
                 if case .levels(let levels) = event {
                     collected.append(ReceivedLevels(levels: levels, receivedAt: Date()))
                 }
@@ -39,7 +40,6 @@ final class LevelsTests: CaptureAsyncTestCase {
             }
             return collected
         }
-        try await Task.sleep(nanoseconds: 10_000_000)
 
         // 20 буферов с `hostTime`, разнесённым на секунду каждый, кормятся синхронно, без
         // ожидания между вызовами — троттлинг по `hostTime` данных пропустил бы КАЖДЫЙ (интервал
@@ -53,7 +53,6 @@ final class LevelsTests: CaptureAsyncTestCase {
         // доставленное событие, несмотря на то что его `hostTime` продолжает ту же последовательность.
         try await Task.sleep(nanoseconds: 160_000_000)
         harness.gateway.feed(.samples(.mic, frameCount: 480, channelCount: 1, hostTime: 21_000))
-        try await Task.sleep(nanoseconds: 20_000_000)
 
         _ = try await harness.port.stop()
         let levels = await collector.value

@@ -29,7 +29,7 @@ final class PowerAndPauseTests: CaptureAsyncTestCase {
         let request = Harness.request(directory: directory, input: .none)
 
         async let started = harness.port.start(request)
-        try await Task.sleep(nanoseconds: 20_000_000)
+        await harness.gateway.awaitTapRequested()
         harness.gateway.resolveTap(with: .permissionDenied)
         do {
             _ = try await started
@@ -69,7 +69,6 @@ final class PowerAndPauseTests: CaptureAsyncTestCase {
         try await harness.start(directory: directory)
 
         harness.gateway.feed(.samples(.mic, frameCount: 4_800, channelCount: 1, hostTime: 1_000))
-        try await Task.sleep(nanoseconds: 20_000_000)
 
         try await harness.port.pause()
         try await harness.port.resume()
@@ -93,15 +92,12 @@ final class PowerAndPauseTests: CaptureAsyncTestCase {
         try await harness.start(directory: directory)
 
         harness.gateway.feed(.samples(.mic, frameCount: 480, channelCount: 1, hostTime: 500))
-        try await Task.sleep(nanoseconds: 20_000_000)
 
         try await harness.port.pause()
         harness.gateway.feed(.samples(.mic, frameCount: 480, channelCount: 1, hostTime: 1_000))
-        try await Task.sleep(nanoseconds: 20_000_000)
         try await harness.port.resume()
 
         harness.gateway.feed(.samples(.mic, frameCount: 480, channelCount: 1, hostTime: 1_500))
-        try await Task.sleep(nanoseconds: 20_000_000)
 
         let manifest = try await harness.port.stop()
         let micFrames = TrackFile.framesOnDisk(

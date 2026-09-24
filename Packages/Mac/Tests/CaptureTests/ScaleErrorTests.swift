@@ -63,20 +63,18 @@ final class ScaleErrorTests: CaptureAsyncTestCase {
         let harness = Harness()
         let directory = try Harness.makeDirectory()
 
+        let stream = harness.port.events()
         let collector = Task { () -> CaptureDiscontinuity? in
-            for await event in harness.port.events() {
+            for await event in stream {
                 if case .discontinuity(let discontinuity) = event { return discontinuity }
             }
             return nil
         }
-        try await Task.sleep(nanoseconds: 10_000_000)
 
         try await harness.start(directory: directory)
         harness.gateway.feed(.samples(.mic, frameCount: 480, channelCount: 1, hostTime: 1_000))
-        try await Task.sleep(nanoseconds: 20_000_000)
 
         harness.gateway.emit(.tapInvalidated(atHostTime: 5_000))
-        try await Task.sleep(nanoseconds: 20_000_000)
         harness.gateway.feed(.samples(.mic, frameCount: 480, channelCount: 1, hostTime: 5_050))
 
         let received = await collector.value
