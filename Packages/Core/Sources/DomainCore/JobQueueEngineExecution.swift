@@ -48,6 +48,10 @@ extension JobQueueEngine {
         runningTasks[job.id] = nil
         if isRunning {
             await runRevisitPass()
+        } else {
+            // Пересмотр по завершении не запускается (`stop()` уже прошёл) — не приходит и
+            // сигнал через `defer` `runRevisitPass()`, а очередь может стать идле именно тут.
+            notifyIdleIfNeeded()
         }
     }
 

@@ -92,10 +92,20 @@ final class JobQueueEngineCancelEventsTests: XCTestCase {
 
     /// К67: нет обработчика — `blocked(.noHandler)` на каждом пересмотре, задача не
     /// исполняется, соседние готовые задачи стартуют в том же пересмотре.
+    ///
+    /// Возврат РП по MEE-357: прежняя версия проверяла только конечное состояние строки
+    /// (`.pending`, `attempts == 0`) — «пересмотр не встал» читалось лишь по тому, что
+    /// `readyId` в итоге дошла до `succeeded`. Теперь читается событие `blocked(.noHandler)`
+    /// САМО, и то, что `started(readyId)` публикуется В ТОМ ЖЕ пересмотре, до
+    /// `waitUntilIdle()` — оба события лежат в буфере (синхронный `continuation.yield`) уже
+    /// к моменту, когда `await rig.queue.start()` вернул управление, поскольку весь
+    /// пересмотр — это один `while` внутри одного `await runRevisitPass()`.
     func test_k67_noHandlerBlocksWithoutStallingTheRest() async throws {
         let rig = JobQueueTestRig()
         let attributeHandler = FakeJobHandler(type: .attribute)
         try await rig.queue.register(handler: attributeHandler)
+        let stream = rig.queue.events()
+        var iterator = stream.makeAsyncIterator()
 
         let summarizeId = try await rig.queue.submit(makeSubmission(
             payload: .summarize(meetingId: UUID(), transcriptId: UUID(), profileId: "p")
@@ -103,19 +113,53 @@ final class JobQueueEngineCancelEventsTests: XCTestCase {
         let readyId = try await rig.queue.submit(makeSubmission(
             payload: .attribute(transcriptId: UUID(), meetingId: nil)
         ))
+        _ = await drainExactly(&iterator, count: 2)   // два submitted — не предмет этого критерия
 
-        for _ in 0..<3 {
-            await rig.queue.start()
-            // `waitUntilIdle()` — иначе фоновое завершение `readyId` (пересмотр по
-            // завершении, §7) гонится с этим прямым чтением: между `claimNext` и её же
-            // разворотом `noHandler` строка мгновенно, но НАБЛЮДАЕМО, побывала `running`.
-            await rig.queue.waitUntilIdle()
-            let summarizeJob = try await rig.repository.job(id: summarizeId)
-            XCTAssertEqual(summarizeJob?.status, .pending)
-            XCTAssertEqual(summarizeJob?.attempts, 0)
+        // Пересмотр 1 (внутри этого start()): noHandler на summarizeId и старт readyId —
+        // оба в одном пересмотре, до waitUntilIdle().
+        await rig.queue.start()
+        let firstPass = await drainExactly(&iterator, count: 2)
+        XCTAssertTrue(
+            firstPass.contains(.blocked(jobId: summarizeId, type: .summarize, reason: .noHandler)),
+            "К67: blocked(.noHandler) публикуется в первом же пересмотре"
+        )
+        XCTAssertTrue(
+            firstPass.contains(.started(jobId: readyId, type: .attribute)),
+            "К67: сосед стартовал в том же пересмотре, а не отложен на следующий"
+        )
+        let summarizeAfterFirstPass = try await rig.repository.job(id: summarizeId)
+        XCTAssertEqual(summarizeAfterFirstPass?.status, .pending)
+        XCTAssertEqual(summarizeAfterFirstPass?.attempts, 0)
+
+        // Пересмотр 2 — по завершении readyId (§7), внутри waitUntilIdle(): успех readyId,
+        // затем тот же пересмотр по завершении снова видит summarizeId и снова не встаёт.
+        await rig.queue.waitUntilIdle()
+        let secondPass = await drainExactly(&iterator, count: 2)
+        XCTAssertEqual(secondPass, [
+            .succeeded(jobId: readyId, type: .attribute),
+            .blocked(jobId: summarizeId, type: .summarize, reason: .noHandler)
+        ], "К67: пересмотр по завершении соседа снова публикует blocked(.noHandler) и не встаёт")
+
+        // Пересмотры 3 и 4 — summarizeId остаётся единственным кандидатом: блокируется на
+        // каждом внешнем start(), ни один пересмотр не зависает.
+        for _ in 0..<2 {
+            try await assertNextPassOnlyBlocksNoHandler(rig, summarizeId: summarizeId, iterator: &iterator)
         }
+
         let ready = try await rig.repository.job(id: readyId)
         XCTAssertEqual(ready?.status, .succeeded, "пересмотр не встал на noHandler")
+    }
+
+    private func assertNextPassOnlyBlocksNoHandler(
+        _ rig: JobQueueTestRig, summarizeId: UUID, iterator: inout AsyncStream<JobEvent>.AsyncIterator
+    ) async throws {
+        await rig.queue.start()
+        let pass = await drainExactly(&iterator, count: 1)
+        XCTAssertEqual(pass, [.blocked(jobId: summarizeId, type: .summarize, reason: .noHandler)])
+        let summarizeJob = try await rig.repository.job(id: summarizeId)
+        XCTAssertEqual(summarizeJob?.status, .pending)
+        XCTAssertEqual(summarizeJob?.attempts, 0)
+        await rig.queue.waitUntilIdle()
     }
 
     /// К68: ровно одна финальная последовательность на исполненную задачу —

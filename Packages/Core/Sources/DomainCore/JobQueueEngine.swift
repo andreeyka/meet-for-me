@@ -54,6 +54,11 @@ public actor JobQueueEngine: JobQueue {
     var timerTask: Task<Void, Never>?
     var powerEventsTask: Task<Void, Never>?
 
+    /// `waitUntilIdle()` в ожидании — сигнал вместо опроса (возврат РП по MEE-357):
+    /// `notifyIdleIfNeeded()` будит их, когда `runningTasks` и `activeRevisitPasses` оба
+    /// пришли к нулю, вместо цикла на `Task.yield()`.
+    var idleWaiters: [CheckedContinuation<Void, Never>] = []
+
     /// `nonisolated`: `events()` (§2) не `async` в контракте и обязан быть вызываем без
     /// изоляции актора; хранилище подписчиков поэтому читается отсюда напрямую.
     nonisolated let broadcaster = JobEventBroadcaster()

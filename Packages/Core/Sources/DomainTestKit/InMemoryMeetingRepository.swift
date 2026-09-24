@@ -12,6 +12,9 @@
 //  что тест на настоящей базе», а исполнимы сегодня не все:
 //    * инвариант 6 (уникальность `dedup_key`) — ДЕРЖИТСЯ: `save` бросает
 //      `constraintViolation`, если тот же ключ уже стоит у ДРУГОГО `meetingId`;
+//    * инвариант 30 (уникальность пары `meeting_sources`, C-010 v14) — ДЕРЖИТСЯ: `save`
+//      бросает `constraintViolation`, если пара (`sourceConnectorId`, `externalId`) уже
+//      стоит у ДРУГОЙ встречи; повторное сохранение той же встречи с той же парой проходит;
 //    * инвариант 20 (что бросает `notFound`) — ДЕРЖИТСЯ: `setStatus` на несуществующей
 //      встрече бросает, а чтения отдают `nil`;
 //    * инварианты 4, 5 (`persons`, `person_emails`), 10—13 — НЕ ДЕРЖАТСЯ ЗДЕСЬ ВОВСЕ: их
@@ -147,18 +150,37 @@ public final class InMemoryMeetingRepository: MeetingRepository, @unchecked Send
 
     // MARK: - MeetingRepository
 
+    /// Инвариант 6 (`dedup_key`) и инвариант 30 (`meeting_sources`, C-010 v14): обе пары
+    /// уникальны у ДРУГОЙ встречи — повторное сохранение той же встречи с той же парой
+    /// проходит, пара, уже занятая другой, — `constraintViolation`.
     public func save(_ record: MeetingRecord) async throws {
         log.record(port: Self.portName, method: "save(_:)", arguments: [record.event.id.uuidString])
         await hangIfAsked(.save)
         if let error = failureIfAny(.save, id: record.event.id.uuidString) {
             throw error
         }
-        let clash = locked { () -> Bool in
+        let dedupClash = locked { () -> Bool in
             guard let key = record.dedupKey else { return false }
             return records.contains { $0.key != record.event.id && $0.value.dedupKey == key }
         }
-        if clash {
+        if dedupClash {
             throw StorageError.constraintViolation(message: "meetings.dedup_key уникален (инвариант 6 C-010)")
+        }
+        let sourceClash = locked { () -> Bool in
+            records.contains { existingId, existing in
+                guard existingId != record.event.id else { return false }
+                return existing.sources.contains { existingSource in
+                    record.sources.contains {
+                        $0.sourceConnectorId == existingSource.sourceConnectorId
+                            && $0.externalId == existingSource.externalId
+                    }
+                }
+            }
+        }
+        if sourceClash {
+            throw StorageError.constraintViolation(
+                message: "meeting_sources: пара (source_connector_id, external_id) уникальна (инвариант 30 C-010)"
+            )
         }
         locked {
             if records[record.event.id] == nil {
@@ -188,12 +210,6 @@ public final class InMemoryMeetingRepository: MeetingRepository, @unchecked Send
 
     /// C-010 v10, IR-118 (MEE-348), инвариант 30: пара — первичный ключ `meeting_sources`
     /// (§1), результат не более чем один.
-    ///
-    /// СТРОКА (мелкое, тем же доводом, что у `dedup_key` в `InMemoryJobRepository`, MEE-320):
-    /// «не более чем один» здесь — следствие первичного ключа настоящей таблицы, а не
-    /// отдельная проверка, которую держит этот метод сам; `save(_:)` эту пару не сверяет ни
-    /// с одной существующей записью. Деталь неполноты дешевле развилки — называю строкой,
-    /// а не решаю за контракт молча.
     public func meeting(sourceConnectorId: String, externalId: String) async throws -> MeetingRecord? {
         log.record(
             port: Self.portName, method: "meeting(sourceConnectorId:externalId:)",
