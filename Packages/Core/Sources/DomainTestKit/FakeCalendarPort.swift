@@ -327,10 +327,7 @@ public final class FakeCalendarPort: CalendarPort, @unchecked Sendable {
     }
 
     public func configure(source: CalendarSourceId, settings: Data) async throws {
-        log.record(
-            port: Self.portName, method: "configure(source:settings:)",
-            arguments: [source.rawValue, String(decoding: settings, as: UTF8.self)]
-        )
+        log.record(port: Self.portName, method: "configure(source:settings:)", arguments: [source.rawValue])
         if let error = throwFailureIfAny(.configure, source: source.rawValue) {
             throw error
         }
