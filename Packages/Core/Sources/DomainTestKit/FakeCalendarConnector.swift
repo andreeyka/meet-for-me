@@ -95,22 +95,50 @@ public final class FakeCalendarConnector: CalendarConnector, @unchecked Sendable
     /// К35/К36 — управляемая задержка: метод ждёт на воротах, пока тест не отпустит их
     /// `release(_:)`. `hang(_:)` без последующего `release(_:)` — тот же эффект, что было у
     /// «никогда не возвращается» (К9 вход А): тест просто не вызывает `release`.
-    private var gateContinuations: [CalendarConnectorMethod: [CheckedContinuation<Void, Never>]] = [:]
+    ///
+    /// Ключ записи — свой `UUID`, не просто элемент массива: `withTaskCancellationHandler`
+    /// ниже обязан снять РОВНО СВОЮ запись по отмене, не первую подвернувшуюся — у одного
+    /// метода в проверке гонки К9 бывает несколько независимых зависших вызовов разом.
+    private var gateContinuations: [CalendarConnectorMethod: [UUID: CheckedContinuation<Void, Error>]] = [:]
 
+    /// К9 (вход А): раса хоста между операцией и швом ожидания отменяет ПРОИГРАВШУЮ задачу
+    /// (`group.cancelAll()` в `raceTimeout`) — `withThrowingTaskGroup` при выходе из области
+    /// действия ждёт завершения ВСЕХ дочерних задач, включая отменённые, не только той, чей
+    /// результат забрал `group.next()`. Без реакции на отмену эта задача осталась бы висящим
+    /// продолжением навсегда, и `withThrowingTaskGroup` не вернулся бы — тот самый зависший
+    /// `swift test`, найденный на CI (MEE-362, красный прогон после пуша хоста). Отмена здесь
+    /// бросает `CancellationError`, который ничья сторона не читает (раса уже решена другой
+    /// задачей) — важно только то, что задача завершается, а не то, чем именно.
     private func hangOrGate(_ method: CalendarConnectorMethod) async throws {
         guard locked({ hangingMethods.contains(method) }) else { return }
-        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-            locked { gateContinuations[method, default: []].append(continuation) }
+        let key = UUID()
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                // Уже отменена ДО регистрации (onCancel сработал первым, до store) — не
+                // хранить запись, которую `onCancel` больше никогда не увидит и не снимет:
+                // без этой проверки продолжение осталось бы висеть навсегда.
+                let alreadyCancelled = locked { () -> Bool in
+                    guard !Task.isCancelled else { return true }
+                    gateContinuations[method, default: [:]][key] = continuation
+                    return false
+                }
+                if alreadyCancelled { continuation.resume(throwing: CancellationError()) }
+            }
+        } onCancel: {
+            let cancelled = locked { () -> CheckedContinuation<Void, Error>? in
+                gateContinuations[method]?.removeValue(forKey: key)
+            }
+            cancelled?.resume(throwing: CancellationError())
         }
     }
 
     /// Отпускает все вызовы этого метода, ждущие на воротах (К35/К36). Метод, отпущенный
     /// без предшествующего `hang(_:)`, не имеет ждущих — вызов безопасен, эффекта нет.
     public func release(_ method: CalendarConnectorMethod) {
-        let waiting = locked { () -> [CheckedContinuation<Void, Never>] in
-            let list = gateContinuations[method] ?? []
-            gateContinuations[method] = []
-            return list
+        let waiting = locked { () -> [CheckedContinuation<Void, Error>] in
+            let map = gateContinuations[method] ?? [:]
+            gateContinuations[method] = [:]
+            return Array(map.values)
         }
         for continuation in waiting { continuation.resume() }
     }
