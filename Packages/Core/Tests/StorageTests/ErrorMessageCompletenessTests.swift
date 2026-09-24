@@ -46,8 +46,34 @@ final class ErrorMessageCompletenessTests: StorageAsyncTestCase {
             guard case .dataCorrupted(_, _, let message) = error else {
                 XCTFail("ожидался dataCorrupted, получено \(error)"); return
             }
-            XCTAssertEqual(message, referenceMessage, "полный текст равен эталону, собранному напрямую")
+            // Равенство — после нормализации порядка `UserInfo={...}`: прогон
+            // по коммиту 34ae5f5 (CI, 24.09) поймал ровно то, что предсказывал
+            // К35 части 3a, — ДВА разбора одного и того же "not-json" В ОДНОМ
+            // процессе дали РАЗНЫЙ порядок печати ключей `NSDebugDescription`/
+            // `NSJSONSerializationErrorIndex`, при БУКВАЛЬНО одинаковом
+            // содержимом. Порядок ключей NSError не входит в контракт
+            // (инвариант 22 требует полноты текста, не байтовой формы) —
+            // сравнение целиком, но по ключам словаря, а не по их порядку.
+            XCTAssertEqual(
+                Self.normalizingUserInfoKeyOrder(message), Self.normalizingUserInfoKeyOrder(referenceMessage),
+                "полный текст равен эталону (порядок печати UserInfo нормализован): \(message) vs \(referenceMessage)"
+            )
         }
+    }
+
+    /// Сортирует записи `UserInfo={...}` внутри описания `DecodingError` — их
+    /// взаимный порядок печати не гарантирован между двумя разборами одного и
+    /// того же входа (подтверждено прогоном, см. довод на месте вызова), само
+    /// содержимое — да. Пусто/не найдено — возвращает вход как есть.
+    private static func normalizingUserInfoKeyOrder(_ text: String) -> String {
+        guard let openRange = text.range(of: "UserInfo={"),
+              let closeRange = text.range(of: "}", range: openRange.upperBound..<text.endIndex)
+        else { return text }
+        let sortedEntries = text[openRange.upperBound..<closeRange.lowerBound]
+            .components(separatedBy: ", ")
+            .sorted()
+            .joined(separator: ", ")
+        return text.replacingCharacters(in: openRange.upperBound..<closeRange.lowerBound, with: sortedEntries)
     }
 
     // MARK: - (ii) DomainValidationError — message несёт номер инварианта и path

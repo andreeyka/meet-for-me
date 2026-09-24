@@ -5,20 +5,27 @@
 //  на всех входах, отказ сведён к `StorageError.dataCorrupted` с настоящими
 //  `entity`/`id` разбитой строки, а не только фактом отказа. Поля с
 //  `decodeBounded`/`decodeFiniteIfPresent`, которыми это доказывается —
-//  `RecordingManifest.schemaVersion` (manifest_json) и `Transcript.Word.
-//  startMs/endMs` (words_json) — по возврату РП.
+//  `RecordingManifest.schemaVersion`/`Marker.atMs` (manifest_json) и
+//  `Transcript.Word.startMs/endMs` (words_json) — по возврату РП.
+//
+//  Вход «дробный литерал в целом поле» заменён на «целое вне безопасного
+//  диапазона» (2^53, §0.2 п. 9) — IR-115 закрыт разъяснением архитектора
+//  (C-001 v12 §0.4, буква готовится в MEE-337): "1.0" в целом поле законна,
+//  `DomainJSON` на дробном литерале с нулевой дробной частью не отличается
+//  от стандартного `JSONDecoder`, и прежний вход ничего не проверял.
 //
 //  Шаблон применим не ко всем четырём колонкам целиком:
 //  - `jobs.payload_json` (`JobPayload`) не несёт ни одного числового поля —
-//    только `UUID`/`String` — «1e400» и «дробный литерал в целом поле»
+//    только `UUID`/`String` — «1e400» и «целое вне безопасного диапазона»
 //    здесь не сконструировать буквально; проверен только дублирующийся ключ.
 //  - `connectors.selected_calendar_ids_json` (`[String]`) — плоский массив без
-//    объектных ключей и без числовых полей: «1e400» и «дробный литерал в целом
-//    поле» по-прежнему не сконструировать буквально, но `assertNoDuplicateKeys`
-//    (`DomainJSONDuplicateKeys.swift`) — байтовый проход по ВСЕМ фигурным
-//    скобкам документа, а не по типу верхнего уровня, поэтому дублирующийся
-//    ключ внутри вложенного объекта отказывает и здесь (восьмой вход дельты О),
-//    даже если сам верхний уровень колонки — массив, а не объект.
+//    объектных ключей и без числовых полей: «1e400» и «целое вне безопасного
+//    диапазона» по-прежнему не сконструировать буквально, но
+//    `assertNoDuplicateKeys` (`DomainJSONDuplicateKeys.swift`) — байтовый
+//    проход по ВСЕМ фигурным скобкам документа, а не по типу верхнего
+//    уровня, поэтому дублирующийся ключ внутри вложенного объекта отказывает
+//    и здесь (восьмой вход дельты О), даже если сам верхний уровень
+//    колонки — массив, а не объект.
 
 import XCTest
 import GRDB
@@ -33,17 +40,44 @@ final class JSONDecoderDivergenceTests: StorageAsyncTestCase {
         try await Self.assertManifestRejected(schemaVersionText: "1e400")
     }
 
-    func testK43_manifestJSONRejectsFractionalSchemaVersion() async throws {
-        // СТРОКА: IR-115 (MEE-336) — этот вход сейчас НИЧЕГО не различает.
-        // `DomainJSON` принимает "1.0" как 1 точно так же, как принял бы
-        // стандартный `JSONDecoder` (РП, третий возврат) — тест краснеет не
-        // из-за отказа на дробном литерале, а из-за отдельной, не связанной с
-        // К43 проверки `schemaVersion == RecordingManifest.currentSchemaVersion`
-        // (`RecordingManifestValidation.swift`, инвариант 1): значение 1 не
-        // совпадает с текущей версией схемы (3), это и даёт dataCorrupted.
-        // Тест оставлен зелёным содержательно неверно по причине, а не по
-        // исходу, — до ответа по IR-115 не решаю сама, чем заменить вход.
-        try await Self.assertManifestRejected(schemaVersionText: "1.0")
+    /// IR-115 закрыт разъяснением архитектора (C-001 v12 §0.4, буква в MEE-337
+    /// готовится аналитиком): "1.0" в целом поле — законная 1, `DomainJSON`
+    /// на дробном литерале с нулевой дробной частью верен. Вход К43 «дробный
+    /// литерал» заменён на 2^53 (§0.2 п. 9): `RecordingManifest.Marker.atMs`
+    /// вне безопасного диапазона (`-(2^53-1)…(2^53-1)`) — стандартный
+    /// `JSONDecoder` число 9007199254740992 в `Int` принимает без вопросов
+    /// (показано зондом ниже, без похода в БД), `DomainJSON` отказывает.
+    func testK43_manifestJSONRejectsIntegerBeyondSafeRange() async throws {
+        struct AtMsProbe: Decodable { let atMs: Int }
+        let probe = try JSONDecoder().decode(
+            AtMsProbe.self, from: Data(#"{"atMs":9007199254740992}"#.utf8)
+        )
+        XCTAssertEqual(probe.atMs, 9_007_199_254_740_992, "стандартный JSONDecoder принимает 2^53 как Int")
+
+        let temp = try StorageTestSupport.makeDatabase()
+        defer { StorageTestSupport.cleanup(temp) }
+        let layout = FileLayout(root: temp.directory)
+        let recordings = temp.database.recordingRepository(fileLayout: layout)
+        let recordingId = UUID()
+        let manifest = try RecordingManifest(
+            recordingId: recordingId, meetingId: nil, directoryName: recordingId.uuidString,
+            startedAt: TestFixtures.epoch, endedAt: nil,
+            tracks: [try RecordingManifest.Track(
+                channel: .mic, fileName: "audio-mic.caf", sampleRate: 16_000, channelCount: 1, format: "pcm-caf"
+            )],
+            markers: [try RecordingManifest.Marker(kind: .pause, atMs: 0, detail: nil)],
+            capturedProcesses: [], captureGroupKey: nil, inputDevices: [], discontinuities: [], isFinalized: false
+        )
+        try await recordings.save(RecordingRecord(manifest: manifest, status: .recording))
+
+        let validJSON = try Self.currentManifestJSON(recordingId: recordingId, database: temp.database)
+        let broken = validJSON.replacingOccurrences(of: "\"atMs\":0", with: "\"atMs\":9007199254740992")
+        try XCTUnwrap(broken != validJSON ? broken : nil, "\"atMs\":0 не найден в сериализации манифеста")
+        try Self.writeManifestJSON(broken, recordingId: recordingId, database: temp.database)
+
+        try await Self.assertDataCorrupted(entity: "Recording", id: recordingId.uuidString) {
+            try await recordings.recording(id: recordingId)
+        }
     }
 
     func testK43_manifestJSONRejectsDuplicateTopLevelKey() async throws {
@@ -109,22 +143,17 @@ final class JSONDecoderDivergenceTests: StorageAsyncTestCase {
         try await Self.assertWordsJSONRejected(#"[{"startMs":1e400,"endMs":10,"text":"x"}]"#)
     }
 
-    func testK43_wordsJSONRejectsFractionalStartMs() async throws {
-        // СТРОКА: IR-115 (MEE-336) — этот вход тоже ничего не различает, тем же
-        // доводом, что у schemaVersion выше: `DomainJSON` принимает дробный
-        // литерал с нулевой дробной частью как целое значение (`decodeBounded`
-        // сравнивает ЗНАЧЕНИЕ после разбора, не форму исходного литерала).
-        // Прогон подтвердил это дословно: "1.0" здесь НЕ отвергнут (CI run по
-        // коммиту ec482a0, 24.09, "ожидался dataCorrupted") — у `Transcript.
-        // Word.startMs`, в отличие от `RecordingManifest.schemaVersion`, нет
-        // отдельной проверки на равенство константе, которая давала бы отказ
-        // по НЕСВЯЗАННОЙ с К43 причине. Оставлено "1.5" — на явно дробном
-        // ЗНАЧЕНИИ decodeBounded отказывает уже по своей собственной проверке
-        // целости, но это тоже не различает DomainJSON от чужого декодера
-        // (тот же довод РП про "3.5"/"1.5") — до ответа по IR-115 вход К43
-        // «дробный литерал в целом поле» не даёт содержательной проверки ни
-        // на одном из четырёх столбцов инварианта 27.
-        try await Self.assertWordsJSONRejected(#"[{"startMs":1.5,"endMs":10,"text":"x"}]"#)
+    /// Тот же вход К43 после закрытия IR-115 (см. testK43_manifestJSONRejects
+    /// IntegerBeyondSafeRange выше) — 2^53 вместо дробного литерала, на поле
+    /// `Transcript.Word.startMs` (тоже `decodeBounded`, §0.2 п. 9).
+    func testK43_wordsJSONRejectsIntegerBeyondSafeRange() async throws {
+        struct StartMsProbe: Decodable { let startMs: Int }
+        let probe = try JSONDecoder().decode(
+            StartMsProbe.self, from: Data(#"{"startMs":9007199254740992}"#.utf8)
+        )
+        XCTAssertEqual(probe.startMs, 9_007_199_254_740_992, "стандартный JSONDecoder принимает 2^53 как Int")
+
+        try await Self.assertWordsJSONRejected(#"[{"startMs":9007199254740992,"endMs":10,"text":"x"}]"#)
     }
 
     func testK43_wordsJSONRejectsDuplicateKey() async throws {
