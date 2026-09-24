@@ -63,15 +63,32 @@ extension CalendarPortImpl {
     /// источника получает результат уже идущего, не запускает второй.
     func syncOne(source: CalendarSourceId, trigger: CalendarSyncTrigger) async -> CalendarSyncResult {
         if inFlightSync[source] == nil {
+            let generation = UUID()
             let task = Task { await self.performSync(source: source, trigger: trigger) }
-            inFlightSync[source] = task
-            Task { await self.finishInFlightSync(source: source, task: task) }
+            inFlightSync[source] = (generation, task)
+            Task { await self.finishInFlightSync(source: source, generation: generation, task: task) }
         }
         return await awaitSharedSync(source: source, trigger: trigger)
     }
 
-    private func finishInFlightSync(source: CalendarSourceId, task: Task<CalendarSyncResult, Never>) async {
+    /// Возврат РП (приёмка #94, бэклог MEE-386, п. 2/двух пограничных случаев): `generation`
+    /// (заведён в `syncOne`, хранится рядом с `task` в `inFlightSync`) — без него, если ПОСЛЕ
+    /// отмены последнего ожидающего (`cancelSyncWaiter` ниже обнуляет `inFlightSync[source]`
+    /// сразу, не дожидаясь фактического завершения задачи) успевал прийти новый вызывающий,
+    /// он стартовал бы СВОЮ задачу под тем же ключом источника — а когда СТАРАЯ (уже
+    /// отменённая) задача потом всё-таки заканчивалась, этот же метод, зная только `source`,
+    /// не смог бы отличить «это ещё моя генерация» от «источник уже занят чужой, более новой»
+    /// и либо обнулил бы чужую свежую запись `inFlightSync`, либо (хуже) разослал бы
+    /// результат ОТМЕНЁННОЙ задачи новым ожидающим, которые ничего не отменяли. Guard ниже —
+    /// единственная защита: не наша генерация — свежие `syncWaiters` принадлежат чужой
+    /// задаче, их трогать нечем (по построению `cancelSyncWaiter` уже разослала ВСЕХ
+    /// ожидающих ПРЕЖНЕЙ генерации `.cancelled`, прежде чем обнулить `inFlightSync` —
+    /// оставленных «хвостов» той генерации в `syncWaiters` быть не может).
+    private func finishInFlightSync(
+        source: CalendarSourceId, generation: UUID, task: Task<CalendarSyncResult, Never>
+    ) async {
         let result = await task.value
+        guard inFlightSync[source]?.generation == generation else { return }
         inFlightSync[source] = nil
         let waiters = syncWaiters.removeValue(forKey: source) ?? [:]
         for continuation in waiters.values {
@@ -79,15 +96,24 @@ extension CalendarPortImpl {
         }
     }
 
+    /// Возврат РП (приёмка #94, бэклог MEE-386, п. 1/двух пограничных случаев): раньше
+    /// вызывающий, отменённый ЕЩЁ ДО входа сюда (`Task.isCancelled` уже true на первом же
+    /// синхронном чтении), вообще не регистрировался в `syncWaiters` — резолвился `.cancelled`
+    /// напрямую, минуя `cancelSyncWaiter`. Если он был ЕДИНСТВЕННЫМ ожидающим источника,
+    /// общая задача никогда не узнавала, что ушёл её последний (и единственный) заказчик, и
+    /// доживала до конца сама по себе, включая задержку повтора §5.2 — впустую, работать
+    /// было уже не для кого. Регистрация теперь БЕЗУСЛОВНАЯ (до проверки отмены), а отмена —
+    /// через ТОТ ЖЕ `cancelSyncWaiter`, что и обычный путь: он идемпотентен (see: guard на
+    /// `removeValue`), так что двойной вызов (отсюда и из `onCancel` ниже, если гонка) ничего
+    /// не портит — второй просто находит запись уже снятой и не делает ничего.
     private func awaitSharedSync(source: CalendarSourceId, trigger: CalendarSyncTrigger) async -> CalendarSyncResult {
         let key = UUID()
         return await withTaskCancellationHandler {
             await withCheckedContinuation { (continuation: CheckedContinuation<CalendarSyncResult, Never>) in
-                guard !Task.isCancelled else {
-                    continuation.resume(returning: Self.cancelledResult(source: source, trigger: trigger))
-                    return
-                }
                 syncWaiters[source, default: [:]][key] = continuation
+                if Task.isCancelled {
+                    cancelSyncWaiter(source: source, key: key, trigger: trigger)
+                }
             }
         } onCancel: {
             Task { await self.cancelSyncWaiter(source: source, key: key, trigger: trigger) }
@@ -97,12 +123,19 @@ extension CalendarPortImpl {
     /// Снимает СВОЮ запись и только свою; если после этого у источника не осталось ни
     /// одного ожидающего, а настоящая задача ещё не завершилась — она больше никому не
     /// нужна, отменяем её здесь (ровно один раз, тем же вызовом, что снял последнего).
+    /// Обнуление `inFlightSync[source]` В ЭТОТ ЖЕ МОМЕНТ (не дожидаясь фактического
+    /// завершения задачи в `finishInFlightSync`) — часть фикса п. 2: следующий вызывающий,
+    /// заставший источник уже без ожидающих, обязан завести СВОЮ, новую задачу, а не
+    /// присоединиться к уже обречённой отменённой — `finishInFlightSync` эту старую задачу
+    /// потом всё равно корректно доведёт до конца по `generation`, просто никому этот
+    /// результат уже не разошлёт (см. его докстринг).
     private func cancelSyncWaiter(source: CalendarSourceId, key: UUID, trigger: CalendarSyncTrigger) {
         guard let continuation = syncWaiters[source]?.removeValue(forKey: key) else { return }
         continuation.resume(returning: Self.cancelledResult(source: source, trigger: trigger))
         if syncWaiters[source]?.isEmpty ?? true {
             syncWaiters[source] = nil
-            inFlightSync[source]?.cancel()
+            inFlightSync[source]?.task.cancel()
+            inFlightSync[source] = nil
         }
     }
 

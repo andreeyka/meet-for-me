@@ -37,7 +37,11 @@ public actor CalendarPortImpl: CalendarPort {
     var capabilities: [CalendarSourceId: ConnectorCapabilities] = [:]
     private var logEntries: [CalendarSourceId: [(level: LogLevel, message: String)]] = [:]
     private var notifyEntries: [CalendarSourceId: [(kind: HostNotificationKind, detail: String?)]] = [:]
-    var inFlightSync: [CalendarSourceId: Task<CalendarSyncResult, Never>] = [:]
+    /// `generation`: возврат РП, бэклог MEE-386 (два пограничных случая отмены из #94, п. 2)
+    /// — без него `finishInFlightSync` не смогла бы отличить «эта задача всё ещё текущая»
+    /// от «источник уже занят более новой, заведённой после того, как я обнулил запись
+    /// раньше срока» (`CalendarPortImplSync.swift`, докстринг `finishInFlightSync`).
+    var inFlightSync: [CalendarSourceId: (generation: UUID, task: Task<CalendarSyncResult, Never>)] = [:]
     /// Возврат РП, приёмка #94: отмена ОДНОГО вызывающего `syncOne` не вправе отменять
     /// общую задачу за остальных — свой предохранитель на вызывающего, не на саму задачу
     /// (`CalendarPortImplSync.swift`, `syncOne`/`awaitSharedSync`).

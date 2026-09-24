@@ -199,4 +199,83 @@ final class ControlSurfaceEntryPointsTests: XCTestCase {
         // зависанием (тот же довод, что у resolveTimeoutAfterHang).
         await pollUntil { harness.connectorRepository.storedRecords.first?.lastError != nil }
     }
+
+    // MARK: - Два пограничных случая отмены из #94 (бэклог MEE-386, возврат РП 19:25 UTC)
+    //
+    // Оба теста подвешивают `performSync` на `InMemoryMeetingRepository.gate(on: .save)`,
+    // не на `connector.hang(.fetchEvents)/hangOrGate` — та ворота ОТВЕЧАЮТ на кооперативную
+    // отмену (`withTaskCancellationHandler`), а `waitIfGated` НЕТ (простой
+    // `withCheckedContinuation`, без обработчика отмены) — задача остаётся застрявшей на
+    // `save` СКОЛЬКО УГОДНО, пока тест сам не позовёт `release(on: .save)`. Это и даёт полный
+    // контроль над «окном», которое иначе пришлось бы гонять по времени.
+
+    /// Пограничный случай 1: единственный вызывающий, отменённый ДО регистрации
+    /// (`Task.isCancelled` уже true на первом синхронном чтении в `awaitSharedSync`) — раньше
+    /// такой вызывающий вообще не регистрировался в `syncWaiters` (резолвился `.cancelled`
+    /// напрямую) и общая задача никогда не узнавала об уходе своего единственного заказчика.
+    /// `task.cancel()` СРАЗУ после создания `Task` — задача ещё не начала выполняться, и
+    /// когда она дойдёт до первой проверки `Task.isCancelled`, флаг уже будет взведён (метка
+    /// отмены атомарна и не зависит от того, стартовало ли тело задачи).
+    func test_defect_soleCallerCancelledBeforeRegistrationStillCancelsSharedTask() async throws {
+        let harness = Harness(sourceIds: ["src-1"])
+        harness.connectorRepository.seed([Harness.record(id: "src-1")])
+        let connector = harness.connector("src-1")
+        connector.setInitializeResult(capabilities: ConnectorCapabilities(
+            deltaSync: false, push: false, attendees: true, conference: true, auth: .none
+        ))
+        connector.setFetchEvents([
+            try mergeTestPayload(connectorId: "src-1", externalId: "evt-1", lastModified: Date())
+        ])
+        harness.meetingRepository.gate(on: .save)
+
+        let task = Task { await harness.hub.sync(trigger: .manual) }
+        task.cancel()
+
+        let results = await task.value
+        XCTAssertEqual(results.first?.failure, .cancelled)
+
+        // Без фикса inFlightSync[source] не очистился бы никогда — задача застряла на
+        // save-воротах, которые кооперативную отмену не слушают, и pollUntil упал бы явным
+        // таймаутом (не тихим зависанием), доказывая именно этот дефект.
+        await pollUntil(timeout: .seconds(2)) { await harness.hub.inFlightSync[source] == nil }
+    }
+
+    /// Пограничный случай 2: после отмены ПОСЛЕДНЕГО ожидающего `inFlightSync[source]`
+    /// раньше оставался непустым до фактического завершения задачи — новый вызывающий,
+    /// пришедший в это окно, подключился бы к уже обречённой (отменённой) задаче вместо
+    /// того, чтобы завести свою.
+    func test_defect_newCallerAfterLastWaiterCancelsStartsFreshTaskNotTheCancelledOne() async throws {
+        let harness = Harness(sourceIds: ["src-1"])
+        harness.connectorRepository.seed([Harness.record(id: "src-1")])
+        let connector = harness.connector("src-1")
+        connector.setInitializeResult(capabilities: ConnectorCapabilities(
+            deltaSync: false, push: false, attendees: true, conference: true, auth: .none
+        ))
+        connector.setFetchEvents([
+            try mergeTestPayload(connectorId: "src-1", externalId: "evt-1", lastModified: Date())
+        ])
+        harness.meetingRepository.gate(on: .save)
+
+        let firstTask = Task { await harness.hub.sync(trigger: .manual) }
+        await pollUntil { meetingRepositorySaveCallCount(harness.meetingRepository) >= 1 }
+        firstTask.cancel()
+        let firstResults = await firstTask.value
+        XCTAssertEqual(firstResults.first?.failure, .cancelled)
+
+        // Первая (отменённая) задача ВСЁ ЕЩЁ висит на save-воротах — мы её не отпускали.
+        // Без фикса inFlightSync[source] остался бы указывать на неё до сих пор.
+        await pollUntil(timeout: .seconds(2)) { await harness.hub.inFlightSync[source] == nil }
+
+        let secondTask = Task { await harness.hub.sync(trigger: .manual) }
+        await pollUntil(timeout: .seconds(2)) { meetingRepositorySaveCallCount(harness.meetingRepository) >= 2 }
+        harness.meetingRepository.stopGating(on: .save)
+        harness.meetingRepository.release(on: .save)
+
+        let secondResults = await secondTask.value
+        XCTAssertNil(secondResults.first?.failure, "второй вызывающий обязан получить результат СВОЕЙ синхронизации")
+        XCTAssertEqual(
+            meetingRepositorySaveCallCount(harness.meetingRepository), 2,
+            "второй вызывающий завёл СВОЮ задачу (свой save), не подключился к первой, уже отменённой"
+        )
+    }
 }
