@@ -21,5 +21,5 @@ public enum AttributionSource: String, Codable, Sendable, CaseIterable {
     case oneOnOne         // встреча один на один: единственный системный кластер = второй участник
     case textualHint      // самопредставление или обращение по имени (вне Среза 1)
     case nameDictionary   // текст сегмента правился по словарю имён участников
-    case user             // человек назвал кластер вручную
+    case user             // решение человека по кластеру: confirm называет, reject снимает
 }
