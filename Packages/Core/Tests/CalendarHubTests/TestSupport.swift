@@ -152,3 +152,11 @@ struct Harness {
         )
     }
 }
+
+/// Флаг завершения задачи, читаемый из другого Task без гонки данных (К66/К75) — актор
+/// проще замка для одного булева поля, разделяемого несколькими файлами теста.
+actor DoneFlag {
+    private var done = false
+    func markDone() { done = true }
+    func isDone() -> Bool { done }
+}

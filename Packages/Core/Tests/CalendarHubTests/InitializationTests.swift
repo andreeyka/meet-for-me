@@ -5,14 +5,13 @@
 //  * К1 — только вектор порядка («ничего не вызывается раньше initialize»). Вектор с
 //    MAJOR-версией `protocolVersion` нужен `ScriptedRPCTransport` (stdio, группа Ж, ещё не
 //    написана) — `FakeCalendarConnector` не проходит через кадры протокола вовсе.
-//  * К3, К8 — целиком: MEE-355 слилась в main уже в ходе этой правки, и оба метода
-//    (`beginAuth`/`completeAuth` для К3, `configure`/`stop` для К8) в `CalendarPortImpl`
-//    теперь реализованы (см. `CalendarPortImpl.swift`, раздел «Управляющая поверхность
-//    источника») — но без собственных тестов здесь. Покрытие К3, К8 и всей группы Л
-//    (К66-К69, К71-К75) — следующая часть той же задачи, не этот файл (файл этой группы по
-//    плану MEE-361 — не `InitializationTests.swift`).
 //  * К9 — только вход А (таймаут через зависший вызов). Вход Б (кадр `shutdown` на
 //    stdio-пути) — группа Ж.
+//
+//  MEE-362, часть 2 (эта правка): добавлены К3, К8 — оба метода (`beginAuth`/`completeAuth`
+//  для К3, порядок вызовов для К8) в `CalendarPortImpl` реализованы MEE-355/частью 1, тесты
+//  на них не были написаны. Группа Л (К66-К69, К71-К75) — отдельные файлы
+//  `ControlSurfaceEntryPointsTests.swift`/`SourceRoutingTests.swift`, эта же правка.
 
 import Foundation
 import XCTest
@@ -232,6 +231,91 @@ final class InitializationTests: XCTestCase {
         XCTAssertNotNil(lastFetch)
         if let lastInit, let lastFetch {
             XCTAssertLessThan(lastInit, lastFetch)
+        }
+    }
+
+    // MARK: - К3 (вход А/Б)
+
+    func test_k03_authNoneSkipsBeginAuth_oauthProxies1to1() async throws {
+        let noAuthSource = CalendarSourceId(rawValue: "src-none")
+        let oauthSource = CalendarSourceId(rawValue: "src-oauth")
+        let harness = Harness(sourceIds: ["src-none", "src-oauth"])
+        harness.connectorRepository.seed([Harness.record(id: "src-none"), Harness.record(id: "src-oauth")])
+        let noAuthConnector = harness.connector("src-none")
+        noAuthConnector.setInitializeResult(capabilities: ConnectorCapabilities(
+            deltaSync: false, push: false, attendees: true, conference: true, auth: .none
+        ))
+        let oauthConnector = harness.connector("src-oauth")
+        oauthConnector.setInitializeResult(capabilities: ConnectorCapabilities(
+            deltaSync: false, push: false, attendees: true, conference: true, auth: .oauth
+        ))
+
+        // Вход А: auth == .none — connector.beginAuth/completeAuth не вызываются вовсе,
+        // CalendarPort.beginAuth(source:) даёт notConfigured до коннектора (тот же кейс, К74).
+        do {
+            _ = try await harness.hub.beginAuth(source: noAuthSource)
+            XCTFail("ожидался CalendarError.notConfigured")
+        } catch let error as CalendarError {
+            XCTAssertEqual(error, .notConfigured(sourceId: noAuthSource))
+        }
+        do {
+            _ = try await harness.hub.completeAuth(source: noAuthSource, callbackUrl: URL(string: "app://cb")!)
+            XCTFail("ожидался CalendarError.notConfigured")
+        } catch let error as CalendarError {
+            XCTAssertEqual(error, .notConfigured(sourceId: noAuthSource))
+        }
+        XCTAssertEqual(noAuthConnector.callCount(.beginAuth), 0)
+        XCTAssertEqual(noAuthConnector.callCount(.completeAuth), 0)
+
+        // Вход Б: auth == .oauth — 1:1 проброс, результат как есть, без интерпретации.
+        let challenge = try await harness.hub.beginAuth(source: oauthSource)
+        XCTAssertEqual(oauthConnector.callCount(.beginAuth), 1)
+        XCTAssertEqual(challenge, AuthChallenge(authUrl: URL(string: "https://example.com")!, redirectScheme: "app"))
+
+        let label = try await harness.hub.completeAuth(source: oauthSource, callbackUrl: URL(string: "app://cb")!)
+        XCTAssertEqual(oauthConnector.callCount(.completeAuth), 1)
+        XCTAssertNil(label)
+    }
+
+    // MARK: - К8 (порядок вызовов целиком)
+
+    /// «До initialize» — тот же вектор, что К1 (`test_k01_...`), не повторяется здесь
+    /// отдельным прогоном. Этот тест — два новых угла: чередование ВНУТРИ второй фазы
+    /// (`configure` после `fetchEvents`, затем снова `fetchEvents` — не нарушение) и «после
+    /// shutdown» — тот же наблюдаемый факт, что К75 (`stop()` лениво переподключает, не
+    /// продолжает старую сессию без нового `initialize`): здесь проверяется порядком вызовов
+    /// (`initialize` СНОВА, ДО следующего метода), не отдельным «запретом», которого у
+    /// in-process коннектора и нечем было бы наблюдать (кадры протокола — только у stdio).
+    func test_k08_orderAllowsInterleavingButNotBeforeInitOrAfterShutdown() async throws {
+        let harness = Harness(sourceIds: ["src-1"])
+        harness.connectorRepository.seed([Harness.record(id: "src-1")])
+        let connector = harness.connector("src-1")
+        connector.setInitializeResult(capabilities: ConnectorCapabilities(
+            deltaSync: false, push: false, attendees: true, conference: true, auth: .none
+        ))
+        connector.setFetchEvents([])
+
+        // fetchEvents → configure → fetchEvents: чередование внутри второй фазы — не нарушение.
+        _ = await harness.hub.sync(trigger: .manual)
+        try await harness.hub.configure(source: source, settings: Data("{}".utf8))
+        _ = await harness.hub.sync(trigger: .manual)
+
+        XCTAssertEqual(connector.callCount(.fetchEvents), 2)
+        XCTAssertEqual(connector.callCount(.configure), 1)
+        XCTAssertEqual(connector.callCount(.initialize), 1, "initialize — один раз на источник, не на цикл")
+
+        // После stop(): следующий вызов не продолжает старую сессию — снова initialize,
+        // ПРЕЖДЕ следующего метода (тот же факт, что К75).
+        await harness.hub.stop()
+        _ = try await harness.hub.healthCheck(source: source)
+
+        XCTAssertEqual(connector.callCount(.initialize), 2)
+        let lastInit = connector.callLog.lastIndex(of: "CalendarConnector.initialize")
+        let healthCheckIndex = connector.callLog.lastIndex(of: "CalendarConnector.healthCheck")
+        XCTAssertNotNil(lastInit)
+        XCTAssertNotNil(healthCheckIndex)
+        if let lastInit, let healthCheckIndex {
+            XCTAssertLessThan(lastInit, healthCheckIndex)
         }
     }
 }
