@@ -5,7 +5,12 @@
 //  Разнесено на отдельный файл от `MergeTests.swift` — SwiftLint `file_length` считает
 //  каждый файл отдельно (тот же приём, что развёл `CalendarPortImplSync.swift`/
 //  `CalendarPortImplMerge.swift`): семь тестов возврата в одном файле вышли бы за лимит.
-//  Оснастка (`mergeTestPayload`, `mergeTestAttendee`) — общая, `TestSupport.swift`.
+//  Оснастка (`mergeTestPayload`, `mergeTestAttendee`, `seedTwoSourceMeetingIdentityB`) —
+//  общая, `TestSupport.swift`.
+//
+//  Возврат РП (18:55 UTC, MEE-386) усилил два теста этого файла (доводы — в их докстрингах):
+//  IR-126 проверяет снимки C/A НАПРЯМУЮ, не только производное поле `location`; отказ
+//  источника проверяется НЕ тривиально — сосед действительно обновляется в том же цикле.
 
 import Foundation
 import XCTest
@@ -68,6 +73,14 @@ final class MergeCrossCycleTests: XCTestCase {
             stored.first?.event.location, "X",
             "хост, теряющий снимки между циклами, дал бы nil (A.location == nil сам по себе) — верный ответ X"
         )
+        // Возврат РП (приёмка #105, 18:55 UTC): итоговое поле `location` само по себе не
+        // различает «снимок C цел» от «снимок C потерян, но B случайно даёт тот же ответ» —
+        // C здесь ни на что не влияет (B побеждает шагом 2 и без него). Проверяем снимки
+        // C и A НАПРЯМУЮ — каждый обязан пережить циклы, где сообщает не его источник.
+        let snapshotC = stored.first?.sources.first { $0.sourceConnectorId == "C" }?.payload
+        XCTAssertEqual(snapshotC?.location, "Y", "снимок C (цикл 1) обязан пережить циклы 2 и 3, где C молчит")
+        let snapshotA = stored.first?.sources.first { $0.sourceConnectorId == "A" }?.payload
+        XCTAssertNil(snapshotA?.location, "снимок A (цикл 2, location == nil) обязан пережить цикл 3, где A молчит")
     }
 
     /// Перенос снимков между циклами (инв. 10): цикл, в котором сообщил только B, не трогает
@@ -170,37 +183,25 @@ final class MergeCrossCycleTests: XCTestCase {
     /// снимок (ни его собственный, ни снимок B) не вправе быть тронут — `applyIncoming`
     /// вообще не вызывается для отказавшего источника этим циклом (отказ происходит ДО
     /// первого обращения к `meetingRepository`).
+    ///
+    /// Возврат РП (приёмка #105, 18:55 UTC): «отказ не должен проходить тривиально» — раньше
+    /// B в этом же цикле ничего НЕ сообщал (`setFetchEvents([])`), а проверка «снимок A цел»
+    /// прошла бы даже нулевой реализацией (нечему было бы его тронуть, слияние в этом цикле
+    /// вообще не запускалось бы). Теперь B ДЕЙСТВИТЕЛЬНО обновляется в ТОМ ЖЕ цикле — с
+    /// бо́льшим `lastModified`, но БЕЗ `location` — так что итоговый `location` обязан прийти
+    /// именно из перенесённого снимка A (шаг 2), доказывая, что слияние этого цикла реально
+    /// ПРОЧИТАЛО снимок A, а не просто не успело его коснуться.
     func test_inv10_sourceFailureInCycleKeepsOtherSourcesSnapshotsIntact() async throws {
         let harness = Harness.mergeReady(sourceIds: ["A", "B"])
         let base = Date(timeIntervalSince1970: 1_700_000_000)
-        let payloadA = try mergeTestPayload(
-            connectorId: "A", externalId: "evt-a", lastModified: base, location: "A1"
-        )
-        let payloadB = try mergeTestPayload(
-            connectorId: "B", externalId: "evt-b", lastModified: base.addingTimeInterval(1), location: "B1"
-        )
-        let event = try MeetingEvent(
-            id: UUID(), sourceConnectorId: "B", externalId: "evt-b", icalUid: "shared-uid", title: "T",
-            start: base, end: base.addingTimeInterval(1_800), timeZone: "UTC", isAllDay: false, isCancelled: false,
-            organizer: nil, attendees: [], location: "B1", bodyText: nil, conference: nil,
-            lastModified: base.addingTimeInterval(1)
-        )
-        let sources = [
-            MeetingSource(
-                sourceConnectorId: "A", externalId: "evt-a", icalUid: "shared-uid", lastModified: base,
-                payload: payloadA
-            ),
-            MeetingSource(
-                sourceConnectorId: "B", externalId: "evt-b", icalUid: "shared-uid",
-                lastModified: base.addingTimeInterval(1), payload: payloadB
-            )
-        ]
-        harness.meetingRepository.seed([
-            MeetingRecord(event: event, dedupKey: DedupKey.make(from: event), status: .ready, sources: sources)
-        ])
+        try seedTwoSourceMeetingIdentityB(harness, base: base, locationA: "A1", locationB: "B1")
 
         harness.connector("A").fail(.fetchEvents, with: .upstreamUnavailable(message: "boom"))
-        harness.connector("B").setFetchEvents([])
+        harness.connector("B").setFetchEvents([
+            try mergeTestPayload(
+                connectorId: "B", externalId: "evt-b", lastModified: base.addingTimeInterval(2), location: nil
+            )
+        ])
 
         let results = await harness.hub.sync(trigger: .manual)
 
@@ -215,6 +216,11 @@ final class MergeCrossCycleTests: XCTestCase {
         let snapshotA = stored.first?.sources.first { $0.sourceConnectorId == "A" }?.payload
         XCTAssertEqual(snapshotA?.location, "A1", "снимок A цел — его цикл не дошёл до meetingRepository вовсе")
         let snapshotB = stored.first?.sources.first { $0.sourceConnectorId == "B" }?.payload
-        XCTAssertEqual(snapshotB?.location, "B1", "B ничего нового не сообщил (пустой пакет) — снимок тоже цел")
+        XCTAssertNil(snapshotB?.location, "снимок B обновлён свежим payload этого цикла (тоже дословно, включая nil)")
+        XCTAssertEqual(stored.first?.event.sourceConnectorId, "B", "identity — теперь B, его lastModified больше")
+        XCTAssertEqual(
+            stored.first?.event.location, "A1",
+            "B — содержательный победитель, но его снимок location == nil — слияние реально читает снимок A"
+        )
     }
 }

@@ -54,6 +54,13 @@ public actor CalendarPortImpl: CalendarPort {
     /// `serialized(_:)`). Не `private` — та же причина, что у `inFlightSync`/`syncWaiters`
     /// (см. комментарий над ними).
     var mergeTail: Task<Void, Never>?
+    /// К1/К7 (дефект 2, MEE-386): второй одновременный вызов `ensureInitialized` того же
+    /// источника не зовёт `connector.initialize()` заново — подвешивается здесь и получает
+    /// тот же исход, что первый (см. `ensureInitialized` ниже). Не `private` — та же причина,
+    /// что у `inFlightSync`/`syncWaiters`/`mergeTail`: тест опрашивает счётчик ожидающих
+    /// напрямую (`@testable import`), чтобы дождаться РЕАЛЬНОЙ гонки (оба вызывающих внутри
+    /// `ensureInitialized`), а не только то, что первый уже позвал `connector.initialize()`.
+    var initializingSources: [CalendarSourceId: [CheckedContinuation<Void, Error>]] = [:]
     private let changeHub = CalendarChangeHub()
     private var scheduleTask: Task<Void, Never>?
 
@@ -232,25 +239,44 @@ public actor CalendarPortImpl: CalendarPort {
     /// и сам поднимает `initialize` заново — тот же путь лёгкого переподключения, что и К10/Р10,
     /// `stop()` контрактом не отличается от падения плагина).
     public func stop() async {
-        // СТРОКА (возврат РП, приёмка #85, дефект 3 — временно откачено): shutdown() без
-        // таймаута может повесить stop() навсегда на зависшем коннекторе — намеченный фикс
-        // (callConnector(..., retryable: false) { await connector.shutdown() }) скомпилировался,
-        // но прогон CI после него завис на ОБЕИХ платформах (Linux и macOS, 300с/360с) без
-        // единой строки диагностики — обёртчик CI пишет вывод swift test в файл и печатает
-        // его только при обычном завершении, не при принудительном убийстве по таймауту,
-        // так что причина зависания не видна ни через один доступный мне канал лога.
-        // Отката к простому вызову достаточно, чтобы ЭТУ правку (тесты MEE-362 ч.2) сдать
-        // зелёной; сам дефект 3 остаётся открытым — беру его отдельным заходом, с локальной
-        // гонкой таймаута вместо `callConnector` целиком (тот тянет ещё и повтор §5.2, шутдауну
-        // ненужный), проверенным малым прогоном ДО того, как он попадёт в этот PR снова.
+        // Возврат РП, приёмка #85, дефект 3 (закрыт, MEE-386): `shutdown()` без таймаута
+        // мог повесить `stop()` навсегда на зависшем коннекторе. Первый заход
+        // (`callConnector(..., retryable: false) { await connector.shutdown() }`) вешал CI
+        // на обеих платформах без единой строки диагностики — `callConnector` тянет ещё и
+        // повтор §5.2 (К56/К67, `waitSeam.sleep` внутри `raceTimeout`), инв. 20 («shutdown
+        // никогда не повторяется») делает его лишним здесь. `shutdownWithTimeout` ниже —
+        // локальная гонка `waitSeam`, не полная обёртка: то же малое устройство, что уже
+        // держит `raceTimeout` (`withTaskGroup`, первый финишировавший выигрывает,
+        // `cancelAll()` снимает второго), без повтора и без `CalendarError` наружу — `stop()`
+        // ничего не бросает по контракту (C-005 v6/v7, IR-120 п.4).
         let initializedSources = Array(capabilities.keys)
         capabilities.removeAll()
+        let seam = waitSeam
         await withTaskGroup(of: Void.self) { group in
             for source in initializedSources {
                 guard let connector = connectors[source] else { continue }
-                group.addTask { await connector.shutdown() }
+                group.addTask { await Self.shutdownWithTimeout(connector: connector, waitSeam: seam) }
             }
             for await _ in group {}
+        }
+    }
+
+    /// К9 (таймауты, тот же класс «30с» — `.other` — что у остальной управляющей
+    /// поверхности К68/К73: `beginAuth`/`settingsSchema`/`configure`/`healthCheck` уже гонят
+    /// свой вызов с этим же пределом через `callConnector`). Ни повтора, ни отображения
+    /// ошибки здесь нет — `shutdown()` не throws, а зависший коннектор на останове хоста
+    /// интересен только тем, что `stop()` обязан вернуться, не тем, что сказать вызывающему.
+    /// `static`, не метод актора: берёт `connector`/`waitSeam` параметрами (сняты с актора
+    /// ДО `group.addTask`, в `stop()`), не трогает `self` вовсе — фанующиеся из `stop()`
+    /// задачи не хопают на изоляцию актора ради этой гонки, только ради самого `connector`/
+    /// `waitSeam` вызовов, которым изоляция CalendarPortImpl и не нужна (`WaitSeam`/
+    /// `CalendarConnector` — оба `Sendable`, не актор-изолированные сами по себе).
+    private static func shutdownWithTimeout(connector: CalendarConnector, waitSeam: WaitSeam) async {
+        await withTaskGroup(of: Void.self) { group in
+            group.addTask { await connector.shutdown() }
+            group.addTask { try? await waitSeam.sleep(for: MethodTimeout.other.duration) }
+            _ = await group.next()
+            group.cancelAll()
         }
     }
 
@@ -282,25 +308,44 @@ public actor CalendarPortImpl: CalendarPort {
     /// `upstreamUnavailable` сбрасывает кэш `capabilities` — следующий вызов инициализирует
     /// заново.
     ///
-    /// СТРОКА (возврат РП, приёмка #85, дефект 2 — временно откачено): актор реентерабелен
-    /// через `await` внутри — два одновременных вызова, заставших `capabilities[source] ==
-    /// nil` до первого `await`, оба звали бы `connector.initialize()`, нарушая К1/К7.
-    /// Намеченный фикс (`inFlightInitialize`, отдельный `Task` на источник, тот же приём, что
-    /// `inFlightSync` у `syncOne`) скомпилировался, но прогон CI после него завис на ОБЕИХ
-    /// платформах без единой строки диагностики дальше «Build complete!» — тот же симптом,
-    /// что и у отката дефекта 3 рядом, и revert одного дефекта 3 его не снял (бисекция,
-    /// комментарий MEE-362). Проверяю здесь: может статься, лишний `Task` на КАЖДЫЙ вызов
-    /// `ensureInitialized` (а он один на почти каждый тест) исчерпывает кооперативный пул
-    /// потоков раннера CI, а не гонка сама по себе. Дефект 2 остаётся открытым; следующий
-    /// заход — без отдельного `Task`, тем же приёмом continuation-очереди, что уже стоит у
-    /// `hangOrGate`/`FakeWaitSeam.sleep`, без нового потока пула на каждый вызов.
+    /// Возврат РП, приёмка #85, дефект 2 (закрыт, MEE-386): актор реентерабелен через
+    /// `await` внутри — без защиты два одновременных вызова, заставших `capabilities[source]
+    /// == nil` до первого `await`, оба позвали бы `connector.initialize()`, нарушая К1/К7.
+    /// Первый заход (отдельный `Task` на источник, тот же приём, что `inFlightSync` у
+    /// `syncOne`) вешал CI на обеих платформах без единой строки диагностики — здесь другой
+    /// приём: работу делает НА СВОЕЙ ЖЕ задаче первый вызывающий, без единого лишнего `Task`;
+    /// остальные, заставшие источник уже в процессе, подвешиваются через `CheckedContinuation`
+    /// в `initializingSources` (тот же класс приёма, что `hangOrGate`/`FakeWaitSeam.sleep`) и
+    /// получают ТОТ ЖЕ исход — успех либо тот же брошенный `CalendarError` — без второго
+    /// вызова `initialize`. `defer` гарантирует, что ожидающие разбужены при ЛЮБОМ выходе из
+    /// функции первого вызывающего, включая отмену его собственной задачи (`try await` внутри
+    /// `callConnector` тогда бросает `CancellationError`/`CalendarError.cancelled` и до
+    /// `defer` доходит как обычно — Swift гарантирует выполнение `defer` при выходе через
+    /// `throw`, cooperative-отмена не пропускает его).
     func ensureInitialized(_ source: CalendarSourceId, connector: CalendarConnector) async throws {
         guard capabilities[source] == nil else { return }
-        let host = HostServicesImpl(secretStore: secretStore, namespace: source.rawValue, hub: self, source: source)
-        let (_, caps) = try await callConnector(source: source, connector: connector, timeout: .initialize) {
-            try await connector.initialize(host: host, connectorInstanceId: source.rawValue)
+        guard initializingSources[source] == nil else {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                initializingSources[source, default: []].append(continuation)
+            }
+            return
         }
-        capabilities[source] = caps
+        initializingSources[source] = []
+        var outcome: Result<Void, Error> = .success(())
+        defer {
+            let waiters = initializingSources.removeValue(forKey: source) ?? []
+            for waiter in waiters { waiter.resume(with: outcome) }
+        }
+        do {
+            let host = HostServicesImpl(secretStore: secretStore, namespace: source.rawValue, hub: self, source: source)
+            let (_, caps) = try await callConnector(source: source, connector: connector, timeout: .initialize) {
+                try await connector.initialize(host: host, connectorInstanceId: source.rawValue)
+            }
+            capabilities[source] = caps
+        } catch {
+            outcome = .failure(error)
+            throw error
+        }
     }
 
     private func requireConnector(_ source: CalendarSourceId) throws -> CalendarConnector {
