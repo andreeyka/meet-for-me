@@ -27,7 +27,7 @@ final class ChangesStreamTests: XCTestCase {
         harness.meetingRepository.seed(priorRecords)
 
         let stream = harness.hub.changes()
-        var iterator = stream.makeAsyncIterator()
+        let iterator = StreamIteratorBox(stream)
 
         // Четвёртое событие сохраняется через обычный sync ПОСЛЕ подписки.
         let newPayload = try MeetingEventPayload(
@@ -39,7 +39,7 @@ final class ChangesStreamTests: XCTestCase {
         connector.setFetchEvents([newPayload])
         _ = await harness.hub.sync(trigger: .manual)
 
-        let change = await iterator.next()
+        let change = await nextOrTimeout(iterator)
         guard case .upserted(let events) = change else {
             XCTFail("ожидался .upserted, получено \(String(describing: change))")
             return
@@ -57,8 +57,8 @@ final class ChangesStreamTests: XCTestCase {
         let harness = Harness(sourceIds: [])
         let stream1 = harness.hub.changes()
         let stream2 = harness.hub.changes()
-        var iterator1 = stream1.makeAsyncIterator()
-        var iterator2 = stream2.makeAsyncIterator()
+        let iterator1 = StreamIteratorBox(stream1)
+        let iterator2 = StreamIteratorBox(stream2)
 
         let base = Date(timeIntervalSince1970: 1_700_000_000)
         let event1 = try Self.makeEvent(id: UUID(), start: base, externalId: "evt-1")
@@ -70,8 +70,8 @@ final class ChangesStreamTests: XCTestCase {
         await harness.hub.emit(.deleted([deletedId]))
 
         let expected: [CalendarChange] = [.upserted([event1]), .upserted([event2]), .deleted([deletedId])]
-        let seq1 = [await iterator1.next(), await iterator1.next(), await iterator1.next()]
-        let seq2 = [await iterator2.next(), await iterator2.next(), await iterator2.next()]
+        let seq1 = [await nextOrTimeout(iterator1), await nextOrTimeout(iterator1), await nextOrTimeout(iterator1)]
+        let seq2 = [await nextOrTimeout(iterator2), await nextOrTimeout(iterator2), await nextOrTimeout(iterator2)]
 
         XCTAssertEqual(seq1.count, seq1.compactMap { $0 }.count, "ни одно из трёх не nil")
         XCTAssertEqual(seq2.count, seq2.compactMap { $0 }.count, "ни одно из трёх не nil")

@@ -142,9 +142,16 @@ final class InitializationTests: XCTestCase {
     /// встал в `hangOrGate` (`callCount(method) > 0`, пишется ДО входа туда), иначе можно было
     /// бы по ошибке отпустить ворота более ранней, ещё не зависшей гонки того же шва
     /// (например, `initialize` — раньше проверяемого «остального» метода).
+    /// Возвращает саму задачу (возврат РП, приёмка #94, п. 5): раньше была fire-and-forget —
+    /// `XCTFail` внутри `pollUntil` (дефект 7, приёмка #85), случись он, мог не попасть в отчёт
+    /// теста, если тестовый метод завершался раньше, чем отработает этот `Task`. Задача
+    /// по-прежнему стартует и бежит конкурентно с проверяемым вызовом (дожидаться её тут же —
+    /// взаимная блокировка: `callCount(method) > 0` станет истиной только когда проверяемый
+    /// вызов реально дойдёт до зависания) — вызывающая сторона ждёт `.value` уже ПОСЛЕ
+    /// проверяемого вызова, чтобы гарантировать наблюдаемость возможного `XCTFail`.
     private func resolveTimeoutAfterHang(
         _ waitSeam: FakeWaitSeam, connector: FakeCalendarConnector, method: CalendarConnectorMethod
-    ) {
+    ) -> Task<Void, Never> {
         Task {
             // Возврат РП (приёмка #85, дефект 7): `pollUntil` ограничен по времени — раньше
             // эти два цикла висели без предела, если условие никогда не становилось истинным.
@@ -158,7 +165,7 @@ final class InitializationTests: XCTestCase {
         harness.connectorRepository.seed([Harness.record(id: "src-1")])
         let connector = harness.connector("src-1")
         connector.hang(.initialize)
-        resolveTimeoutAfterHang(harness.waitSeam, connector: connector, method: .initialize)
+        let watchdog = resolveTimeoutAfterHang(harness.waitSeam, connector: connector, method: .initialize)
 
         do {
             _ = try await harness.hub.listCalendars(source: source)
@@ -167,6 +174,7 @@ final class InitializationTests: XCTestCase {
             XCTAssertEqual(error, .timeout(sourceId: source, seconds: 10))
         }
         XCTAssertTrue(harness.waitSeam.durations.contains(.seconds(10)))
+        await watchdog.value
     }
 
     func test_k09_timeoutAtFetchWindowHundredTwentySecondBoundary() async throws {
@@ -177,12 +185,13 @@ final class InitializationTests: XCTestCase {
             deltaSync: false, push: false, attendees: true, conference: true, auth: .none
         ))
         connector.hang(.fetchEvents)
-        resolveTimeoutAfterHang(harness.waitSeam, connector: connector, method: .fetchEvents)
+        let watchdog = resolveTimeoutAfterHang(harness.waitSeam, connector: connector, method: .fetchEvents)
 
         let results = await harness.hub.sync(trigger: .manual)
 
         XCTAssertEqual(results.first?.failure, .timeout(sourceId: source, seconds: 120))
         XCTAssertTrue(harness.waitSeam.durations.contains(.seconds(120)))
+        await watchdog.value
     }
 
     func test_k09_timeoutAtOtherMethodThirtySecondBoundary() async throws {
@@ -193,7 +202,7 @@ final class InitializationTests: XCTestCase {
             deltaSync: false, push: false, attendees: true, conference: true, auth: .none
         ))
         connector.hang(.listCalendars)
-        resolveTimeoutAfterHang(harness.waitSeam, connector: connector, method: .listCalendars)
+        let watchdog = resolveTimeoutAfterHang(harness.waitSeam, connector: connector, method: .listCalendars)
 
         do {
             _ = try await harness.hub.listCalendars(source: source)
@@ -202,6 +211,7 @@ final class InitializationTests: XCTestCase {
             XCTAssertEqual(error, .timeout(sourceId: source, seconds: 30))
         }
         XCTAssertTrue(harness.waitSeam.durations.contains(.seconds(30)))
+        await watchdog.value
     }
 
     // MARK: - К10 (развилка Р10)

@@ -51,6 +51,49 @@ func pollUntil(
     }
 }
 
+/// Обёртка над `AsyncStream.Iterator` для гонки с таймаутом в `nextOrTimeout` (возврат РП,
+/// приёмка #94, п. 5) — actor, не `inout`: `next()` мутирует структуру-итератор, а
+/// `TaskGroup.addTask` не умеет захватывать `inout`-параметр из внешней области.
+actor StreamIteratorBox<Element: Sendable> {
+    private var iterator: AsyncStream<Element>.Iterator
+    init(_ stream: AsyncStream<Element>) { iterator = stream.makeAsyncIterator() }
+    func next() async -> Element? { await iterator.next() }
+}
+
+private enum RaceOutcome<Element: Sendable>: Sendable {
+    case value(Element?)
+    case timedOut
+}
+
+/// Ограниченное ожидание следующего элемента потока (К62/К63, `ChangesStreamTests.swift`) —
+/// тот же довод, что у `pollUntil` (дефект 7, приёмка #85): тест обязан упасть явно, не
+/// зависнуть навечно, если поток не публикует ожидаемое. Отмена проигравшей ветки безопасна:
+/// `AsyncStream.Iterator.next()` документированно отдаёт `nil` сразу же, как только вызывающая
+/// его задача отменена, — элемент при этом не теряется, следующий вызов `box.next()` увидит
+/// его как обычно.
+func nextOrTimeout<Element: Sendable>(
+    _ box: StreamIteratorBox<Element>, timeout: Duration = .seconds(10),
+    file: StaticString = #filePath, line: UInt = #line
+) async -> Element? {
+    let outcome = await withTaskGroup(of: RaceOutcome<Element>.self) { group -> RaceOutcome<Element> in
+        group.addTask { .value(await box.next()) }
+        group.addTask {
+            try? await Task.sleep(for: timeout)
+            return .timedOut
+        }
+        let first = await group.next() ?? .timedOut
+        group.cancelAll()
+        return first
+    }
+    switch outcome {
+    case .value(let element):
+        return element
+    case .timedOut:
+        XCTFail("следующий элемент потока не пришёл за \(timeout)", file: file, line: line)
+        return nil
+    }
+}
+
 final class FakeWaitSeam: WaitSeam, @unchecked Sendable {
     private let lock = NSLock()
     private var recordedDurations: [Duration] = []
