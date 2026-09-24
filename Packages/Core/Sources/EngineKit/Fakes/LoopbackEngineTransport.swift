@@ -90,6 +90,7 @@ public final class LoopbackEngineTransport: @unchecked Sendable {
         operation: @escaping (@Sendable @escaping (EngineProgress) -> Void) async throws -> Value,
         reply: @escaping (Value) -> EngineReply
     ) {
+        lock.lock()
         let task = Task { [weak self] in
             guard let self else { return }
             do {
@@ -105,22 +106,39 @@ public final class LoopbackEngineTransport: @unchecked Sendable {
                 self.finish(jobId, with: .failed(jobId, .runtimeFailure(message: "\(error)")))
             }
         }
-        lock.lock(); jobs[jobId] = task; lock.unlock()
-    }
-
-    private func finish(_ jobId: EngineJobId, with reply: EngineReply) {
-        lock.lock()
-        jobs[jobId] = nil
-        repliesSent.append(reply)
+        jobs[jobId] = task
         lock.unlock()
     }
 
+    /// «В той части, что проверяет провод» (шапка файла): каждый `EngineReply` уходит
+    /// наблюдателю не как значение из памяти, а после `EngineWire.normalizingDates` →
+    /// `encode` → `decode` — тем же кругом, каким он реально идёт по проводу. Круг бросает
+    /// только на значении, уже нарушающем C-011/C-012 (К42 — на валидных фикстурах не бросает
+    /// никогда), а такое значение сюда дойти не может: `operation` в `start` заворачивает
+    /// нарушение в `EngineError.invalidResult` раньше, чем строится `EngineReply`.
+    private func wired(_ reply: EngineReply) -> EngineReply {
+        // swiftlint:disable:next force_try
+        try! EngineWire.decode(EngineReply.self, from: EngineWire.encode(EngineWire.normalizingDates(reply)))
+    }
+
+    private func finish(_ jobId: EngineJobId, with reply: EngineReply) {
+        let value = wired(reply)
+        lock.lock()
+        jobs[jobId] = nil
+        repliesSent.append(value)
+        lock.unlock()
+    }
+
+    /// Тот же круг для прогресса — без `normalizingDates`, у `EngineProgress` нет `Date`.
     private func recordProgress(_ message: EngineProgressMessage) {
-        lock.lock(); progressSent.append(message); lock.unlock()
+        // swiftlint:disable:next force_try
+        let value = try! EngineWire.decode(EngineProgressMessage.self, from: EngineWire.encode(message))
+        lock.lock(); progressSent.append(value); lock.unlock()
     }
 
     private func recordReply(_ reply: EngineReply) {
-        lock.lock(); repliesSent.append(reply); lock.unlock()
+        let value = wired(reply)
+        lock.lock(); repliesSent.append(value); lock.unlock()
     }
 
     private func cancelIfLive(_ jobId: EngineJobId) {

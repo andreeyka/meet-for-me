@@ -65,7 +65,8 @@ final class EngineWireRoundTripTests: XCTestCase {
             return XCTFail("ожидался .transcript")
         }
         XCTAssertEqual(roundTripped.createdAt.timeIntervalSince1970, original.timeIntervalSince1970,
-                       accuracy: 1e-4, "доля миллисекунды сохранена без вызова normalizingDates")
+                       "доля миллисекунды сохранена без вызова normalizingDates: круг plist без "
+                       + "арифметики округления точен, допуск здесь не нужен")
     }
 
     /// Направление внутрь (`EngineRequest`) не нормализуется — правило действует только наружу.
@@ -80,7 +81,8 @@ final class EngineWireRoundTripTests: XCTestCase {
             return XCTFail("ожидался .postProcess")
         }
         XCTAssertEqual(payload.transcript.createdAt.timeIntervalSince1970, original.timeIntervalSince1970,
-                       accuracy: 1e-4, "EngineRequest не нормализуется")
+                       "EngineRequest не нормализуется: круг plist без арифметики округления точен, "
+                       + "допуск здесь не нужен")
     }
 
     // MARK: - К42 (инв. 21)
@@ -94,6 +96,10 @@ final class EngineWireRoundTripTests: XCTestCase {
                 continue
             }
             XCTAssertEqual(rounded.recordingId, fixture.recordingId)
+            XCTAssertEqual(rounded.language, fixture.language)
+            XCTAssertEqual(rounded.engine, fixture.engine)
+            XCTAssertEqual(rounded.modelVersion, fixture.modelVersion)
+            XCTAssertEqual(rounded.schemaVersion, fixture.schemaVersion)
             XCTAssertEqual(rounded.segments, fixture.segments)
             XCTAssertEqual(rounded.speakers, fixture.speakers)
             let milliseconds = rounded.createdAt.timeIntervalSince1970 * 1_000

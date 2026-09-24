@@ -121,4 +121,32 @@ final class LoopbackTransportRepliesTests: XCTestCase {
         XCTAssertEqual(transport.sentReplies.count, 1)
         XCTAssertEqual(transport.sentReplies[0], .cancelled(jobId))
     }
+
+    // MARK: - К41 через LoopbackEngineTransport целиком (не напрямую EngineWire)
+
+    /// Возврат РП по MEE-390: К41 обязан проходить через сам `LoopbackEngineTransport`
+    /// (`finish` → `normalizingDates` → `encode` → `decode`), не только через прямой вызов
+    /// `EngineWire.normalizingDates` — иначе `finish`/`recordProgress` могли бы обходить
+    /// провод незамеченно ни одним тестом. Сравнение — с явным ожидаемым значением, не только
+    /// "кратно миллисекунде": 1_000.123_456_789 округляется до 1_000.123.
+    func test_k41_loopbackTransportRoundsRepliedCreatedAtToNearestMillisecond() async throws {
+        let transcription = FakeTranscriptionEngine()
+        transcription.forcedResult = {
+            try Transcript(
+                recordingId: EngineFixtures.recordingId, language: "en", engine: "fake-asr",
+                modelVersion: "v1", createdAt: Date(timeIntervalSince1970: 1_000.123_456_789),
+                segments: [], speakers: []
+            )
+        }
+        let transport = makeTransport(transcription: transcription)
+        let jobId = EngineJobId(rawValue: UUID())
+        transport.receive(.transcribe(jobId, try EngineFixtures.transcriptionRequest()))
+        try await waitUntil { !transport.sentReplies.isEmpty }
+
+        guard case .transcript(_, let transcript) = transport.sentReplies[0] else {
+            return XCTFail("ожидался .transcript")
+        }
+        XCTAssertEqual(transcript.createdAt.timeIntervalSince1970, 1_000.123, accuracy: 1e-4,
+                       "1_000.123_456_789 обязан округлиться до 1_000.123 уже на границе транспорта")
+    }
 }
