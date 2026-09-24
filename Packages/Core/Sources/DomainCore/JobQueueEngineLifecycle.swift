@@ -97,12 +97,47 @@ extension JobQueueEngine {
     /// MEE-311: без него утверждение сразу после `start()`/`submit()` гонится с фоновой
     /// задачей, которую они запустили и не ждут. Цикл — не разовое ожидание: исполнение,
     /// закончившись, само может запустить следующее (пересмотр по завершении).
+    ///
+    /// MEE-363: `runningTasks.isEmpty` одна не гарантирует «пересмотра нет ни одного» —
+    /// `executeAndFinish` (§7) снимает завершённую задачу из `runningTasks` ДО своего же
+    /// `await runRevisitPass()`, и по этой строке `waitUntilIdle` мог вернуться, пока тот
+    /// пересмотр уже занял кандидата без обработчика (`claimNext`), но ещё не отдал его
+    /// обратно в `pending` (`noHandler`). `activeRevisitPasses` закрывает это окно.
+    ///
+    /// MEE-357: ожидание — по сигналу (`idleWaiters`), не опросом на `Task.yield()`.
+    /// `runningTasks` НЕ пуст — ждём фактические `Task`, как и раньше (их и так нужно
+    /// дождаться, чтобы дать им шанс запустить следующий пересмотр по завершении); пуст, но
+    /// пересмотр ещё идёт — регистрируемся в `idleWaiters` и ждём, пока `notifyIdleIfNeeded()`
+    /// (вызывается из `defer` `runRevisitPass()` и из `executeAndFinish`, когда пересмотр по
+    /// завершении не запускается вовсе) не разбудит нас.
     public func waitUntilIdle() async {
         while !runningTasks.isEmpty {
             let tasks = Array(runningTasks.values)
             for entry in tasks {
                 await entry.task.value
             }
+        }
+        // `runningTasks` уже пуст (цикл выше это гарантирует) — остаётся дождаться
+        // пересмотра, который не привязан ни к одной записи `runningTasks` (например,
+        // независимо запущенного `submit()`).
+        await withCheckedContinuation { continuation in
+            guard activeRevisitPasses > 0 else {
+                continuation.resume()
+                return
+            }
+            idleWaiters.append(continuation)
+        }
+    }
+
+    /// Будит всех, кто ждёт в `waitUntilIdle()`, ровно когда очередь действительно опустела:
+    /// ни одной фактически исполняемой задачи, ни одного пересмотра в процессе. Вызывается
+    /// из мест, где любое из этих двух условий могло стать истинным.
+    func notifyIdleIfNeeded() {
+        guard runningTasks.isEmpty, activeRevisitPasses == 0, !idleWaiters.isEmpty else { return }
+        let waiters = idleWaiters
+        idleWaiters = []
+        for waiter in waiters {
+            waiter.resume()
         }
     }
 

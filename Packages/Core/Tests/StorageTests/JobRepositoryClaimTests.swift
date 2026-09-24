@@ -1,4 +1,4 @@
-//  JobRepositoryClaimTests — К37, К38, К39, К40(i) перечня MEE-189, владелец: DEV-2.
+//  JobRepositoryClaimTests — К37, К38, К39, К40(i), К90 перечня MEE-189, владелец: DEV-2.
 
 import XCTest
 import GRDB
@@ -89,6 +89,13 @@ final class JobRepositoryClaimTests: StorageAsyncTestCase {
     /// пришлось бы `id` через разные базы, что всегда не совпадёт. Вместо этого
     /// сверяется структурная примета победителя (`priority == 10`, единственный
     /// такой в корпусе) и смещение лизинга от `now`, а не сырой `id`/`leaseExpiresAt`.
+    ///
+    /// Текст правлен дельтой `С` MEE-189 (C-010 v13, IR-121, MEE-356): `run_after`
+    /// больше не участвует в фильтре `claimNext`, только в порядке (К39/К90). Корпус
+    /// не варьирует его значение между двумя прогонами нарочно, чтобы не смешивать
+    /// вопрос об `excluding` (единственный предмет этого критерия) с вопросом о
+    /// порядке — `loserFuture` несёт будущий `runAfter`, но проигрывает по `priority`,
+    /// как и прочие «loser»-кандидаты, а не потому, что отфильтрован.
     func testK38_excludingWithUnrelatedIdsChangesNothing() async throws {
         let first = try await Self.claimFromFreshCorpus(excluding: [])
         let second = try await Self.claimFromFreshCorpus(excluding: [UUID(), UUID()])
@@ -108,11 +115,11 @@ final class JobRepositoryClaimTests: StorageAsyncTestCase {
         let jobs = temp.database.jobRepository()
         let winner = TestFixtures.job(type: .transcode, options: .init(priority: 10))
         let loserLowPriority = TestFixtures.job(type: .transcode, options: .init(priority: 1))
-        let loserNotDue = TestFixtures.job(
-            type: .transcode, options: .init(priority: 50, runAfter: TestFixtures.epoch.addingTimeInterval(3_600))
+        let loserFuture = TestFixtures.job(
+            type: .transcode, options: .init(priority: 2, runAfter: TestFixtures.epoch.addingTimeInterval(3_600))
         )
         let loserNotPending = TestFixtures.job(type: .transcode, status: .running, options: .init(priority: 99))
-        for job in [winner, loserLowPriority, loserNotDue, loserNotPending] {
+        for job in [winner, loserLowPriority, loserFuture, loserNotPending] {
             try await jobs.insert(job)
         }
         let picked = try await jobs.claimNext(
@@ -121,6 +128,30 @@ final class JobRepositoryClaimTests: StorageAsyncTestCase {
         guard let picked else { return nil }
         let offset = picked.leaseExpiresAt.map { $0.timeIntervalSince(TestFixtures.epoch) }
         return ClaimOutcome(priority: picked.priority, leaseOffset: offset)
+    }
+
+    // MARK: - К90 (run_after не фильтрует — кандидат из будущего остаётся полноправным)
+
+    /// C-010 v13 инв. 25, третья клауза (IR-121, MEE-356; дельта `С` MEE-189, К90):
+    /// кандидат с `run_after` в будущем — полноправный участник выбора; решает только
+    /// `priority` (инвариант 3 C-013, та же ступень, что проверяет К39). Готовность по
+    /// времени (`run_after <= now`) этот метод не проверяет вовсе — её проверяет
+    /// очередь над уже взятым кандидатом (`JobBlockReason.notYetDue`, C-013 инв. 4).
+    func testK90_futureRunAfterDoesNotExcludeHigherPriorityCandidate() async throws {
+        let temp = try StorageTestSupport.makeDatabase()
+        defer { StorageTestSupport.cleanup(temp) }
+        let jobs = temp.database.jobRepository()
+        let candidateA = TestFixtures.job(
+            type: .transcode, options: .init(priority: 10, runAfter: TestFixtures.epoch.addingTimeInterval(3_600))
+        )
+        let candidateB = TestFixtures.job(type: .transcode, options: .init(priority: 5))
+        try await jobs.insert(candidateA)
+        try await jobs.insert(candidateB)
+
+        let picked = try await jobs.claimNext(
+            types: [.transcode], excluding: [], now: TestFixtures.epoch, leaseSeconds: 60
+        )
+        XCTAssertEqual(picked?.id, candidateA.id, "run_after в будущем не отфильтровал кандидата А")
     }
 
     // MARK: - К39 (порядок выбора — четыре ключа)
@@ -160,9 +191,11 @@ final class JobRepositoryClaimTests: StorageAsyncTestCase {
         XCTAssertEqual(picked?.id, candidates[0].id)
     }
 
-    /// `now` — заведомо позже обоих `runAfter`, иначе разница в `runAfter` иногда
-    /// исключала бы кандидата из готовности вместо того, чтобы решать порядок между
-    /// двумя готовыми. Возвращает `true`, если выбран кандидат `first`.
+    /// Устаревший довод снят MEE-357 (C-010 v13, IR-121): `run_after` с v11 не фильтр
+    /// `claimNext`, а только ступень порядка (К90) — «исключить из готовности» здесь
+    /// больше не про что. Смещение `now` на +10 сохранено без функциональной нужды —
+    /// не мешает и не требует правки самого входа. Возвращает `true`, если выбран
+    /// кандидат `first`.
     private static func claimBetweenTwo(
         first: TestFixtures.JobOptions, second: TestFixtures.JobOptions
     ) async throws -> Bool {

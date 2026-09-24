@@ -55,6 +55,9 @@ extension SessionMachine {
         } catch let error as CaptureError {
             throw SessionError.capture(error)
         }
+        // MEE-357 (IR-121, C-013 v9): JobQueue узнаёт о факте идущей записи здесь —
+        // единственное место, где домен достоверно знает, что запись началась.
+        await queue.recordingDidStart()
         let token = await power.beginActivity(reason: .recording, label: recordingId.uuidString)
 
         session.recordingId = recordingId
@@ -84,6 +87,10 @@ extension SessionMachine {
     /// источника одного манифеста разошлись бы молча.
     func enterStopping(_ identifier: UUID, now: Date) async throws {
         try await transition(identifier, to: .stopping, now: now)
+        // MEE-357 (IR-121, C-013 v9): запись перестаёт идти здесь — до попытки
+        // `capture.stop()`, а не после, и вне зависимости от её исхода: тем же путём,
+        // каким `enterRecording` сообщает о начале, независимо от исхода `transition`.
+        await queue.recordingDidStop()
         do {
             _ = try await capture.stop()
         } catch {

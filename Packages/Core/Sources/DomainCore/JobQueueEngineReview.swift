@@ -12,6 +12,11 @@ extension JobQueueEngine {
     /// `skipped`, пока не вернётся `nil` либо не кончатся свободные слоты (§7, шаги 1—5).
     func runRevisitPass() async {
         guard isRunning else { return }
+        activeRevisitPasses += 1
+        defer {
+            activeRevisitPasses -= 1
+            notifyIdleIfNeeded()
+        }
         await reclaimExpiredLeases()
         guard isRunning else { return }
 
@@ -25,43 +30,56 @@ extension JobQueueEngine {
             // каждого оставшегося ради того же самого `blocked`. Предел ТИПА сюда не
             // входит — другой тип ещё может пройти, для него `hasFreeSlot` решает сама.
             guard runningTasks.count < globalConcurrencyLimit else { return }
-            let claimed: Job?
-            do {
-                claimed = try await performWithRepair {
-                    try await self.repository.claimNext(
-                        types: JobType.allCases, excluding: skipped, now: self.clock(),
-                        leaseSeconds: self.leaseSeconds
-                    )
-                }
-            } catch {
-                return   // §6, п. 4: ремонт невозможен — пересмотр прекращён, попробует снова позже
-            }
-            guard let job = claimed else { return }   // claimNext вернул nil — пересмотр окончен
-
-            guard isRunning else {
-                try? await repository.update(job.returningUnstartedCandidate(updatedAt: clock()))
+            guard await claimAndDispatchOneCandidate(skipped: &skipped, profileReadyCache: &profileReadyCache) else {
                 return
             }
-
-            if let reason = await firstBlockingReason(for: job, profileReadyCache: &profileReadyCache) {
-                try? await repository.update(job.returningUnstartedCandidate(updatedAt: clock()))
-                broadcaster.publish(.blocked(jobId: job.id, type: job.type, reason: reason))
-                skipped.insert(job.id)
-                continue
-            }
-
-            guard isRunning else {
-                try? await repository.update(job.returningUnstartedCandidate(updatedAt: clock()))
-                return
-            }
-
-            let now = clock()
-            let started = job.startingAttempt(now: now, leaseSeconds: leaseSeconds)
-            try? await repository.update(started)
-            beginExecuting(started)
-            // Слот, который эта задача заняла, учтёт следующая итерация через
-            // `hasFreeSlot(for:)` — `skipped` при старте не растёт: задача не отвергнута.
         }
+    }
+
+    /// Одно тело цикла §7 шагов 1—5: взять кандидата, заблокировать или передать
+    /// обработчику. `true` — пересмотр продолжается (кандидат обработан или пропущен
+    /// блокировкой); `false` — пересмотр окончен (`claimNext` вернул `nil`, ремонт
+    /// невозможен, или `isRunning` стал `false` в процессе).
+    private func claimAndDispatchOneCandidate(
+        skipped: inout Set<UUID>, profileReadyCache: inout [String: Bool]
+    ) async -> Bool {
+        let claimed: Job?
+        do {
+            claimed = try await performWithRepair {
+                try await self.repository.claimNext(
+                    types: JobType.allCases, excluding: skipped, now: self.clock(),
+                    leaseSeconds: self.leaseSeconds
+                )
+            }
+        } catch {
+            return false   // §6, п. 4: ремонт невозможен — пересмотр прекращён, попробует снова позже
+        }
+        guard let job = claimed else { return false }   // claimNext вернул nil — пересмотр окончен
+
+        guard isRunning else {
+            try? await repository.update(job.returningUnstartedCandidate(updatedAt: clock()))
+            return false
+        }
+
+        if let reason = await firstBlockingReason(for: job, profileReadyCache: &profileReadyCache) {
+            try? await repository.update(job.returningUnstartedCandidate(updatedAt: clock()))
+            broadcaster.publish(.blocked(jobId: job.id, type: job.type, reason: reason))
+            skipped.insert(job.id)
+            return true
+        }
+
+        guard isRunning else {
+            try? await repository.update(job.returningUnstartedCandidate(updatedAt: clock()))
+            return false
+        }
+
+        let now = clock()
+        let started = job.startingAttempt(now: now, leaseSeconds: leaseSeconds)
+        try? await repository.update(started)
+        beginExecuting(started)
+        // Слот, который эта задача заняла, учтёт следующая итерация через
+        // `hasFreeSlot(for:)` — `skipped` при старте не растёт: задача не отвергнута.
+        return true
     }
 
     /// Второй предохранитель лизинга (инвариант 11): решение по истёкшему лизингу
