@@ -151,7 +151,12 @@ final class MeetingEventPayloadTests: XCTestCase {
         let start = try firstDayWithoutLocalMidnight(in: 2026, zone: zone, calendar: calendar)
         XCTAssertNotEqual(calendar.component(.hour, from: start), 0,
                           "вектор непустоты: сутки действительно без локальной полуночи")
-        let end = try XCTUnwrap(calendar.date(byAdding: .day, value: 1, to: start))
+        // НЕ `calendar.date(byAdding: .day, value: 1, to: start)` напрямую: `start` сам не
+        // обязан быть на часовой отметке 00:00 (ровно в этом и есть предмет теста), и сдвиг
+        // на календарные сутки сохраняет ЧАСЫ, а не обнуляет их — начало следующих суток
+        // берётся у результата отдельно, а не даётся самим сдвигом.
+        let nextDayProbe = try XCTUnwrap(calendar.date(byAdding: .day, value: 1, to: start))
+        let end = calendar.startOfDay(for: nextDayProbe)
 
         XCTAssertNoThrow(try makePayload(start: start, end: end, timeZone: "Asia/Beirut", isAllDay: true))
     }
@@ -164,7 +169,12 @@ final class MeetingEventPayloadTests: XCTestCase {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = zone
         let start = try firstDayWithoutLocalMidnight(in: 2026, zone: zone, calendar: calendar)
-        let end = try XCTUnwrap(calendar.date(byAdding: .day, value: 1, to: start))
+        // НЕ `calendar.date(byAdding: .day, value: 1, to: start)` напрямую: `start` сам не
+        // обязан быть на часовой отметке 00:00 (ровно в этом и есть предмет теста), и сдвиг
+        // на календарные сутки сохраняет ЧАСЫ, а не обнуляет их — начало следующих суток
+        // берётся у результата отдельно, а не даётся самим сдвигом.
+        let nextDayProbe = try XCTUnwrap(calendar.date(byAdding: .day, value: 1, to: start))
+        let end = calendar.startOfDay(for: nextDayProbe)
 
         let event = try MeetingEvent(
             id: UUID(), sourceConnectorId: "eventkit", externalId: "evt-1", icalUid: nil, title: "T",
