@@ -221,25 +221,23 @@ public actor CalendarPortImpl: CalendarPort {
     /// и сам поднимает `initialize` заново — тот же путь лёгкого переподключения, что и К10/Р10,
     /// `stop()` контрактом не отличается от падения плагина).
     public func stop() async {
+        // СТРОКА (возврат РП, приёмка #85, дефект 3 — временно откачено): shutdown() без
+        // таймаута может повесить stop() навсегда на зависшем коннекторе — намеченный фикс
+        // (callConnector(..., retryable: false) { await connector.shutdown() }) скомпилировался,
+        // но прогон CI после него завис на ОБЕИХ платформах (Linux и macOS, 300с/360с) без
+        // единой строки диагностики — обёртчик CI пишет вывод swift test в файл и печатает
+        // его только при обычном завершении, не при принудительном убийстве по таймауту,
+        // так что причина зависания не видна ни через один доступный мне канал лога.
+        // Отката к простому вызову достаточно, чтобы ЭТУ правку (тесты MEE-362 ч.2) сдать
+        // зелёной; сам дефект 3 остаётся открытым — беру его отдельным заходом, с локальной
+        // гонкой таймаута вместо `callConnector` целиком (тот тянет ещё и повтор §5.2, шутдауну
+        // ненужный), проверенным малым прогоном ДО того, как он попадёт в этот PR снова.
         let initializedSources = Array(capabilities.keys)
         capabilities.removeAll()
         await withTaskGroup(of: Void.self) { group in
             for source in initializedSources {
                 guard let connector = connectors[source] else { continue }
-                group.addTask {
-                    // Возврат РП (приёмка #85, дефект 3): shutdown() без таймаута мог
-                    // повесить stop() навсегда на одном зависшем коннекторе — К9 обязан
-                    // действовать здесь так же, как у остальных методов. `retryable: false`
-                    // — инв. 20 (shutdown никогда не повторяется); параметр уже был в
-                    // CallWrapper, просто не был нигде востребован. `try?`: stop()
-                    // контрактом не бросает и не возвращает значение — таймаут одного
-                    // источника не мешает остальным и не всплывает наружу.
-                    _ = try? await self.callConnector(
-                        source: source, connector: connector, timeout: .other, retryable: false
-                    ) {
-                        await connector.shutdown()
-                    }
-                }
+                group.addTask { await connector.shutdown() }
             }
             for await _ in group {}
         }
