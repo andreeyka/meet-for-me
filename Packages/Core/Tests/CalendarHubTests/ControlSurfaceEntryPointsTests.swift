@@ -6,7 +6,7 @@ import Foundation
 import XCTest
 import DomainCore
 import DomainTestKit
-import CalendarHub
+@testable import CalendarHub
 
 final class ControlSurfaceEntryPointsTests: XCTestCase {
 
@@ -99,11 +99,12 @@ final class ControlSurfaceEntryPointsTests: XCTestCase {
         await pollUntil { connector.callCount(.fetchEvents) > 0 }
 
         let secondTask = Task { await harness.hub.sync(trigger: .manual) }
-        // Даём второму вызывающему шанс реально дойти до регистрации своего ожидания
-        // (`syncWaiters`) до отмены — иначе отмена могла бы застать его ДО входа в
-        // continuation и обойти как раз ту ветку, которую тест целится проверить (К35
-        // не даёт внешнего наблюдаемого сигнала на сам факт регистрации).
-        for _ in 0..<5 { await Task.yield() }
+        // Возврат РП: ждём ФАКТ регистрации второго в syncWaiters (внутреннее состояние,
+        // `@testable import`), не гонку с yield — иначе отмена могла бы застать его ДО
+        // входа в continuation (guard !Task.isCancelled, CalendarPortImplSync.swift) и
+        // обойти как раз ту ветку, которую тест целится проверить: оба вызывающих тогда
+        // проходят, ничего не проверив на самом деле.
+        await pollUntil { await harness.hub.syncWaiters[source]?.count == 2 }
         secondTask.cancel()
 
         let secondResults = await secondTask.value
@@ -131,7 +132,9 @@ final class ControlSurfaceEntryPointsTests: XCTestCase {
         await pollUntil { connector.callCount(.fetchEvents) > 0 }
 
         let secondTask = Task { await harness.hub.sync(trigger: .manual) }
-        for _ in 0..<5 { await Task.yield() }
+        // Тот же довод, что в (а): ждём факт регистрации второго в syncWaiters, не гонку
+        // с yield.
+        await pollUntil { await harness.hub.syncWaiters[source]?.count == 2 }
 
         firstTask.cancel()
         secondTask.cancel()
@@ -140,6 +143,7 @@ final class ControlSurfaceEntryPointsTests: XCTestCase {
         let secondResults = await secondTask.value
         XCTAssertEqual(firstResults.first?.failure, .cancelled)
         XCTAssertEqual(secondResults.first?.failure, .cancelled)
+        XCTAssertEqual(connector.callCount(.fetchEvents), 1, "общая задача была ровно одна — один fetchEvents на двоих")
 
         // Общая задача действительно отменена — не осталась висеть на воротах fetchEvents
         // навсегда (`release(.fetchEvents)` тут ни разу не зовётся): отмена обязана дойти
