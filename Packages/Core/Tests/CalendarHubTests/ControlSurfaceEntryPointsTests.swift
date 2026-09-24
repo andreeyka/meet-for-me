@@ -244,6 +244,20 @@ final class ControlSurfaceEntryPointsTests: XCTestCase {
     /// раньше оставался непустым до фактического завершения задачи — новый вызывающий,
     /// пришедший в это окно, подключился бы к уже обречённой (отменённой) задаче вместо
     /// того, чтобы завести свою.
+    ///
+    /// CI (24.09, первый прогон этой части): исходная версия теста ждала, что ВТОРОЙ цикл
+    /// дойдёт до СВОЕГО `save()`, пока первый (застрявший на воротах) ещё не отпущен —
+    /// таймаут за 2 секунды. Причина не в этом фиксе, а в инв. 11 (`mergeTail`,
+    /// `CalendarPortImplMerge.swift`): `applyIncoming` ЛЮБОГО цикла сериализован ЕДИНОЙ
+    /// цепочкой на весь актор — тело второго `serialized { … }` физически не может начать
+    /// работу (включая свой `save()`), пока не завершится ЗАДАЧА первого, что бы ни
+    /// случилось с её вызывающим. Это верно и корректно само по себе (та же цепочка не даёт
+    /// потерять параллельные слияния), но означает, что при застрявших НЕОТМЕНЯЕМЫХ
+    /// save-воротах второй цикл не дойдёт до своего `save()`, пока первый не отпущен —
+    /// независимо от того, куда указывает `inFlightSync[source]`. Поэтому здесь проверяется
+    /// именно бухгалтерия `syncOne`/`inFlightSync` (то, за что отвечает этот фикс), а
+    /// сквозное завершение второго цикла — уже ПОСЛЕ того, как первый отпущен и
+    /// merge-цепочка способна продвинуться.
     func test_defect_newCallerAfterLastWaiterCancelsStartsFreshTaskNotTheCancelledOne() async throws {
         let harness = Harness(sourceIds: ["src-1"])
         harness.connectorRepository.seed([Harness.record(id: "src-1")])
@@ -266,8 +280,17 @@ final class ControlSurfaceEntryPointsTests: XCTestCase {
         // Без фикса inFlightSync[source] остался бы указывать на неё до сих пор.
         await pollUntil(timeout: .seconds(2)) { await harness.hub.inFlightSync[source] == nil }
 
+        // Без фикса второй вызывающий просто подключился бы к syncWaiters уже обречённой
+        // (снятой выше) записи и НИКОГДА не завёл бы новую — inFlightSync[source] остался бы
+        // nil сколь угодно долго. С фиксом syncOne видит nil и заводит СВОЮ, новую запись
+        // немедленно (синхронно внутри актора, без await между проверкой и присваиванием) —
+        // до неё merge-цепочка (инв. 11) не участвует вовсе, дожидаться её продвижения не
+        // нужно.
         let secondTask = Task { await harness.hub.sync(trigger: .manual) }
-        await pollUntil(timeout: .seconds(2)) { meetingRepositorySaveCallCount(harness.meetingRepository) >= 2 }
+        await pollUntil(timeout: .seconds(2)) { await harness.hub.inFlightSync[source] != nil }
+
+        // Отпускаем первую (застрявшую) — только теперь общая merge-цепочка (`mergeTail`,
+        // инв. 11) способна продвинуться, и вслед за ней — дойти до save второго цикла.
         harness.meetingRepository.stopGating(on: .save)
         harness.meetingRepository.release(on: .save)
 
@@ -275,7 +298,7 @@ final class ControlSurfaceEntryPointsTests: XCTestCase {
         XCTAssertNil(secondResults.first?.failure, "второй вызывающий обязан получить результат СВОЕЙ синхронизации")
         XCTAssertEqual(
             meetingRepositorySaveCallCount(harness.meetingRepository), 2,
-            "второй вызывающий завёл СВОЮ задачу (свой save), не подключился к первой, уже отменённой"
+            "оба цикла — отпущенный первый и второй — обязаны были дойти до save"
         )
     }
 }
