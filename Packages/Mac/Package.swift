@@ -38,6 +38,18 @@ let package = Package(
             name: "CaptureManualHarness",
             dependencies: ["Capture", .product(name: "DomainCore", package: "Core")]
         ),
+        // Харнесс модуля calendar-eventkit (IR-119, MEE-351): носитель ручных М1/М2 плана
+        // MEE-343 §5 — измеряет факты о самом EventKit (граница «весь день», развёртка
+        // повторений, код ошибки при отозванном праве) вызовом `EKEventStore` НАПРЯМУЮ, в
+        // обход calendar-eventkit. Не зависит от таргета `CalendarEventKit`: в отличие от
+        // `CaptureManualHarness` (нужна точка входа записи внутри Capture), этому харнессу
+        // не нужен ни один тип модуля — только сам EventKit. В этом пакете, а не отдельном,
+        // потому что EventKit собирается только на macOS, как и весь `Packages/Mac`. Каталог
+        // принадлежит модулю calendar-eventkit (docs/module-map.md).
+        .executableTarget(
+            name: "CalendarEventKitManualHarness",
+            dependencies: [.product(name: "DomainCore", package: "Core")]
+        ),
         .target(
             name: "EngineXPCClient",
             dependencies: [

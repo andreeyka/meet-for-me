@@ -260,13 +260,15 @@ enum SessionMachineFixtures {
     }
 
     /// Задача очереди с заданным номером и нагрузкой — тем, что отдаёт `job(id:)` (К63).
-    /// Поля, которых ни один пункт части B не читает, заполнены нейтрально.
-    static func job(id: UUID, payload: JobPayload) -> Job {
+    /// Поля, которых ни один пункт части B не читает, заполнены нейтрально. `status`
+    /// умолчает в `.succeeded`, чтобы прежние вызовы (К92) не поменяли значения молча;
+    /// К77 (план `АА` №3) задаёт его явно — `.failed`/`.cancelled`.
+    static func job(id: UUID, payload: JobPayload, status: JobStatus = .succeeded) -> Job {
         Job(
             id: id,
             type: payload.type,
             payload: payload,
-            status: .succeeded,
+            status: status,
             priority: 0,
             attempts: 1,
             maxAttempts: 3,
