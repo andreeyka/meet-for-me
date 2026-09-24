@@ -173,7 +173,7 @@ final class DedupKeyTests: XCTestCase {
 
     // MARK: - Замечание к инварианту 3: парные векторы на границах C-001 §0.2 п. 9
 
-    func test_boundaryVector_lowerBound_joinUrlBranchDoesNotCrash() throws {
+    func test_boundaryVector_lowerBound_joinUrlBranchHasExactEpoch() throws {
         let event = try makeEvent(
             start: DomainDateGrammar.lowerBound, joinUrl: URL(string: "https://zoom.us/j/1")
         )
@@ -183,7 +183,7 @@ final class DedupKeyTests: XCTestCase {
         XCTAssertEqual(epoch, Self.lowerBoundEpochSeconds)
     }
 
-    func test_boundaryVector_lowerBound_icalUidBranchDoesNotCrash() throws {
+    func test_boundaryVector_lowerBound_icalUidBranchHasExactEpoch() throws {
         let event = try makeEvent(start: DomainDateGrammar.lowerBound, icalUid: "ical-1")
         guard case .icalUid(_, let epoch) = DedupKey.make(from: event) else {
             return XCTFail("ожидался .icalUid на нижней границе диапазона — без крушения")
@@ -191,7 +191,7 @@ final class DedupKeyTests: XCTestCase {
         XCTAssertEqual(epoch, Self.lowerBoundEpochSeconds)
     }
 
-    func test_boundaryVector_lowerBound_organizerBranchDoesNotCrash() throws {
+    func test_boundaryVector_lowerBound_organizerBranchHasExactEpoch() throws {
         let event = try makeEvent(start: DomainDateGrammar.lowerBound, organizerEmail: "a@b.com")
         guard case .organizerAndTime(_, let epoch) = DedupKey.make(from: event) else {
             return XCTFail("ожидался .organizerAndTime на нижней границе диапазона — без крушения")
@@ -199,7 +199,7 @@ final class DedupKeyTests: XCTestCase {
         XCTAssertEqual(epoch, Self.lowerBoundEpochSeconds)
     }
 
-    func test_boundaryVector_upperBound_joinUrlBranchDoesNotCrash() throws {
+    func test_boundaryVector_upperBound_joinUrlBranchHasExactEpoch() throws {
         let event = try makeEvent(
             start: DomainDateGrammar.upperBound, joinUrl: URL(string: "https://zoom.us/j/1")
         )
@@ -209,7 +209,7 @@ final class DedupKeyTests: XCTestCase {
         XCTAssertEqual(epoch, Self.upperBoundEpochSeconds)
     }
 
-    func test_boundaryVector_upperBound_icalUidBranchDoesNotCrash() throws {
+    func test_boundaryVector_upperBound_icalUidBranchHasExactEpoch() throws {
         let event = try makeEvent(start: DomainDateGrammar.upperBound, icalUid: "ical-1")
         guard case .icalUid(_, let epoch) = DedupKey.make(from: event) else {
             return XCTFail("ожидался .icalUid на верхней границе диапазона — без крушения")
@@ -217,7 +217,7 @@ final class DedupKeyTests: XCTestCase {
         XCTAssertEqual(epoch, Self.upperBoundEpochSeconds)
     }
 
-    func test_boundaryVector_upperBound_organizerBranchDoesNotCrash() throws {
+    func test_boundaryVector_upperBound_organizerBranchHasExactEpoch() throws {
         let event = try makeEvent(start: DomainDateGrammar.upperBound, organizerEmail: "a@b.com")
         guard case .organizerAndTime(_, let epoch) = DedupKey.make(from: event) else {
             return XCTFail("ожидался .organizerAndTime на верхней границе диапазона — без крушения")
