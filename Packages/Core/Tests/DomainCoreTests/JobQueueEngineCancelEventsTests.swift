@@ -100,6 +100,19 @@ final class JobQueueEngineCancelEventsTests: XCTestCase {
     /// `waitUntilIdle()` — оба события лежат в буфере (синхронный `continuation.yield`) уже
     /// к моменту, когда `await rig.queue.start()` вернул управление, поскольку весь
     /// пересмотр — это один `while` внутри одного `await runRevisitPass()`.
+    ///
+    /// MEE-370 (найдено красным main после #86): `start()` НЕ ждёт исполнение `readyId` —
+    /// оно идёт отдельной `Task` (§7, `beginExecuting`) — и `readyId` с фейковым нулевым
+    /// временем исполнения может успеть завершиться и завести СВОЙ, независимый пересмотр
+    /// (по её же завершении) раньше, чем этот тест прочитает `summarizeId` напрямую из
+    /// репозитория: тот независимый пересмотр заново берёт `summarizeId` (`claimNext` —
+    /// `running`) и ещё не успел вернуть его в `pending`, когда тест уже читает строку.
+    /// `waitUntilIdle()` — граница, которую сама очередь даёт для «дождаться ЛЮБого
+    /// самостоятельного пересмотра», и только после неё чтение репозитория детерминировано;
+    /// без неё тест читает состояние в произвольный момент гонки с чужой `Task`, которую
+    /// `start()` намеренно не ждёт (§7: «исполнение — отдельная Task, которую пересмотр не
+    /// ждёт»). Assertions ниже не изменились ни одним значением — снята только гонка вокруг
+    /// точки, где они читаются.
     func test_k67_noHandlerBlocksWithoutStallingTheRest() async throws {
         let rig = JobQueueTestRig()
         let attributeHandler = FakeJobHandler(type: .attribute)
@@ -127,12 +140,18 @@ final class JobQueueEngineCancelEventsTests: XCTestCase {
             firstPass.contains(.started(jobId: readyId, type: .attribute)),
             "К67: сосед стартовал в том же пересмотре, а не отложен на следующий"
         )
+        // MEE-370: граница перед чтением репозитория — см. довод в шапке теста. Дожидается
+        // и исполнения readyId, и её самостоятельного пересмотра по завершении разом; ни то,
+        // ни другое не меняет значений ниже, снятых ДО этой правки теми же двумя строками.
+        await rig.queue.waitUntilIdle()
         let summarizeAfterFirstPass = try await rig.repository.job(id: summarizeId)
         XCTAssertEqual(summarizeAfterFirstPass?.status, .pending)
         XCTAssertEqual(summarizeAfterFirstPass?.attempts, 0)
 
-        // Пересмотр 2 — по завершении readyId (§7), внутри waitUntilIdle(): успех readyId,
-        // затем тот же пересмотр по завершении снова видит summarizeId и снова не встаёт.
+        // Пересмотр 2 — по завершении readyId (§7), уже осевший в `waitUntilIdle()` выше:
+        // успех readyId, затем тот же пересмотр по завершении снова видит summarizeId и
+        // снова не встаёт. Второй `waitUntilIdle()` — без эффекта (очередь уже idle), не
+        // лишний: явно называет, что второй пересмотр к этому моменту точно окончен.
         await rig.queue.waitUntilIdle()
         let secondPass = await drainExactly(&iterator, count: 2)
         XCTAssertEqual(secondPass, [
@@ -148,6 +167,15 @@ final class JobQueueEngineCancelEventsTests: XCTestCase {
 
         let ready = try await rig.repository.job(id: readyId)
         XCTAssertEqual(ready?.status, .succeeded, "пересмотр не встал на noHandler")
+    }
+
+    /// MEE-363 (переоткрыта, красный main после #86): 50 независимых повторов К67 подряд —
+    /// временный, убирается следующим коммитом до слияния, тем же приёмом, что первый заход
+    /// MEE-363.
+    func test_mee363_temporary_k67RepeatedFiftyTimes() async throws {
+        for _ in 0..<50 {
+            try await test_k67_noHandlerBlocksWithoutStallingTheRest()
+        }
     }
 
     private func assertNextPassOnlyBlocksNoHandler(
