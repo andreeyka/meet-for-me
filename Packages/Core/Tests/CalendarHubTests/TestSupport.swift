@@ -152,21 +152,15 @@ final class FakeSecretStore: SecretStore, @unchecked Sendable {
 // собирает и stdout, и stderr в один и тот же файл (`2>&1`), так что эти строки
 // долетают в лог даже при принудительном убийстве. Снять после того, как зависание
 // найдено — диагностика, не постоянная часть тестов.
-private enum HangDiagnostics {
-    static func log(_ message: String) {
-        FileHandle.standardError.write(Data("[HANG-DIAG] \(message)\n".utf8))
+// СТРОКА (то же зависание, следующий заход): `XCTestObservationCenter.addTestObserver`
+// на macOS требует главного потока — вызов из тела `async`-теста (не на главном потоке)
+// рушил процесс на месте (`NSInternalInconsistencyException`), а не помогал диагностике.
+// `checkpoint(_:)` — просто сырая запись в stderr, без регистрации наблюдателя нигде;
+// вызывается вручную с именем теста как первая строка каждого метода.
+enum HangDiagnostics {
+    static func checkpoint(_ label: String) {
+        FileHandle.standardError.write(Data("[HANG-DIAG] \(label)\n".utf8))
     }
-}
-
-final class HangDiagnosticsObserver: NSObject, XCTestObservation {
-    fileprivate static let shared = HangDiagnosticsObserver()
-    private static let registerOnce: Void = {
-        XCTestObservationCenter.shared.addTestObserver(HangDiagnosticsObserver.shared)
-    }()
-    static func activate() { _ = registerOnce }
-
-    func testCaseWillStart(_ testCase: XCTestCase) { HangDiagnostics.log("START \(testCase.name)") }
-    func testCaseDidFinish(_ testCase: XCTestCase) { HangDiagnostics.log("END   \(testCase.name)") }
 }
 
 struct Harness {
@@ -178,7 +172,6 @@ struct Harness {
     let hub: CalendarPortImpl
 
     init(sourceIds: [String]) {
-        HangDiagnosticsObserver.activate()
         var connectorMap: [CalendarSourceId: CalendarConnector] = [:]
         var fakes: [String: FakeCalendarConnector] = [:]
         for id in sourceIds {
