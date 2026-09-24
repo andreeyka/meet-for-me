@@ -23,13 +23,20 @@ struct JobQueueTestRig {
         perTypeConcurrencyLimit: Int = 1,
         powerSnapshot: PowerSnapshot = .readyDefault
     ) {
-        repository = InMemoryJobRepository()
-        clock = ManualClock()
-        power = FakePowerPort(snapshot: powerSnapshot)
-        catalog = StubModelCatalogPort()
+        let manualClock = ManualClock()
+        let jobRepository = InMemoryJobRepository()
+        let powerPort = FakePowerPort(snapshot: powerSnapshot)
+        let catalogPort = StubModelCatalogPort()
+
+        repository = jobRepository
+        clock = manualClock
+        power = powerPort
+        catalog = catalogPort
+        // Замыкание захватывает локальные `let`, а не свойства `self`: до конца этого
+        // инициализатора `self` неполон, а `clock:` у `JobQueueEngine` — `@escaping`.
         queue = JobQueueEngine(
-            repository: repository, modelCatalog: catalog, powerPort: power,
-            clock: { clock.now() }, leaseSeconds: leaseSeconds,
+            repository: jobRepository, modelCatalog: catalogPort, powerPort: powerPort,
+            clock: { manualClock.now() }, leaseSeconds: leaseSeconds,
             globalConcurrencyLimit: globalConcurrencyLimit, perTypeConcurrencyLimit: perTypeConcurrencyLimit
         )
     }

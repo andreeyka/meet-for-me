@@ -10,9 +10,9 @@ final class JobQueueEngineReviewLoopTests: XCTestCase {
     /// зван ровно четыре раза (три кандидата и `nil`); ни один `id` не рассмотрен дважды.
     func test_k73_revisitTerminatesAfterVisitingEveryCandidateOnce() async throws {
         let rig = JobQueueTestRig(powerSnapshot: .onBattery)
-        _ = try await rig.queue.submit(makeSubmission(requiresACPower: true, priority: 30))
+        _ = try await rig.queue.submit(makeSubmission(priority: 30, requiresACPower: true))
         _ = try await rig.queue.submit(makeSubmission(
-            runAfter: rig.clock.now().addingTimeInterval(1_000), priority: 20
+            priority: 20, runAfter: rig.clock.now().addingTimeInterval(1_000)
         ))
         _ = try await rig.queue.submit(makeSubmission(
             payload: .diarize(recordingId: UUID(), profileId: "p"), priority: 10
@@ -81,9 +81,9 @@ final class JobQueueEngineReviewLoopTests: XCTestCase {
         var iterator = stream.makeAsyncIterator()
 
         let ids = try await [
-            rig.queue.submit(makeSubmission(requiresACPower: true, priority: 30)),
-            rig.queue.submit(makeSubmission(requiresACPower: true, priority: 20)),
-            rig.queue.submit(makeSubmission(requiresACPower: true, priority: 10))
+            rig.queue.submit(makeSubmission(priority: 30, requiresACPower: true)),
+            rig.queue.submit(makeSubmission(priority: 20, requiresACPower: true)),
+            rig.queue.submit(makeSubmission(priority: 10, requiresACPower: true))
         ]
         for _ in ids {
             guard case .submitted = await iterator.next() else { return XCTFail("ожидался submitted") }

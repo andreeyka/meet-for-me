@@ -8,6 +8,7 @@
 //  profileId за пересмотр» (инвариант 20) — свойство КЭША в самой очереди, а не заглушки;
 //  заглушка честно отражает, сколько раз её действительно спросили.
 
+import Foundation
 import DomainCore
 
 enum StubModelCatalogError: Error {
