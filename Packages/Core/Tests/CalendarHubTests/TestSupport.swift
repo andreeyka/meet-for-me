@@ -312,3 +312,56 @@ func mergeTestAttendee(name: String, email: String?) throws -> MeetingEvent.Atte
 func meetingRepositorySaveCallCount(_ repository: InMemoryMeetingRepository) -> Int {
     repository.callLog.calls.filter { $0.signature == "MeetingRepository.save(_:)" }.count
 }
+
+/// Сеет мимо `save` встречу с двумя источниками ("A"/`evt-a`, "B"/`evt-b`, общий `icalUid`),
+/// оба со снимками, identity и содержимое — B (больший `lastModified`) — общий пролог
+/// `test_inv10_sourceFailureInCycleKeepsOtherSourcesSnapshotsIntact` (MergeCrossCycleTests.swift),
+/// вынесенный сюда той же причиной, что `mergeReady`: не раздувать тело теста сверх
+/// `function_body_length`.
+func seedTwoSourceMeetingIdentityB(
+    _ harness: Harness, base: Date, locationA: String?, locationB: String?
+) throws {
+    let payloadA = try mergeTestPayload(connectorId: "A", externalId: "evt-a", lastModified: base, location: locationA)
+    let payloadB = try mergeTestPayload(
+        connectorId: "B", externalId: "evt-b", lastModified: base.addingTimeInterval(1), location: locationB
+    )
+    let event = try MeetingEvent(
+        id: UUID(), sourceConnectorId: "B", externalId: "evt-b", icalUid: "shared-uid", title: "T",
+        start: base, end: base.addingTimeInterval(1_800), timeZone: "UTC", isAllDay: false, isCancelled: false,
+        organizer: nil, attendees: [], location: locationB, bodyText: nil, conference: nil,
+        lastModified: base.addingTimeInterval(1)
+    )
+    let sources = [
+        MeetingSource(
+            sourceConnectorId: "A", externalId: "evt-a", icalUid: "shared-uid", lastModified: base, payload: payloadA
+        ),
+        MeetingSource(
+            sourceConnectorId: "B", externalId: "evt-b", icalUid: "shared-uid",
+            lastModified: base.addingTimeInterval(1), payload: payloadB
+        )
+    ]
+    harness.meetingRepository.seed([
+        MeetingRecord(event: event, dedupKey: DedupKey.make(from: event), status: .ready, sources: sources)
+    ])
+}
+
+/// Сеет мимо `save` встречу с двумя источниками БЕЗ снимков (`MeetingSource.payload == nil`
+/// у обоих) — `test_inv10_identityRecomputedWhenDepartedSourceWasIdentity` (MergeTests.swift),
+/// тот же довод, что у `seedTwoSourceMeetingIdentityB` рядом.
+func seedTwoSourceMeetingNoSnapshots(
+    _ harness: Harness, eventId: UUID, base: Date
+) throws {
+    let event = try MeetingEvent(
+        id: eventId, sourceConnectorId: "src-1", externalId: "evt-1", icalUid: nil, title: "Original",
+        start: base, end: base.addingTimeInterval(1_800), timeZone: "UTC", isAllDay: false,
+        isCancelled: false, organizer: nil, attendees: [], location: nil, bodyText: nil,
+        conference: nil, lastModified: base
+    )
+    let sources = [
+        MeetingSource(sourceConnectorId: "src-1", externalId: "evt-1", icalUid: nil, lastModified: base),
+        MeetingSource(
+            sourceConnectorId: "src-2", externalId: "evt-2", icalUid: nil, lastModified: base.addingTimeInterval(60)
+        )
+    ]
+    harness.meetingRepository.seed([MeetingRecord(event: event, dedupKey: nil, status: .ready, sources: sources)])
+}

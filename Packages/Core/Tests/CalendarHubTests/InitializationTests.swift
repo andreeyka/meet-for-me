@@ -17,7 +17,7 @@ import Foundation
 import XCTest
 import DomainCore
 import DomainTestKit
-import CalendarHub
+@testable import CalendarHub
 
 final class InitializationTests: XCTestCase {
 
@@ -133,6 +133,38 @@ final class InitializationTests: XCTestCase {
         _ = try await harness.hub.listCalendars(source: source)
 
         XCTAssertEqual(connector.callCount(.initialize), 1)
+    }
+
+    /// Дефект 2 (MEE-362 ч.3/MEE-386, `ensureInitialized`): вектор выше — только
+    /// ПОСЛЕДОВАТЕЛЬНЫЕ вызовы, ни один не ловит саму гонку («оба видят `capabilities[source]
+    /// == nil` разом»). Здесь — по-настоящему: `connector.initialize()` подвешен, два
+    /// вызывающих стартуют конкурентно; ждём не только что первый дошёл до ворот
+    /// (`callCount(.initialize) > 0`), а что ВТОРОЙ уже встал ожидающим в
+    /// `initializingSources` (`@testable`) — только тогда снятие ворот доказывает, что
+    /// второй вызывающий был готов позвать `initialize` сам и не сделал этого.
+    func test_k07_concurrentCallersInitializeExactlyOnce() async throws {
+        let harness = Harness(sourceIds: ["src-1"])
+        harness.connectorRepository.seed([Harness.record(id: "src-1")])
+        let connector = harness.connector("src-1")
+        connector.setInitializeResult(capabilities: ConnectorCapabilities(
+            deltaSync: false, push: false, attendees: true, conference: true, auth: .none
+        ))
+        connector.setListCalendars([])
+        connector.hang(.initialize)
+
+        async let first: [CalendarInfo] = harness.hub.listCalendars(source: source)
+        async let second: [CalendarInfo] = harness.hub.listCalendars(source: source)
+
+        await pollUntil { connector.callCount(.initialize) > 0 }
+        await pollUntil { await harness.hub.initializingSources[source]?.count == 1 }
+        connector.release(.initialize)
+
+        let (firstResult, secondResult) = try await (first, second)
+        XCTAssertEqual(firstResult, [])
+        XCTAssertEqual(secondResult, [])
+        XCTAssertEqual(
+            connector.callCount(.initialize), 1, "К7: второй одновременный вызывающий не зовёт initialize повторно"
+        )
     }
 
     // MARK: - К9, вход А (границы 10/120/30с)

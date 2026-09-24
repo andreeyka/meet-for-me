@@ -64,6 +64,8 @@ public final class InMemoryMeetingRepository: MeetingRepository, @unchecked Send
     private var failures: [MeetingRepositoryMethod: (id: String?, error: StorageError)] = [:]
     private var hangingMethods: Set<MeetingRepositoryMethod> = []
     private var hangSeconds: Double = 3600
+    private var gatedMethods: Set<MeetingRepositoryMethod> = []
+    private var gateContinuations: [MeetingRepositoryMethod: [UUID: CheckedContinuation<Void, Never>]] = [:]
 
     /// Каскад инварианта 7 (C-010 v7): `delete(meetingIds:)` обнуляет здесь привязку
     /// «запись → встреча» у записей. Ставится контейнером `InMemoryRepositories`; у
@@ -122,6 +124,35 @@ public final class InMemoryMeetingRepository: MeetingRepository, @unchecked Send
         locked { _ = hangingMethods.remove(method) }
     }
 
+    /// Ворота с ручным отпуском — в отличие от `hang(on:seconds:)` (фиксированная задержка,
+    /// К81 (iii): важен сам факт «не вернулся»), здесь тест управляет МОМЕНТОМ отпуска
+    /// явным `release(on:)`, не таймингом. IR-126 (MEE-386, возврат РП, приёмка #105,
+    /// 18:55 UTC): доказательство сериализации инв. 11 воротами, а не `hang` с фиксированной
+    /// секундой — тот же приём, что `FakeCalendarConnector.hangOrGate`/`release`.
+    public func gate(on method: MeetingRepositoryMethod) {
+        locked { gatedMethods.insert(method) }
+    }
+
+    /// Отпускает все вызовы этого метода, ждущие на воротах. Вызов без ждущих — no-op.
+    /// Ворота при этом остаются взведены — следующий вызов того же метода снова встанет
+    /// (если нужно освободить его без ожидания, `stopGating(on:)` до его прихода).
+    public func release(on method: MeetingRepositoryMethod) {
+        let waiting = locked { () -> [CheckedContinuation<Void, Never>] in
+            let list = Array((gateContinuations[method] ?? [:]).values)
+            gateContinuations[method] = [:]
+            return list
+        }
+        for continuation in waiting { continuation.resume() }
+    }
+
+    /// Снимает ворота — последующие вызовы метода больше не встают, уже ждущие не задеты
+    /// (их снимает только `release(on:)`). Обычно оба вызываются вместе: `release` отпускает
+    /// уже стоящий вызов, `stopGating` — следующий, ещё не пришедший (например, второе
+    /// слияние ТОЙ ЖЕ серии, инв. 11 — не нужно вставать в очередь на ворота второй раз).
+    public func stopGating(on method: MeetingRepositoryMethod) {
+        locked { _ = gatedMethods.remove(method) }
+    }
+
     /// Всё, что лежит в хранилище, в порядке первого появления.
     public var storedRecords: [MeetingRecord] {
         locked { order.compactMap { records[$0] } }
@@ -148,6 +179,14 @@ public final class InMemoryMeetingRepository: MeetingRepository, @unchecked Send
         try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
     }
 
+    private func waitIfGated(_ method: MeetingRepositoryMethod) async {
+        guard locked({ gatedMethods.contains(method) }) else { return }
+        let key = UUID()
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            locked { gateContinuations[method, default: [:]][key] = continuation }
+        }
+    }
+
     // MARK: - MeetingRepository
 
     /// Инвариант 6 (`dedup_key`) и инвариант 30 (`meeting_sources`, C-010 v14): обе пары
@@ -156,6 +195,7 @@ public final class InMemoryMeetingRepository: MeetingRepository, @unchecked Send
     public func save(_ record: MeetingRecord) async throws {
         log.record(port: Self.portName, method: "save(_:)", arguments: [record.event.id.uuidString])
         await hangIfAsked(.save)
+        await waitIfGated(.save)
         if let error = failureIfAny(.save, id: record.event.id.uuidString) {
             throw error
         }
