@@ -11,9 +11,14 @@
 //  из них стоят в подписях самого порта. Сверено с разрешённым списком инварианта 9
 //  (23 позиции): собственных имён контракта там ровно эти восемь.
 //
-//  `DedupKey.make(from:)` НЕ объявлен здесь, и это решение, а не пропуск: это функция,
-//  а не тип, и её ответ задают инварианты 1—3 этого контракта — то есть поведение,
-//  которое MEE-289 писать запрещено прямо. Цена названа в отчёте.
+//  `DedupKey.make(from:)` не был объявлен MEE-289 — это функция, а не тип, и её ответ
+//  задают инварианты 1—3, то есть поведение, которое та задача писать запрещала прямо.
+//  Тело добавлено MEE-352 (IR-118, C-005 v8 — инварианты 1—3 не менялись с v4): приоритет
+//  ветвей и вход времени — инвариант 2; `startEpochSeconds` — округление ВНИЗ до минуты
+//  (инвариант 3, а не усечение к нулю — на отрицательных `timeIntervalSince1970` это разные
+//  числа); диапазон `start` не проверяется здесь второй раз — `MeetingEvent.init` уже сделал
+//  это по C-001 §0.2 п. 9, и `Int(...)` в `startEpochSeconds(for:)` безопасен по построению
+//  (замечание к инварианту 3). Нормализация join-URL — шесть шагов «Определения» дословно.
 //
 //  Порядок типов и порядок полей внутри типа — дословно по «Определению» контракта
 //  (порядок значим: правило обхода C-001 §0.2 п. 9).
@@ -116,4 +121,51 @@ public enum DedupKey: Hashable, Codable, Sendable {
     case joinUrl(String, startEpochSeconds: Int)   // нормализованный join-URL
     case icalUid(String, startEpochSeconds: Int)
     case organizerAndTime(organizerEmail: String, startEpochSeconds: Int)
+
+    /// Инвариант 2: приоритет ветвей строгий — `joinUrl` первой составляющей, затем
+    /// непустой `icalUid`, затем `organizer.email`; ни одна не подошла — `nil` (событие не
+    /// дедуплицируется). `startEpochSeconds` — вторая составляющая — входит в КАЖДУЮ ветвь
+    /// (инвариант 3), не в одну.
+    public static func make(from event: MeetingEvent) -> DedupKey? {
+        let startEpochSeconds = Self.startEpochSeconds(for: event.start)
+        if let joinUrl = event.conference?.joinUrl {
+            return .joinUrl(Self.normalizedJoinURL(joinUrl), startEpochSeconds: startEpochSeconds)
+        }
+        if let icalUid = event.icalUid, !icalUid.isEmpty {
+            return .icalUid(icalUid, startEpochSeconds: startEpochSeconds)
+        }
+        if let organizerEmail = event.organizer?.email {
+            return .organizerAndTime(organizerEmail: organizerEmail, startEpochSeconds: startEpochSeconds)
+        }
+        return nil
+    }
+
+    /// Инвариант 3: округление ВНИЗ до минуты — `.rounded(.down)`, не `Int(...)` усечением
+    /// к нулю: на отрицательном `timeIntervalSince1970` (даты до 1970 года) это разные
+    /// числа, а «вниз» здесь значит «дальше от нуля», не «ближе». `Int(...)` не падает: по
+    /// диапазону `MeetingEvent.init` (C-001 §0.2 п. 9) `date` уже представим, и частное на
+    /// 60 остаётся в представимом для `Int` диапазоне с большим запасом.
+    private static func startEpochSeconds(for date: Date) -> Int {
+        Int((date.timeIntervalSince1970 / 60).rounded(.down)) * 60
+    }
+
+    /// Шесть шагов «Определения» дословно и по порядку. `joinUrl` уже проверен
+    /// `Conference.validate()` абсолютным `https` URL с хостом (C-005) — здесь только
+    /// нормализация, не повторная проверка.
+    private static func normalizedJoinURL(_ url: URL) -> String {
+        let components = URLComponents(url: url, resolvingAgainstBaseURL: false) ?? URLComponents()
+        let scheme = (components.scheme ?? "").lowercased()
+        var host = (components.host ?? "").lowercased()
+        if host.hasPrefix("www.") {
+            host.removeFirst("www.".count)
+        }
+        let defaultPort = scheme == "https" ? 443 : nil
+        let port = components.port == defaultPort ? nil : components.port
+        var path = components.path
+        if path.hasSuffix("/") {
+            path.removeLast()
+        }
+        let portSuffix = port.map { ":\($0)" } ?? ""
+        return "\(scheme)://\(host)\(portSuffix)\(path)"
+    }
 }

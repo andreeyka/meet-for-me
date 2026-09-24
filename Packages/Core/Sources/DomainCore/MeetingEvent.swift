@@ -111,52 +111,17 @@ public struct MeetingEvent: Codable, Equatable, Sendable, DomainValidatable {
         try box.encode(lastModified, forKey: .lastModified)
     }
 
-    /// Ступени §0.2 п. 6: (а) вложенные значения → (в) представимость → (б) собственные инварианты.
+    /// Ступени §0.2 п. 6: (а) вложенные значения → (в) представимость → (б) собственные
+    /// инварианты — все три ступени идут общей функцией `MeetingEventValidation.validate`,
+    /// которую вызывает и `MeetingEventPayload` (C-006 §6.1): список инвариантов 1, 2, 4, 6,
+    /// 7 существует в одном экземпляре, а не по одному на каждый из двух типов.
     public func validate() throws {
-        let owner = DomainOwner(contract: "C-001", type: "MeetingEvent")
-        try validateNested()
-        try owner.requireDate(start, "start")
-        try owner.requireDate(end, "end")
-        try owner.requireDate(lastModified, "lastModified")
-        try owner.check(end >= start, 1, "end", "end раньше start")
-        try owner.check(TimeZone(identifier: timeZone) != nil, 2, "timeZone",
-                        "не идентификатор IANA: \(timeZone)")
-        try validateUniqueAddresses(owner)
-        try validateAllDayBounds(owner)
-    }
-
-    /// Ступень (а): по полям в порядке объявления, внутри массива по возрастанию индекса.
-    private func validateNested() throws {
-        try organizer?.validate()
-        for attendee in attendees {
-            try attendee.validate()
-        }
-        try conference?.validate()
-    }
-
-    /// Инвариант 4: нарушителем является пара одинаковых адресов, а не элемент, — `path` есть
-    /// имя коллекции (§0.1, правило 3). Элементы с `email == nil` не сравниваются друг с другом.
-    private func validateUniqueAddresses(_ owner: DomainOwner) throws {
-        var seen = Set<String>()
-        for attendee in attendees {
-            guard let email = attendee.person.email else { continue }
-            guard seen.insert(email).inserted else {
-                throw owner.fail(4, "attendees", "адрес \(email) встречается у двух участников")
-            }
-        }
-    }
-
-    /// Инвариант 7. Проверка записана через `startOfDay`, а не через компоненты: в сутки
-    /// перехода на летнее время локального `00:00:00` не существует вовсе, и компонентное
-    /// прочтение отвергло бы событие, которое хост построил по правилам этого же контракта.
-    private func validateAllDayBounds(_ owner: DomainOwner) throws {
-        guard isAllDay, let zone = TimeZone(identifier: timeZone) else { return }
-        var calendar = Calendar(identifier: .gregorian)
-        calendar.timeZone = zone
-        try owner.check(calendar.startOfDay(for: start) == start, 7, "start",
-                        "start не первое мгновение суток в поясе события")
-        try owner.check(calendar.startOfDay(for: end) == end, 7, "end",
-                        "end не первое мгновение суток в поясе события")
-        try owner.check(end > start, 7, "end", "end не больше start у события на весь день")
+        try MeetingEventValidation.validate(
+            owner: DomainOwner(contract: "C-001", type: "MeetingEvent"),
+            fields: MeetingEventFields(
+                start: start, end: end, lastModified: lastModified, timeZone: timeZone,
+                isAllDay: isAllDay, organizer: organizer, attendees: attendees, conference: conference
+            )
+        )
     }
 }

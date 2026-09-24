@@ -4,10 +4,10 @@
 //  расширенный вторым файлом.
 //
 //  ПОЧЕМУ ОТДЕЛЬНЫЙ ФАЙЛ, А НЕ ЧАСТЬ `PortDeclarationTests.swift`. Причина
-//  техническая: шестнадцать статических массивов, структура `PortContract` и сам
-//  список `contracts` вместе с телом тестов одним файлом превышали и порог
-//  `file_length`, и порог `type_body_length` SwiftLint (--strict, работа
-//  «Core + Mac», прогон CI). Деление — по объёму, а не по смыслу: `extension`
+//  техническая: восемнадцать статических массивов (дописаны MEE-346), структура
+//  `PortContract` и сам список `contracts` вместе с телом тестов одним файлом
+//  превышали и порог `file_length`, и порог `type_body_length` SwiftLint (--strict,
+//  работа «Core + Mac», прогон CI). Деление — по объёму, а не по смыслу: `extension`
 //  расширяет тот же тип `PortDeclarationTests`, что и соседний файл, а не заводит
 //  другой.
 
@@ -168,6 +168,29 @@ extension PortDeclarationTests {
         "func stop() async"
     ]
 
+    /// C-006 (MEE-10) v8, §6 «Swift-зеркало для in-process коннекторов». Дописан MEE-346.
+    static let connectorHostServices = [
+        "func secretGet(key: String) async throws -> String?",
+        "func secretSet(key: String, value: String?) async throws",
+        "func log(_ level: LogLevel, _ message: String)",
+        "func notify(_ kind: HostNotificationKind, detail: String?)"
+    ]
+
+    /// C-006 (MEE-10) v8, §6. Дописан MEE-346.
+    static let calendarConnector = [
+        "func initialize(host: ConnectorHostServices, connectorInstanceId: String) async throws " +
+        "-> (PluginInfo, ConnectorCapabilities)",
+        "func settingsSchema() async throws -> Data",
+        "func configure(settings: Data) async throws",
+        "func beginAuth() async throws -> AuthChallenge",
+        "func completeAuth(callbackUrl: URL) async throws -> String?",
+        "func listCalendars() async throws -> [ConnectorCalendar]",
+        "func fetchEvents(from: Date, to: Date, calendarIds: [String]) async throws -> [MeetingEventPayload]",
+        "func fetchChanges(cursor: String?, calendarIds: [String]) async throws -> ChangeBatch",
+        "func healthCheck() async throws -> ConnectorHealth",
+        "func shutdown() async"
+    ]
+
     /// Протокол, файл его исходника и ожидаемый блок контракта.
     ///
     /// Тип, а не кортеж из трёх членов: `large_tuple` SwiftLint разрешает два,
@@ -202,6 +225,10 @@ extension PortDeclarationTests {
         PortContract(name: "JobRepository", file: "JobQueue.swift", expected: jobRepository),
         PortContract(name: "ModelCatalogPort", file: "ModelCatalogPort.swift", expected: modelCatalogPort),
         PortContract(name: "SessionCoordinator", file: "SessionCoordinator.swift", expected: sessionCoordinator),
-        PortContract(name: "Scheduler", file: "SessionCoordinator.swift", expected: scheduler)
+        PortContract(name: "Scheduler", file: "SessionCoordinator.swift", expected: scheduler),
+        PortContract(
+            name: "ConnectorHostServices", file: "ConnectorHost.swift", expected: connectorHostServices
+        ),
+        PortContract(name: "CalendarConnector", file: "ConnectorHost.swift", expected: calendarConnector)
     ]
 }

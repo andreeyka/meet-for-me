@@ -1,16 +1,16 @@
 //  Вход в запись — К34 (строка 6), К36 (строка 8), К47 и К48 (§7.1).
-//  MEE-300, часть B. Пункты плана MEE-288 §3, разделы Ж и З, части 3/8 и 4/8.
+//  MEE-300, часть B. Пункты плана MEE-288 §3, разделы Ж и З, части 3/8 и 4/8. Правка
+//  издания v8 контракта — MEE-341.
 //
 //  Форма всех четырёх одна: подаётся вход, на котором условие строки истинно целиком, —
 //  переход обязан наступить; и вход, снимающий РОВНО ОДНУ клаузу, — переход обязан не
 //  наступить. Клауз три, и снимаются они порознь: цели нет; цель занята чужой записью
 //  (§7.1); политика цель не отдала (§8.2).
 //
-//  КАК ПОСТРОЕН ВЕКТОР «ЦЕЛЬ ЗАНЯТА», И ПОЧЕМУ НЕ ПРОЩЕ. Две сессии одного провайдера с
-//  пересекающимися окнами дают не занятость, а СПОР (§5.4): цель относится к обеим, ни одна
-//  её не получает, и §7.1 не читается вовсе. Поэтому занимает цель сессия `origin == .adHoc`:
-//  у неё нет события, и сигнал с `provider != nil` к ней правилом 2 не относится ни в одном
-//  состоянии — спора нет, а цель занята по-настоящему.
+//  ОСНАСТКА «ЦЕЛЬ ЗАНЯТА» ВЫНЕСЕНА В `SessionMachineOccupiedTargetStaging.swift`: К48 и
+//  К100 читают один и тот же вход разными файлами тестов (`docs/process.md` §5, «пара,
+//  которую нельзя развести по разным прогонам»), а `--strict` линта не пустил бы её
+//  вторую копию в файл длиннее четырёхсот строк.
 
 import Foundation
 import XCTest
@@ -125,7 +125,7 @@ final class SessionMachineEntryTests: XCTestCase {
     /// второй, а `stopping` держится ровно то окно, в которое второй созвон и начинается.
     func test_k47_oneGroupOneRecordingInBothCapturingStates() async throws {
         for stopHolder in [false, true] {
-            let staged = try await standWithAdHocHolder()
+            let staged = try await SessionMachineOccupiedStand.withAdHocHolder(from: moment)
             let stand = staged.stand
             let event = staged.event
             let holder = staged.holder
@@ -138,7 +138,7 @@ final class SessionMachineEntryTests: XCTestCase {
                 let stopping = try unwrap(await stand.machine.session(id: holder))
                 XCTAssertEqual(stopping.state, .stopping, "держатель переведён в `stopping`")
             }
-            try await openWindowOfSecondSession(stand)
+            await openWindowOfSecondSession(stand, at: moment)
 
             let owner = try unwrap(await stand.machine.sessions().first { $0.meetingId == event.id })
             XCTAssertEqual(owner.state, .armed, "вторая сессия не пишет: цель занята (§7.1)")
@@ -151,13 +151,13 @@ final class SessionMachineEntryTests: XCTestCase {
         }
     }
 
-    // MARK: - К48 (§7.1, вторая половина; `SessionError.alreadyRecording`)
+    // MARK: - К48 (§7.1, вторая половина; `SessionError.alreadyRecording`; издание v8)
 
     /// Команда, упёршаяся в занятую цель, бросает `alreadyRecording(sessionId:)`, и
     /// `sessionId` в ошибке — ТОЙ СЕССИИ, КОТОРАЯ ЗАНИМАЕТ ЦЕЛЬ, а не той, что просит:
-    /// по этому полю фасад показывает человеку, какая встреча уже пишется.
+    /// по этому полю фасад показывает человеку, какая встреча уже пишется. Вектор `armed`.
     func test_k48_commandThrowsAlreadyRecordingCarryingTheHolderSessionId() async throws {
-        let staged = try await standWithAdHocHolder()
+        let staged = try await SessionMachineOccupiedStand.withAdHocHolder(from: moment)
         let stand = staged.stand
         let event = staged.event
         let holder = staged.holder
@@ -169,12 +169,57 @@ final class SessionMachineEntryTests: XCTestCase {
         )
 
         // Сессия с событием: её окно открыто, цель к ней отнесена и занята.
-        try await openWindowOfSecondSession(stand)
+        await openWindowOfSecondSession(stand, at: moment)
         await assertAlreadyRecording(
             stand: stand, meetingId: event.id, holder: holder,
             at: moment.addingTimeInterval(3000), label: "сессия с событием"
         )
         await stand.machine.stop()
+    }
+
+    /// ПРАВКА ИЗДАНИЯ v8: занятость цели проверяется РАНЬШЕ состояния сессии и не уступает
+    /// ему очередь ни на одном из четырёх состояний. `armed` уже подан тестом выше —
+    /// здесь заведены три оставшихся, ранее не перечисленных по имени.
+    ///
+    /// РАЗЛИЧАЮЩИЙ ВЕКТОР — `scheduled`: команда читает сроки СВЕЖИМИ, в момент вызова, а
+    /// не тем состоянием, в котором сессию оставил прошлый `tick` (§«Поведение»); строка не
+    /// тикнута ни разу мимо `armAt`, состояние остаётся `.scheduled` и после команды, а
+    /// `alreadyRecording` брошен всё равно — реализация, проверяющая состояние раньше
+    /// занятости, ответила бы `nothingToRecord` (К100, тот же вход).
+    func test_k48_targetOccupiedThrowsAlreadyRecordingInAwaitingSignalScheduledAndProcessing() async throws {
+        let awaiting = try await SessionMachineOccupiedStand.awaitingOwner(from: moment)
+        await assertAlreadyRecording(
+            stand: awaiting.stand, meetingId: awaiting.event.id, holder: awaiting.holder,
+            at: moment.addingTimeInterval(3600), label: "awaitingSignal"
+        )
+        await awaiting.stand.machine.stop()
+
+        let scheduled = try await SessionMachineOccupiedStand.scheduledOwner(from: moment)
+        await scheduled.stand.deliver(SessionMachineFixtures.audioOutput(
+            appKey: "us.zoom.xos", observedAt: moment.addingTimeInterval(3000)
+        ))
+        await assertAlreadyRecording(
+            stand: scheduled.stand, meetingId: scheduled.event.id, holder: scheduled.holder,
+            at: moment.addingTimeInterval(3000), label: "scheduled"
+        )
+        let stillScheduled = try unwrap(
+            await scheduled.stand.machine.sessions().first { $0.meetingId == scheduled.event.id }
+        )
+        XCTAssertEqual(
+            stillScheduled.state, .scheduled,
+            "различающий вектор: команда не тикает — состояние осталось `scheduled`"
+        )
+        await scheduled.stand.machine.stop()
+
+        let processing = try await SessionMachineOccupiedStand.processingOwner(from: moment)
+        await processing.stand.deliver(SessionMachineFixtures.audioOutput(
+            appKey: "us.zoom.xos", observedAt: moment.addingTimeInterval(-500)
+        ))
+        await assertAlreadyRecording(
+            stand: processing.stand, meetingId: processing.event.id, holder: processing.holder,
+            at: moment.addingTimeInterval(-500), label: "processing"
+        )
+        await processing.stand.machine.stop()
     }
 
     // MARK: - Оснастка
@@ -187,63 +232,10 @@ final class SessionMachineEntryTests: XCTestCase {
         let expected: MeetingStatus
     }
 
-    /// Стенд, в котором цель занята идущей записью ad-hoc-сессии.
-    private struct AdHocHolder {
-        let stand: SessionMachineBench
-        let event: MeetingEvent
-        let holder: UUID
-    }
-
-    /// Стенд, в котором цель `us.zoom.xos` ЗАНЯТА идущей записью ad-hoc-сессии, а вторая
-    /// встреча того же провайдера ещё не взведена: её `armAt` — `moment + 3000`.
-    private func standWithAdHocHolder() async throws -> AdHocHolder {
-        let stand = try bench(policy: .auto)
-        let event = try SessionMachineFixtures.event(start: moment.addingTimeInterval(3600))
-        stand.seed(event)
-        stand.allowCaptureStart()
-        await stand.machine.start(now: moment)
-        await stand.machine.tick(now: moment)
-        await stand.deliver(SessionMachineFixtures.audioOutput(appKey: "us.zoom.xos", observedAt: moment))
-        await stand.machine.tick(now: moment)
-
-        let prompt = try unwrap(await stand.machine.prompts().first)
-        try await stand.machine.answer(promptId: prompt.promptId, .record(sessionId: prompt.sessionId), now: moment)
-        let holder = try unwrap(await stand.machine.session(id: prompt.sessionId))
-        XCTAssertEqual(holder.state, .recording, "ad-hoc держит цель строкой 16")
-        XCTAssertEqual(holder.origin, .adHoc)
-        return AdHocHolder(stand: stand, event: event, holder: prompt.sessionId)
-    }
-
-    /// Довести вторую встречу до её окна: цель к ней отнесётся правилом 2, спора при этом
-    /// не будет — к ad-hoc-держателю сигнал с провайдером не относится ни одним правилом.
-    private func openWindowOfSecondSession(_ stand: SessionMachineBench) async throws {
-        await stand.deliver(SessionMachineFixtures.audioOutput(
-            appKey: "us.zoom.xos", observedAt: moment.addingTimeInterval(3000)
-        ))
-        await stand.machine.tick(now: moment.addingTimeInterval(3000))
-    }
-
     private func startRequests(_ stand: SessionMachineBench) -> [CaptureRequest] {
         stand.capture.recordedCalls.compactMap { call -> CaptureRequest? in
             if case let .start(request) = call { return request }
             return nil
-        }
-    }
-
-    private func assertAlreadyRecording(
-        stand: SessionMachineBench,
-        meetingId: UUID?,
-        holder: UUID,
-        at now: Date,
-        label: String
-    ) async {
-        do {
-            _ = try await stand.machine.startRecording(meetingId: meetingId, now: now)
-            XCTFail("\(label): команда обязана броситься, а не вернуть номер")
-        } catch let error as SessionError {
-            XCTAssertEqual(error, .alreadyRecording(sessionId: holder), "\(label): номер — занимающей")
-        } catch {
-            XCTFail("\(label): брошено не `SessionError`: \(error)")
         }
     }
 }

@@ -6,15 +6,12 @@
 //  ОДИН КОНТЕЙНЕР с реализациями всех восьми протоколов поверх словарей в памяти». Перечисление
 //  §6 плана MEE-288 говорит «фейки репозиториев C-010» и ни контейнера, ни имён не называет.
 //
-//  ВОСЬМИ РЕАЛИЗАЦИЙ ЗДЕСЬ ПО-ПРЕЖНЕМУ НЕТ — ИХ ТРИ, И ЭТО НЕДОСТАЧА ДЕРЕВА, А НЕ РЕШЕНИЕ
-//  КОНТЕЙНЕРА. MEE-319 объявил в `DomainCore` все восемь протоколов §5 и `FileLayout` §1
-//  (было три из восьми и без `FileLayout` — MEE-289), но фейки пяти новых протоколов
-//  (`PersonRepository`, `SpeakerProfileRepository`, `ConnectorRepository`,
-//  `MeetingOutputRepository`, `SettingsRepository`) и `TemporaryFileLayout` — предмет
-//  своей, второй задачи (МЕЕ-319, «Зачем»: «Остальные фейки — вторая задача»), не этой.
-//  Единственное исключение — `RecordingRepository.adHoc()`: без него `InMemoryRecordingRepository`
-//  не собирается, и MEE-319 дописал его фейку вместе с привязкой «запись → встреча»
-//  (инвариант 7), не трогая прочие пять протоколов.
+//  ВОСЬМЬ РЕАЛИЗАЦИЙ (MEE-320). MEE-319 объявил в `DomainCore` все восемь протоколов §5 и
+//  `FileLayout` §1 (было три из восьми и без `FileLayout` — MEE-289) и дописал
+//  `InMemoryRecordingRepository.adHoc()` (инвариант 7/29), не заводя фейков пяти новых
+//  протоколов — «Остальные фейки — вторая задача». MEE-320 заводит пять оставшихся:
+//  `InMemoryPersonRepository`, `InMemorySpeakerProfileRepository`, `InMemoryConnectorRepository`,
+//  `InMemoryMeetingOutputRepository`, `InMemorySettingsRepository`.
 //
 //  ЗАЧЕМ КОНТЕЙНЕР НУЖЕН, ЕСЛИ РЕПОЗИТОРИИ СОБИРАЮТСЯ И ПОРОЗНЬ, — две причины, и обе
 //  измеримы, а не стилистические:
@@ -38,6 +35,11 @@ public final class InMemoryRepositories: @unchecked Sendable {
     public let meetings: InMemoryMeetingRepository
     public let recordings: InMemoryRecordingRepository
     public let transcripts: InMemoryTranscriptRepository
+    public let persons: InMemoryPersonRepository
+    public let speakerProfiles: InMemorySpeakerProfileRepository
+    public let connectors: InMemoryConnectorRepository
+    public let meetingOutputs: InMemoryMeetingOutputRepository
+    public let settings: InMemorySettingsRepository
 
     /// - Parameter log: журнал вызовов. Не дали — контейнер заводит свой и отдаёт его
     ///   полем `log`, чтобы тот же объект можно было передать фейкам других портов.
@@ -46,6 +48,11 @@ public final class InMemoryRepositories: @unchecked Sendable {
         meetings = InMemoryMeetingRepository(log: log)
         recordings = InMemoryRecordingRepository(log: log)
         transcripts = InMemoryTranscriptRepository(log: log)
+        persons = InMemoryPersonRepository(log: log)
+        speakerProfiles = InMemorySpeakerProfileRepository(log: log)
+        connectors = InMemoryConnectorRepository(log: log)
+        meetingOutputs = InMemoryMeetingOutputRepository(log: log)
+        settings = InMemorySettingsRepository(log: log)
         recordings.attachCascade(transcripts: transcripts)
         meetings.attachCascade(recordings: recordings)
     }
