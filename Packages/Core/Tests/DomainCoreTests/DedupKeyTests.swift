@@ -51,9 +51,31 @@ final class DedupKeyTests: XCTestCase {
 
     // MARK: - Инвариант 1: детерминированность
 
+    /// Возврат РП по MEE-352: два ОТДЕЛЬНО СОБРАННЫХ равных события, а не один и тот же
+    /// `event` дважды — так утверждение действительно о значениях, а не о том, что чистая
+    /// функция дважды на одном входе даёт один ответ (то само собой, свойством языка).
     func test_invariant1_deterministicForEqualEvents() throws {
-        let event = try makeEvent(joinUrl: URL(string: "https://zoom.us/j/123"))
-        XCTAssertEqual(DedupKey.make(from: event), DedupKey.make(from: event))
+        let firstEvent = try makeEvent(joinUrl: URL(string: "https://zoom.us/j/123"))
+        let secondEvent = try makeEvent(joinUrl: URL(string: "https://zoom.us/j/123"))
+        XCTAssertEqual(firstEvent, secondEvent, "вектор непустоты: события и впрямь равны")
+        XCTAssertEqual(DedupKey.make(from: firstEvent), DedupKey.make(from: secondEvent))
+    }
+
+    // MARK: - Инвариант 2: вхождения серии не склеиваются (К27, calendar-hub)
+
+    /// «Два разных вхождения одной серии равного ключа не получают ни при какой ветви» —
+    /// тот же `joinUrl`, разный `start` — обязаны дать разные ключи.
+    func test_invariant2_sameJoinUrlDifferentStartGivesDifferentKeys() throws {
+        let url = URL(string: "https://zoom.us/j/123")
+        let firstOccurrence = try makeEvent(start: Date(timeIntervalSince1970: 1_000_000), joinUrl: url)
+        let secondOccurrence = try makeEvent(start: Date(timeIntervalSince1970: 1_100_000), joinUrl: url)
+        XCTAssertNotEqual(DedupKey.make(from: firstOccurrence), DedupKey.make(from: secondOccurrence))
+    }
+
+    func test_invariant2_sameIcalUidDifferentStartGivesDifferentKeys() throws {
+        let firstOccurrence = try makeEvent(start: Date(timeIntervalSince1970: 1_000_000), icalUid: "ical-1")
+        let secondOccurrence = try makeEvent(start: Date(timeIntervalSince1970: 1_100_000), icalUid: "ical-1")
+        XCTAssertNotEqual(DedupKey.make(from: firstOccurrence), DedupKey.make(from: secondOccurrence))
     }
 
     // MARK: - Инвариант 3: startEpochSeconds во ВСЕХ трёх ветвях, округление ВНИЗ до минуты
@@ -72,13 +94,18 @@ final class DedupKeyTests: XCTestCase {
 
     /// Замечание к инварианту 3: «вниз» на отрицательном `timeIntervalSince1970` — дальше от
     /// нуля, не ближе. `Int(-100.0/60)` усечением к нулю дал бы -60 (неверно); правильный
-    /// ответ -120 — минута [-120, -60) содержит -100.
-    func test_startEpochSeconds_negativeRoundsAwayFromZeroNotTowardIt() throws {
-        let event = try makeEvent(start: Date(timeIntervalSince1970: -100), joinUrl: URL(string: "https://zoom.us/j/1"))
-        guard case .joinUrl(_, let epoch) = DedupKey.make(from: event) else {
-            return XCTFail("ожидался .joinUrl")
+    /// ответ -120 — минута [-120, -60) содержит -100. Возврат РП по MEE-352: во всех трёх
+    /// ветвях, не только `.joinUrl` — инвариант 3 не выделяет ни одну из них.
+    func test_startEpochSeconds_negativeRoundsAwayFromZeroNotTowardItInAllThreeBranches() throws {
+        let start = Date(timeIntervalSince1970: -100)
+        let joinUrlEvent = try makeEvent(start: start, joinUrl: URL(string: "https://zoom.us/j/1"))
+        let icalEvent = try makeEvent(start: start, icalUid: "ical-1")
+        let organizerEvent = try makeEvent(start: start, organizerEmail: "a@b.com")
+
+        for event in [joinUrlEvent, icalEvent, organizerEvent] {
+            let key = try XCTUnwrap(DedupKey.make(from: event))
+            XCTAssertEqual(epochSeconds(of: key), -120, "минута [-120, -60) содержит -100")
         }
-        XCTAssertEqual(epoch, -120)
     }
 
     // MARK: - Нормализация join-URL, шесть шагов «Определения» по порядку
@@ -121,52 +148,81 @@ final class DedupKeyTests: XCTestCase {
         XCTAssertEqual(try normalizedJoinURL(of: event), "https://zoom.us/j/AbC123")
     }
 
+    /// Возврат РП по MEE-352: `components.path` молча раскодирует `%3a` → `:` и `%2F` → `/` —
+    /// у Teams в пути ровно такие последовательности (`19%3ameeting_…%40thread.v2`), и
+    /// раскодированный путь стал бы уже другим ключом. `percentEncodedPath` — путь как он
+    /// есть в исходной строке, без раскодирования.
+    func test_joinUrlNormalization_preservesPercentEncodedColonAndSlashInPath() throws {
+        let event = try makeEvent(joinUrl: URL(
+            string: "https://teams.microsoft.com/l/meetup-join/19%3ameeting_abc%40thread.v2/a%2Fb"
+        ))
+        XCTAssertEqual(
+            try normalizedJoinURL(of: event),
+            "https://teams.microsoft.com/l/meetup-join/19%3ameeting_abc%40thread.v2/a%2Fb",
+            "процентные последовательности в пути не раскодируются"
+        )
+    }
+
+    /// Возврат РП по MEE-352: нормализация существует, чтобы РАЗНЫЕ строки одного и того же
+    /// URL сходились в ОДИН ключ — не только «не падает на одном входе».
+    func test_joinUrlNormalization_differentWritingsOfSameURLGiveSameKey() throws {
+        let first = try makeEvent(joinUrl: URL(string: "HTTPS://WWW.Zoom.US:443/j/123/"))
+        let second = try makeEvent(joinUrl: URL(string: "https://zoom.us/j/123"))
+        XCTAssertEqual(DedupKey.make(from: first), DedupKey.make(from: second))
+    }
+
     // MARK: - Замечание к инварианту 3: парные векторы на границах C-001 §0.2 п. 9
 
-    func test_boundaryVector_lowerBound_joinUrlBranchDoesNotCrash() throws {
+    func test_boundaryVector_lowerBound_joinUrlBranchHasExactEpoch() throws {
         let event = try makeEvent(
             start: DomainDateGrammar.lowerBound, joinUrl: URL(string: "https://zoom.us/j/1")
         )
-        guard case .joinUrl = DedupKey.make(from: event) else {
+        guard case .joinUrl(_, let epoch) = DedupKey.make(from: event) else {
             return XCTFail("ожидался .joinUrl на нижней границе диапазона — без крушения")
         }
+        XCTAssertEqual(epoch, Self.lowerBoundEpochSeconds)
     }
 
-    func test_boundaryVector_lowerBound_icalUidBranchDoesNotCrash() throws {
+    func test_boundaryVector_lowerBound_icalUidBranchHasExactEpoch() throws {
         let event = try makeEvent(start: DomainDateGrammar.lowerBound, icalUid: "ical-1")
-        guard case .icalUid = DedupKey.make(from: event) else {
+        guard case .icalUid(_, let epoch) = DedupKey.make(from: event) else {
             return XCTFail("ожидался .icalUid на нижней границе диапазона — без крушения")
         }
+        XCTAssertEqual(epoch, Self.lowerBoundEpochSeconds)
     }
 
-    func test_boundaryVector_lowerBound_organizerBranchDoesNotCrash() throws {
+    func test_boundaryVector_lowerBound_organizerBranchHasExactEpoch() throws {
         let event = try makeEvent(start: DomainDateGrammar.lowerBound, organizerEmail: "a@b.com")
-        guard case .organizerAndTime = DedupKey.make(from: event) else {
+        guard case .organizerAndTime(_, let epoch) = DedupKey.make(from: event) else {
             return XCTFail("ожидался .organizerAndTime на нижней границе диапазона — без крушения")
         }
+        XCTAssertEqual(epoch, Self.lowerBoundEpochSeconds)
     }
 
-    func test_boundaryVector_upperBound_joinUrlBranchDoesNotCrash() throws {
+    func test_boundaryVector_upperBound_joinUrlBranchHasExactEpoch() throws {
         let event = try makeEvent(
             start: DomainDateGrammar.upperBound, joinUrl: URL(string: "https://zoom.us/j/1")
         )
-        guard case .joinUrl = DedupKey.make(from: event) else {
+        guard case .joinUrl(_, let epoch) = DedupKey.make(from: event) else {
             return XCTFail("ожидался .joinUrl на верхней границе диапазона — без крушения")
         }
+        XCTAssertEqual(epoch, Self.upperBoundEpochSeconds)
     }
 
-    func test_boundaryVector_upperBound_icalUidBranchDoesNotCrash() throws {
+    func test_boundaryVector_upperBound_icalUidBranchHasExactEpoch() throws {
         let event = try makeEvent(start: DomainDateGrammar.upperBound, icalUid: "ical-1")
-        guard case .icalUid = DedupKey.make(from: event) else {
+        guard case .icalUid(_, let epoch) = DedupKey.make(from: event) else {
             return XCTFail("ожидался .icalUid на верхней границе диапазона — без крушения")
         }
+        XCTAssertEqual(epoch, Self.upperBoundEpochSeconds)
     }
 
-    func test_boundaryVector_upperBound_organizerBranchDoesNotCrash() throws {
+    func test_boundaryVector_upperBound_organizerBranchHasExactEpoch() throws {
         let event = try makeEvent(start: DomainDateGrammar.upperBound, organizerEmail: "a@b.com")
-        guard case .organizerAndTime = DedupKey.make(from: event) else {
+        guard case .organizerAndTime(_, let epoch) = DedupKey.make(from: event) else {
             return XCTFail("ожидался .organizerAndTime на верхней границе диапазона — без крушения")
         }
+        XCTAssertEqual(epoch, Self.upperBoundEpochSeconds)
     }
 
     /// Отрицательный вектор замечания: `start` вне диапазона не доходит до `make` вовсе —
@@ -187,6 +243,13 @@ final class DedupKeyTests: XCTestCase {
     }
 
     // MARK: - Оснастка
+
+    /// Возврат РП по MEE-352: `-62135596800` — `0001-01-01T00:00:00.000Z`, уже кратно 60,
+    /// округление вниз не сдвигает. Значение проверено независимо от кода `startEpochSeconds`.
+    private static let lowerBoundEpochSeconds = -62_135_596_800
+    /// `253402300740` — минута `[253402300740, 253402300800)`, `9999-12-31T23:59:59.999Z`
+    /// (`253402300799.999`) лежит внутри неё; `253402300800` — уже `10000-01-01T00:00:00Z`.
+    private static let upperBoundEpochSeconds = 253_402_300_740
 
     private func makeEvent(
         start: Date = Date(timeIntervalSince1970: 1_000_090),
