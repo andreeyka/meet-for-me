@@ -57,7 +57,17 @@ func pollUntil(
 actor StreamIteratorBox<Element: Sendable> {
     private var iterator: AsyncStream<Element>.Iterator
     init(_ stream: AsyncStream<Element>) { iterator = stream.makeAsyncIterator() }
-    func next() async -> Element? { await iterator.next() }
+
+    /// Не `await iterator.next()` напрямую: `next()` — `mutating`, и Swift не даёт звать
+    /// mutating async метод через actor-isolated свойство (компилятор CI, найдено #94 —
+    /// «cannot call mutating async function on actor-isolated property»). Локальная копия —
+    /// стандартный обход для actor-isolated `AsyncIteratorProtocol`.
+    func next() async -> Element? {
+        var localIterator = iterator
+        let value = await localIterator.next()
+        iterator = localIterator
+        return value
+    }
 }
 
 private enum RaceOutcome<Element: Sendable>: Sendable {
