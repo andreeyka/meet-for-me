@@ -143,6 +143,28 @@ final class DedupKeyTests: XCTestCase {
         )
     }
 
+    /// К15 перечня MEE-347, вход 8 (шаг 5 контракта, вторая половина, дословно): регистр
+    /// пути сохраняется, а не приводится к нижнему — здесь БЕЗ завершающего `/`, отдельно от
+    /// шага «завершающий `/` отбрасывается» (тот вход всегда нёс `/` на конце и путь без
+    /// него не проверял). Возврат РП по MEE-357, 24.09 13:00.
+    func test_mee357_joinUrlNormalization_preservesPathCaseWithoutTrailingSlash() throws {
+        let event = try makeEvent(joinUrl: URL(string: "https://zoom.us/J/AbC"))
+        XCTAssertEqual(try normalizedJoinURL(of: event), "https://zoom.us/J/AbC", "без / на конце путь не меняется")
+    }
+
+    /// К15 перечня MEE-347, вход 10 (порядок шагов важен, дословно): контракт требует шаг 1
+    /// (регистр схемы/хоста) СТРОГО ДО шага 2 (отбрасывание префикса `www.`) — `www.` ищется
+    /// литерально, без учёта регистра. Реализация, применившая шаг 2 первым точным сравнением
+    /// префикса, не поймала бы `"WWW."` вовсе и оставила бы его после понижения регистра.
+    /// Возврат РП по MEE-357, 24.09 13:00.
+    func test_mee357_joinUrlNormalization_lowercasesHostBeforeStrippingWwwPrefix() throws {
+        let event = try makeEvent(joinUrl: URL(string: "https://WWW.zoom.us/j/123"))
+        XCTAssertEqual(
+            try normalizedJoinURL(of: event), "https://zoom.us/j/123",
+            "шаг 1 (регистр) — раньше шага 2 (www.), иначе WWW. не будет отброшен"
+        )
+    }
+
     func test_joinUrlNormalization_allSixStepsCombined() throws {
         let event = try makeEvent(joinUrl: URL(string: "HTTPS://WWW.Zoom.US:443/j/AbC123/?pwd=xyz#top"))
         XCTAssertEqual(try normalizedJoinURL(of: event), "https://zoom.us/j/AbC123")
