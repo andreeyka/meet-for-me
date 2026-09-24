@@ -118,35 +118,6 @@ final class JobQueueEngineCancelEventsTests: XCTestCase {
         XCTAssertEqual(ready?.status, .succeeded, "пересмотр не встал на noHandler")
     }
 
-    /// ВРЕМЕННЫЙ ТЕСТ, MEE-363: 50 независимых повторов К67 в одном прогоне CI —
-    /// доказательство того, что `waitUntilIdle()` закрывает гонку `activeRevisitPasses`
-    /// (см. `JobQueueEngineLifecycle.swift`), а не проходит один раз случайно. Убрать перед
-    /// слиянием — постоянного места в перечне у него нет, это только лог для отчёта.
-    func test_mee363_temporary_k67RepeatedFiftyTimes() async throws {
-        for iteration in 0..<50 {
-            let rig = JobQueueTestRig()
-            let attributeHandler = FakeJobHandler(type: .attribute)
-            try await rig.queue.register(handler: attributeHandler)
-
-            let summarizeId = try await rig.queue.submit(makeSubmission(
-                payload: .summarize(meetingId: UUID(), transcriptId: UUID(), profileId: "p")
-            ))
-            let readyId = try await rig.queue.submit(makeSubmission(
-                payload: .attribute(transcriptId: UUID(), meetingId: nil)
-            ))
-
-            for _ in 0..<3 {
-                await rig.queue.start()
-                await rig.queue.waitUntilIdle()
-                let summarizeJob = try await rig.repository.job(id: summarizeId)
-                XCTAssertEqual(summarizeJob?.status, .pending, "повтор \(iteration)")
-                XCTAssertEqual(summarizeJob?.attempts, 0, "повтор \(iteration)")
-            }
-            let ready = try await rig.repository.job(id: readyId)
-            XCTAssertEqual(ready?.status, .succeeded, "повтор \(iteration): пересмотр не встал на noHandler")
-        }
-    }
-
     /// К68: ровно одна финальная последовательность на исполненную задачу —
     /// `started → (progressed*) → одно из succeeded|failed|cancelled`.
     ///
