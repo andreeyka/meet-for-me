@@ -1,6 +1,13 @@
 # Карта модулей
 
-Версия 1.5. Утверждена пользователем (MEE-1). Источник: `docs/architecture.md` v0.7.
+Версия 1.6. Утверждена пользователем (MEE-1). Источник: `docs/architecture.md` v0.7.
+Изменение против v1.5: IR-118 (MEE-348) — таблица контрактов §4 называла `calendar-hub` потребителем
+C-009 (`ProcessMonitorPort` + `JoinInfo`), хотя ни C-005, ни C-006 (собственные контракты calendar-hub)
+`JoinInfo` не упоминают ни разу, а разбор ссылки в `JoinInfo` — операция `detector`/`PlatformResolver`
+над уже готовым `MeetingEvent.Conference.joinUrl`; calendar-hub эту ссылку только проносит строкой,
+не читая. Строка правлена: у C-009 в столбце потребителей остался один `detector`. Ответ ни одного
+метода не меняется — это была ошибка таблицы, а не решение, которое кто-то принимал и от которого
+что-то зависит.
 Изменение против v1.4: IR-116 (MEE-340) — строка calendar-eventkit «Запрещено: … нормализация событий
 (это хост)» противоречила самому механизму: `MeetingEventPayload` (C-006 §6.1) несёт все семь инвариантов
 нормализации C-001 уже в своём инициаторе, а его строит коннектор — `fetchEvents` возвращает
@@ -343,7 +350,7 @@ Mac. Работа `Core (Linux)` `storage` не проверяет вовсе; �
 | C-006 | Протокол плагина календаря (JSON-RPC + Swift-зеркало) | domain-core | calendar-hub, calendar-eventkit, plugin-graph | нет |
 | C-007 | `PermissionsPort` | domain-core | permissions, app-ui | нет |
 | C-008 | `PowerPort` | domain-core | permissions, capture | нет |
-| C-009 | `ProcessMonitorPort` + `JoinInfo` | domain-core | detector, calendar-hub | нет |
+| C-009 | `ProcessMonitorPort` + `JoinInfo` | domain-core | detector | нет |
 | C-010 | Схема SQLite и репозитории | storage | все потребители данных | нет |
 | C-011 | Протоколы движка (`TranscriptionEngine`, `DiarizationEngine`, `EmbeddingEngine`, `PostProcessor`) | engine-xpc | attribution, domain-core, gigaam | **частично** (R12: таймстампы) |
 | C-012 | XPC-контракт: сообщения, прогресс, отмена | engine-xpc | domain-core | нет |
