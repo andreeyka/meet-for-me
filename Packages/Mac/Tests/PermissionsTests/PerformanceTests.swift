@@ -5,6 +5,7 @@
 //  `RUN_PERFORMANCE_TESTS=1 swift test --package-path Packages/Mac --filter PerformanceTests`.
 //  Собственно значения исходов (корректность) остаются в `RequestTests` — `test_c14_*`/`test_c18_*`.
 
+import DomainCore
 import Foundation
 import XCTest
 @testable import Permissions
