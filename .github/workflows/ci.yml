@@ -304,6 +304,24 @@ jobs:
           fi
           exit "$status"
 
+      # MEE-378, п. 6 (возврат РП после приёмки #93) — ВРЕМЕННЫЙ шаг, снимается следующим
+      # коммитом после подтверждения зелёным прогоном: 50 повторов ВСЕГО набора
+      # JobQueueEngine* (а не одного сценария временным Swift-тестом, как раньше) —
+      # RP попросил проверить прогоном, не рассуждением. Простой цикл `bash`, не общий
+      # вотчдог выше: отфильтрованный набор занимает секунды на повтор, и `timeout-minutes`
+      # ниже — самостоятельный, достаточный предохранитель для ВРЕМЕННОГО шага.
+      - name: МЕЕ-378 временно · JobQueueEngine x50
+        if: ${{ !cancelled() && steps.build-core.outcome == 'success' }}
+        shell: bash
+        timeout-minutes: 5
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 50); do
+            echo "::group::JobQueueEngine повтор $i/50"
+            swift test --package-path Packages/Core --filter JobQueueEngine
+            echo "::endgroup::"
+          done
+
   macos:
     name: Core + Mac (macos-14)
     runs-on: macos-14
@@ -498,6 +516,20 @@ jobs:
         # Подстраховка снаружи скрипта — тот же довод, что у Core (Linux).
         timeout-minutes: 7
         run: *run-swift-test-with-timeout
+
+      # MEE-378, п. 6 (возврат РП после приёмки #93) — ВРЕМЕННЫЙ шаг, тот же приём и тот же
+      # довод, что у Core (Linux): снимается следующим коммитом после подтверждения.
+      - name: МЕЕ-378 временно · JobQueueEngine x50
+        if: ${{ !cancelled() && steps.graph.outputs.build_ok == 'true' }}
+        shell: bash
+        timeout-minutes: 5
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 50); do
+            echo "::group::JobQueueEngine повтор $i/50"
+            swift test --package-path Packages/Core --filter JobQueueEngine
+            echo "::endgroup::"
+          done
 
       # Вторая половина того же приёма, по тому же доводу: вектор называет
       # аннотация, а не имя шага (MEE-263).
