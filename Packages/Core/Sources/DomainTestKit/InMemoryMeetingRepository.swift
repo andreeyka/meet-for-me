@@ -30,6 +30,11 @@
 //      значение, которого тест не задавал; контракт C-010 v7 инвариант 7 прямо разводит
 //      колонку (обнуляется) и `manifest.meetingId` (не обнуляется, устаревает) как два
 //      разных факта — прежняя дыра была отсутствием этой привязки, а не ошибкой довода.
+//      MEE-407 дописала сюда каскад `meeting_outputs` (см. `attachCascade(meetingOutputs:)`
+//      ниже) — до этой задачи он отсутствовал;
+//    * инвариант 33 (C-010 v22, IR-133, MEE-405) — ДЕРЖИТСЯ, `save(_:absorbing:)` —
+//      `InMemoryMeetingRepository+Absorbing.swift` (деление по объёму, не по смыслу —
+//      тот же приём, что у `SpeakerAttribution`/`GRDBMeetingRepository`).
 //
 //  ФЕЙК НЕ ЭТАЛОН ПОВЕДЕНИЯ ПОРТА: держимые инварианты здесь суть УСТРОЙСТВО фейка, а не
 //  их проверка. Проверяются они тестами `storage`.
@@ -57,10 +62,13 @@ public final class InMemoryMeetingRepository: MeetingRepository, @unchecked Send
     public static let portName = "MeetingRepository"
 
     private let lock = NSLock()
-    private let log: PortCallLog
+    // Internal, не private: `InMemoryMeetingRepository+Absorbing.swift` (деление по объёму)
+    // читает и пишет их из своего `save(_:absorbing:)` — Swift `private` файлово-областной,
+    // `extension` в другом файле его не видит.
+    let log: PortCallLog
 
-    private var records: [UUID: MeetingRecord] = [:]
-    private var order: [UUID] = []
+    var records: [UUID: MeetingRecord] = [:]
+    var order: [UUID] = []
     private var failures: [MeetingRepositoryMethod: (id: String?, error: StorageError)] = [:]
     private var hangingMethods: Set<MeetingRepositoryMethod> = []
     private var hangSeconds: Double = 3600
@@ -70,7 +78,12 @@ public final class InMemoryMeetingRepository: MeetingRepository, @unchecked Send
     /// Каскад инварианта 7 (C-010 v7): `delete(meetingIds:)` обнуляет здесь привязку
     /// «запись → встреча» у записей. Ставится контейнером `InMemoryRepositories`; у
     /// одиночного репозитория каскаду уходить некуда, и его нет.
-    private weak var recordings: InMemoryRecordingRepository?
+    weak var recordings: InMemoryRecordingRepository?
+
+    /// Каскад инвариантов 7 и 33 (C-010 v7/v21): `delete(meetingIds:)` каскадно удаляет
+    /// здесь `meeting_outputs`, `save(_:absorbing:)` переносит их на победителя. Ставится
+    /// контейнером `InMemoryRepositories`.
+    weak var meetingOutputs: InMemoryMeetingOutputRepository?
 
     public init(log: PortCallLog = PortCallLog()) {
         self.log = log
@@ -79,7 +92,7 @@ public final class InMemoryMeetingRepository: MeetingRepository, @unchecked Send
     /// Журнал, в который пишет этот фейк. Тот же объект, что передали в инициализатор.
     public var callLog: PortCallLog { log }
 
-    private func locked<Value>(_ body: () -> Value) -> Value {
+    func locked<Value>(_ body: () -> Value) -> Value {
         lock.lock()
         defer { lock.unlock() }
         return body()
@@ -158,14 +171,19 @@ public final class InMemoryMeetingRepository: MeetingRepository, @unchecked Send
         locked { order.compactMap { records[$0] } }
     }
 
-    /// Подключить каскад инварианта 7. Зовёт контейнер `InMemoryRepositories`.
-    public func attachCascade(recordings: InMemoryRecordingRepository) {
+    /// Подключить каскад инварианта 7 (`recordings`). Зовёт контейнер `InMemoryRepositories` —
+    /// единственный вызывающий, наружу поверхности не несёт (возврат РП, приёмка #134).
+    func attachCascade(recordings: InMemoryRecordingRepository) {
         self.recordings = recordings
     }
 
+    // Подключение каскада `meetingOutputs` — `InMemoryMeetingRepository+Absorbing.swift`
+    // (тот же файл, что несёт `save(_:absorbing:)`, единственный его потребитель кроме
+    // `delete(meetingIds:)` ниже).
+
     // MARK: - Оснастка
 
-    private func failureIfAny(_ method: MeetingRepositoryMethod, id: String?) -> StorageError? {
+    func failureIfAny(_ method: MeetingRepositoryMethod, id: String?) -> StorageError? {
         locked { () -> StorageError? in
             guard let failure = failures[method] else { return nil }
             guard let wanted = failure.id else { return failure.error }
@@ -173,7 +191,7 @@ public final class InMemoryMeetingRepository: MeetingRepository, @unchecked Send
         }
     }
 
-    private func hangIfAsked(_ method: MeetingRepositoryMethod) async {
+    func hangIfAsked(_ method: MeetingRepositoryMethod) async {
         let (hangs, seconds) = locked { (hangingMethods.contains(method), hangSeconds) }
         guard hangs else { return }
         try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
@@ -191,7 +209,7 @@ public final class InMemoryMeetingRepository: MeetingRepository, @unchecked Send
     /// сиротой: ворота уже сняты (новые вызовы больше не встанут), а второго `release(on:)`
     /// для этого метода тест уже не планировал. Здесь — одна атомарная проверка-и-регистрация,
     /// так что `stopGating`/`release` физически не могут вклиниться между чтением и записью.
-    private func waitIfGated(_ method: MeetingRepositoryMethod) async {
+    func waitIfGated(_ method: MeetingRepositoryMethod) async {
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
             let isGated = locked { () -> Bool in
                 guard gatedMethods.contains(method) else { return false }
@@ -253,7 +271,7 @@ public final class InMemoryMeetingRepository: MeetingRepository, @unchecked Send
     /// (`Storage/GRDBMeetingRepositoryWrite.swift`): постановка MEE-384 (п. 6) требует
     /// фейк с тем же поведением. Пустой `declared` — снимок `dropping(event)`; непустой
     /// без identity — `constraintViolation`, ничего не синтезируется.
-    private static func sourcesIncludingOwnIdentity(
+    static func sourcesIncludingOwnIdentity(
         of event: MeetingEvent, declared: [MeetingSource]
     ) throws -> [MeetingSource] {
         guard !declared.isEmpty else {
@@ -372,5 +390,8 @@ public final class InMemoryMeetingRepository: MeetingRepository, @unchecked Send
         // Инвариант 7: колонка `recordings.meeting_id` обнуляется каскадом;
         // `manifest.meetingId` не трогается и может остаться устаревшим (§6 C-010 v7).
         recordings?.detachFromDeletedMeetings(Set(meetingIds))
+        // Инвариант 7: `meeting_outputs` каскадно удаляются (`ON DELETE CASCADE`, не
+        // `SET NULL`, в отличие от `recordings`).
+        meetingOutputs?.cascadeDelete(meetingIds: Set(meetingIds))
     }
 }

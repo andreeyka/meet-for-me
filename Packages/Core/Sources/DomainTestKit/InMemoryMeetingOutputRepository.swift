@@ -76,6 +76,37 @@ public final class InMemoryMeetingOutputRepository: MeetingOutputRepository, @un
         locked { order.compactMap { records[$0] } }
     }
 
+    /// Каскад инварианта 7 (C-010 v7): удаление встречи уносит её `meeting_outputs`
+    /// (`ON DELETE CASCADE`, в отличие от `recordings` — та лишь теряет привязку). Зовёт
+    /// `InMemoryMeetingRepository.delete(meetingIds:)` через `attachCascade(meetingOutputs:)` —
+    /// единственный вызывающий, наружу поверхности не несёт (возврат РП, приёмка #134).
+    func cascadeDelete(meetingIds: Set<UUID>) {
+        locked {
+            for identifier in order {
+                guard let existing = records[identifier], meetingIds.contains(existing.meetingId) else { continue }
+                records[identifier] = nil
+            }
+            order.removeAll { !records.keys.contains($0) }
+        }
+    }
+
+    /// C-010 v21, инвариант 33: переносит `meeting_id` выдач с проигравших на победителя —
+    /// шаг (1) `save(_:absorbing:)`, до удаления проигравших. Зовёт
+    /// `InMemoryMeetingRepository.save(_:absorbing:)` — единственный вызывающий.
+    func reassignFromDeletedMeetings(_ losingIds: Set<UUID>, to winnerId: UUID) {
+        locked {
+            for identifier in order {
+                guard let existing = records[identifier], losingIds.contains(existing.meetingId) else { continue }
+                records[identifier] = MeetingOutput(
+                    id: existing.id, meetingId: winnerId, kind: existing.kind, engine: existing.engine,
+                    modelVersion: existing.modelVersion, promptVersion: existing.promptVersion,
+                    contentMarkdown: existing.contentMarkdown, structuredJson: existing.structuredJson,
+                    createdAt: existing.createdAt, isUserEdited: existing.isUserEdited
+                )
+            }
+        }
+    }
+
     // MARK: - Оснастка
 
     private func failureIfAny(_ method: MeetingOutputRepositoryMethod, id: String?) -> StorageError? {

@@ -47,6 +47,7 @@ extension PortDeclarationTests {
     /// IR-118 (MEE-348), дописан MEE-352.
     static let meetingRepository = [
         "func save(_ record: MeetingRecord) async throws",
+        "func save(_ record: MeetingRecord, absorbing meetingIds: [UUID]) async throws",
         "func meeting(id: UUID) async throws -> MeetingRecord?",
         "func meeting(dedupKey: DedupKey) async throws -> MeetingRecord?",
         "func meeting(sourceConnectorId: String, externalId: String) async throws -> MeetingRecord?",

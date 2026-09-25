@@ -55,5 +55,6 @@ public final class InMemoryRepositories: @unchecked Sendable {
         settings = InMemorySettingsRepository(log: log)
         recordings.attachCascade(transcripts: transcripts)
         meetings.attachCascade(recordings: recordings)
+        meetings.attachCascade(meetingOutputs: meetingOutputs)
     }
 }

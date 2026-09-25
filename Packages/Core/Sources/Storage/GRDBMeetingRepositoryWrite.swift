@@ -22,27 +22,92 @@ private struct MeetingRowInput {
 extension GRDBMeetingRepository {
 
     func save(_ record: MeetingRecord) async throws {
-        let idText = record.event.id.uuidString
-        let event = record.event
-        let now = EpochTime.seconds(Date())
-        let sources = try Self.sourcesIncludingOwnIdentity(of: event, declared: record.sources)
-        let dedupText = try record.dedupKey.map { try StorageJSON.encodeToText($0) }
-
         do {
             try await database.dbPool.write { db in
-                let organizerId = try event.organizer.map {
-                    try Self.resolveOrCreatePersonId($0, db: db, now: now)
-                }
-                let input = MeetingRowInput(
-                    idText: idText, event: event, status: record.status,
-                    dedupText: dedupText, organizerId: organizerId, now: now
-                )
-                try Self.upsertMeetingRow(input, db: db)
-                try Self.replaceMeetingSources(idText: idText, sources: sources, db: db)
-                try Self.replaceAttendees(idText: idText, attendees: event.attendees, now: now, db: db)
+                try Self.saveBody(record, db: db)
             }
         } catch {
             throw StorageErrorMapping.mapWrite(error)
+        }
+    }
+
+    /// C-010 v20, правка v22, IR-133 (MEE-405), инвариант 33: одной транзакцией — перенос
+    /// `recordings`/`meeting_outputs` проигравших на `record`, удаление `meetingIds` (тот же
+    /// каскад, что `delete(meetingIds:)`, инвариант 7), и тело `save(_:)` — уникальность
+    /// `dedup_key`/пары источника проверяется на шаге (3), ПОСЛЕ удаления (2): это то, что
+    /// позволяет победителю унаследовать `dedup_key`/пару проигравшего без ложной коллизии
+    /// с самим собой — ровно случай слияния, ради которого метод заведён.
+    ///
+    /// v22 (возврат РП, приёмка #134): при непустом `meetingIds` `record.event.id` ОБЯЗАН
+    /// уже существовать в `meetings` — проверено явно, ДО шага (1), а не оставлено на откуп
+    /// внешнему ключу `meeting_outputs.meeting_id` (`NOT NULL REFERENCES meetings(id)`,
+    /// немедленный — §2 контракта, «PRAGMA foreign_keys = ON на каждом соединении»): без
+    /// явной проверки отказ срабатывал только когда у кого-то из `meetingIds` были
+    /// привязанные дочерние строки — без них UPDATE не менял ни одной строки, и шаг (3)
+    /// молча создавал бы нового победителя. Явная проверка не отменяет внешний ключ
+    /// (он остаётся страховкой), но делает отказ безусловным, как требует v22.
+    func save(_ record: MeetingRecord, absorbing meetingIds: [UUID]) async throws {
+        guard !meetingIds.isEmpty else {
+            try await save(record)
+            return
+        }
+        guard !meetingIds.contains(record.event.id) else {
+            throw StorageError.constraintViolation(
+                message: "save(_:absorbing:): meetingIds не может содержать record.event.id (инвариант 33 C-010 v22)"
+            )
+        }
+        let winnerIdText = record.event.id.uuidString
+        do {
+            try await database.dbPool.write { db in
+                let winnerExists = try Row.fetchOne(
+                    db, sql: "SELECT 1 FROM meetings WHERE id = ?", arguments: [winnerIdText]
+                ) != nil
+                guard winnerExists else {
+                    throw StorageError.constraintViolation(
+                        message: "save(_:absorbing:): record.event.id должен существовать в meetings " +
+                            "при непустом meetingIds (инвариант 33 C-010 v22)"
+                    )
+                }
+                for id in meetingIds {
+                    let idText = id.uuidString
+                    try db.execute(
+                        sql: "UPDATE recordings SET meeting_id = ? WHERE meeting_id = ?",
+                        arguments: [winnerIdText, idText]
+                    )
+                    try db.execute(
+                        sql: "UPDATE meeting_outputs SET meeting_id = ? WHERE meeting_id = ?",
+                        arguments: [winnerIdText, idText]
+                    )
+                }
+                try Self.deleteMeetingRows(meetingIds, db: db)
+                try Self.saveBody(record, db: db)
+            }
+        } catch {
+            throw StorageErrorMapping.mapWrite(error)
+        }
+    }
+
+    static func saveBody(_ record: MeetingRecord, db: Database) throws {
+        let idText = record.event.id.uuidString
+        let event = record.event
+        let now = EpochTime.seconds(Date())
+        let sources = try sourcesIncludingOwnIdentity(of: event, declared: record.sources)
+        let dedupText = try record.dedupKey.map { try StorageJSON.encodeToText($0) }
+        let organizerId = try event.organizer.map {
+            try resolveOrCreatePersonId($0, db: db, now: now)
+        }
+        let input = MeetingRowInput(
+            idText: idText, event: event, status: record.status,
+            dedupText: dedupText, organizerId: organizerId, now: now
+        )
+        try upsertMeetingRow(input, db: db)
+        try replaceMeetingSources(idText: idText, sources: sources, db: db)
+        try replaceAttendees(idText: idText, attendees: event.attendees, now: now, db: db)
+    }
+
+    static func deleteMeetingRows(_ ids: [UUID], db: Database) throws {
+        for id in ids {
+            try db.execute(sql: "DELETE FROM meetings WHERE id = ?", arguments: [id.uuidString])
         }
     }
 
