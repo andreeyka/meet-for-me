@@ -14,8 +14,9 @@ import Foundation
 
 extension AppFacadeImpl {
 
-    /// Цикл на весь срок жизни актора — подписка регистрируется в `init` (см. докстринг там),
-    /// это тело просто читает уже гарантированно не потерянные снимки.
+    /// Обработчик ОДНОГО снимка — цикл `for await`, что его зовёт, живёт в `init` (см.
+    /// докстринг там про `[weak self]`), не здесь; это тело просто читает уже гарантированно
+    /// не потерянные снимки, по одному за вызов.
     ///
     /// НАМЕРЕННО НЕТ отдельного шага «снять базовую готовность до цикла» — ранняя редакция
     /// делала это через `permissionsPort.snapshot()`/`settings()` СРАЗУ при запуске, для
@@ -25,18 +26,23 @@ extension AppFacadeImpl {
     /// `InMemoryRepositories`) — находка CI после первого варианта этого файла: он добавлял
     /// седьмую строку в журнал `SettingsTests.test_k22_...`, читавший ровно шесть. Тело ниже
     /// не трогает ни один порт, пока `changes()` действительно не пришлёт снимок, — молчаливый
-    /// подписчик без единого вызова не даёт побочных эффектов. Цена: самое первое пришедшее
-    /// событие только заводит базу (`lastKnownPermissionsReadiness == nil`), `.statusChanged`
-    /// на нём не публикуется — сравнивать было бы не с чем.
-    func observePermissionsChanges(_ stream: AsyncStream<PermissionSnapshot>) async {
-        for await snapshot in stream {
-            let currentSettings = (try? await settings()) ?? AppSettings.slice1Defaults
-            let newReadiness = permissionsReady(snapshot: snapshot, settings: currentSettings)
-            publish(.permissionsChanged(snapshot))
-            if let previous = lastKnownPermissionsReadiness, previous != newReadiness {
-                publish(.statusChanged(await status()))
-            }
-            lastKnownPermissionsReadiness = newReadiness
+    /// подписчик без единого вызова не даёт побочных эффектов.
+    ///
+    /// `lastKnownPermissionsReadiness == nil` (первый снимок вообще) ТОЖЕ публикует
+    /// `.statusChanged`, не только заводит базу (возврат РП, повторная приёмка 11:05 UTC,
+    /// находка 1): настоящий `PermissionsPort` (`Permissions/Broadcaster.swift`, C-007)
+    /// начального снимка при подписке не шлёт — отдаёт только последующие изменения. Значит
+    /// самый первый пришедший в `changes()` снимок УЖЕ И ЕСТЬ настоящая смена права
+    /// относительно того, что было на старте, а не просто повод один раз запомнить число, —
+    /// «неизвестно, значит изменилось» — тот же приём, что `updateSettings` применяет к
+    /// `previousReadiness == nil` (`AppFacadeImpl+Settings.swift`).
+    func handlePermissionsChange(_ snapshot: PermissionSnapshot) async {
+        let currentSettings = (try? await settings()) ?? AppSettings.slice1Defaults
+        let newReadiness = permissionsReady(snapshot: snapshot, settings: currentSettings)
+        publish(.permissionsChanged(snapshot))
+        if lastKnownPermissionsReadiness == nil || lastKnownPermissionsReadiness != newReadiness {
+            publish(.statusChanged(await status()))
         }
+        lastKnownPermissionsReadiness = newReadiness
     }
 }

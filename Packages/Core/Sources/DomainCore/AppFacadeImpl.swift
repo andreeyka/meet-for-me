@@ -101,9 +101,20 @@ public actor AppFacadeImpl: AppFacade {
         // `AppEventBroadcaster.subscribe()`), поэтому ни один снимок, отправленный сразу после
         // конструирования, не потеряется, даже если фоновая `Task` ниже ещё не дошла до
         // `for await` (буфер `AsyncStream` по умолчанию не ограничен). См.
-        // `AppFacadeImpl+PermissionsObservation.swift` за телом цикла.
+        // `AppFacadeImpl+PermissionsObservation.swift` за телом обработчика одного снимка.
+        //
+        // Возврат РП (повторная приёмка 11:05 UTC, находка 4): `[weak self]`, не сильный
+        // захват, — бессрочная `Task` иначе держит актор живым весь процесс, даже когда его
+        // больше никто не держит (тестовая фикстура, например), и не даёт ему освободиться.
+        // `self` берётся заново на КАЖДОЕ пришедшее событие, а не один раз перед циклом, —
+        // между событиями Task не держит актор вовсе.
         let permissionChanges = permissions.changes()
-        Task { await self.observePermissionsChanges(permissionChanges) }
+        Task { [weak self] in
+            for await snapshot in permissionChanges {
+                guard let self else { return }
+                await self.handlePermissionsChange(snapshot)
+            }
+        }
     }
 
     /// Отказ методов, которых эта часть PR не реализует — см. заголовок файла.

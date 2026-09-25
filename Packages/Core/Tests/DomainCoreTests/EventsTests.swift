@@ -295,15 +295,36 @@ final class EventsTests: XCTestCase {
 
     // MARK: - К34 (инв. 16): два независимых подписчика, подписка после уже произошедшего события
 
-    /// Возврат РП (приёмка 10:15 UTC, «мелочи»): событие ДО подписки и событие ПОСЛЕ —
-    /// разных видов (`.meetingsChanged`/`.statusChanged`, не дважды одно и то же) — иначе
-    /// подделка «новому подписчику повторяется последнее событие» тоже давала бы
-    /// `.meetingsChanged` и проходила бы тест незамеченной.
+    /// Возврат РП (приёмка 10:15 UTC, «мелочи»; повторная приёмка 11:05 UTC, находка 2):
+    /// событие ДО подписки и событие ПОСЛЕ — разных видов, и оба — ОДНОГО события каждое,
+    /// не только «разных по имени первого случая». Первая редакция брала `syncCalendars` до
+    /// подписки — тогда ЕГО ПОСЛЕДНИМ событием тоже был `.statusChanged` (К33, находка 4),
+    /// того же вида, что и `startRecording` после подписки, — подделка «новому подписчику
+    /// повторяется последнее событие» дала бы `.statusChanged` и в этом случае тоже, и тест
+    /// её не поймал бы. `clearSpeaker` до подписки публикует РОВНО ОДНО событие,
+    /// `.transcriptChanged`, — гарантированно другого вида, чем `.statusChanged` после.
     func test_k34_twoSubscribers_missEventBeforeSubscription_thenSeeSameSequence() async throws {
         let fixture = makeFixture()
+        let word = try Transcript.Word(startMs: 0, endMs: 800, text: "слово", confidence: nil, original: nil)
+        let segment = try Transcript.Segment(
+            startMs: 0, endMs: 800, channel: .system, speakerCluster: 0,
+            text: "текст", textOriginal: nil, textConfidence: nil, words: [word]
+        )
+        let speaker = try Transcript.Speaker(
+            cluster: 0, embedding: [0.1, 0.2], embeddingModelVersion: "v1", totalMs: 800
+        )
+        let transcript = try Transcript(
+            recordingId: UUID(), language: "ru", engine: "engine", modelVersion: "1.0",
+            createdAt: Date(timeIntervalSince1970: 0), segments: [segment], speakers: [speaker]
+        )
+        let header = try await fixture.repositories.transcripts.save(transcript)
+        fixture.attribution.forcedResult = AttributionResult(
+            transcriptId: header.id, assignments: [], segmentUpdates: [], textCorrections: [], profileUpdates: []
+        )
+
         // До подписки — ни одному будущему подписчику не достанется (не буферизуется).
-        // syncCalendars публикует .meetingsChanged + .statusChanged (оба вне зоны видимости).
-        _ = await fixture.facade.syncCalendars()
+        // clearSpeaker публикует ровно одно .transcriptChanged.
+        try await fixture.facade.clearSpeaker(transcriptId: header.id, cluster: 0)
 
         let streamA = fixture.facade.events()
         let streamB = fixture.facade.events()
@@ -317,7 +338,7 @@ final class EventsTests: XCTestCase {
         XCTAssertEqual(resultB.count, 1, "подписчик B: \(resultB)")
         guard case .statusChanged = resultA.first, case .statusChanged = resultB.first else {
             return XCTFail(
-                "оба подписчика ожидали ровно .statusChanged (не .meetingsChanged до подписки): " +
+                "оба подписчика ожидали ровно .statusChanged (не .transcriptChanged до подписки): " +
                 "A=\(resultA) B=\(resultB)"
             )
         }
