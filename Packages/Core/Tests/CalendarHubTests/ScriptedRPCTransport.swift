@@ -7,7 +7,10 @@
 //  способ смоделировать зависший вызов плагина на stdio-пути для `raceTimeout`.
 //  `resolvePendingHang(with:)` (МЕЕ-386, К12) — отпускает зависание настоящим кадром-ответом,
 //  не отменой задачи: держит первый вызов «без ответа» ровно до нужного момента теста, вместо
-//  того чтобы моделировать реальное зависание плагина.
+//  того чтобы моделировать реальное зависание плагина. `receive()`'s `.hang`-ветка проверяет
+//  `Task.isCancelled` под замком ДО сохранения `pendingHang` (возврат РП, комментарий 09:15) —
+//  без этого отмена, пришедшая РАНЬШЕ, чем замыкание успело сохранить continuation, терялась
+//  бы, и повисший вызов пережил бы саму отмену.
 //
 //  Модуль: calendar-hub · Владелец: DEV-1 · Слой: домен (тестовая оснастка)
 
@@ -81,9 +84,23 @@ final class ScriptedRPCTransport: RPCTransport, @unchecked Sendable {
         case .frame(let frame):
             return frame
         case .hang:
+            // Возврат РП (MEE-386, комментарий 09:15): проверка `Task.isCancelled` ЗДЕСЬ, под
+            // тем же замком, ДО сохранения `pendingHang` — тот же приём, что уже решает ровно
+            // эту гонку в `TestSupport.swift`, `FakeWaitSeam.sleep(for:)` («отмена пришла
+            // раньше, чем замыкание успело сохранить continuation»). Без неё `onCancel` мог бы
+            // сработать первым, застать `pendingHang == nil` (снимать ещё нечего) и не сделать
+            // ничего, а замыкание чуть позже всё равно сохранило бы continuation, которого уже
+            // некому разбудить — `receive()` повис бы навсегда вместо немедленной отмены.
             return try await withTaskCancellationHandler {
                 try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<String, Error>) in
-                    locked { pendingHang = continuation }
+                    let alreadyCancelled = locked { () -> Bool in
+                        guard !Task.isCancelled else { return true }
+                        pendingHang = continuation
+                        return false
+                    }
+                    if alreadyCancelled {
+                        continuation.resume(throwing: CancellationError())
+                    }
                 }
             } onCancel: {
                 let toResume = locked { () -> CheckedContinuation<String, Error>? in

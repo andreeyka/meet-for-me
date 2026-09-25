@@ -32,26 +32,36 @@ final class StdioProtocolTimeoutShutdownTests: XCTestCase {
         // Не типизированный `catch let error as CalendarError` — тот не исчерпывающий (любой
         // ДРУГОЙ тип ошибки ушёл бы дальше, и компилятор считает всё замыкание бросающим,
         // требуя `try` на каждом чтении `async let` ниже, хотя оно логически не бросает).
-        async let outcome: CalendarError? = {
+        //
+        // Возврат РП (MEE-386, комментарий 09:15): `transport.sent` читается ЗДЕСЬ, внутри
+        // `catch`, в момент фактической поимки ошибки — не снаружи `async let` уже ПОСЛЕ
+        // того, как обе стороны (тест и вызов) синхронизировались через `await outcome`.
+        // Читать снаружи технически даёт то же значение сегодня (`shutdown()` — `await`, не
+        // `Task.detached`, поэтому кадр уже ушёл к моменту throw), но привязывает проверку к
+        // фактическому моменту throw, а не к случайно совпадающему более позднему состоянию.
+        async let outcome: (error: CalendarError?, sentAtThrow: [String]) = {
             do {
                 _ = try await hub.listCalendars(source: StdioHarness.source)
-                return nil
+                return (nil, transport.sent)
             } catch {
-                return error as? CalendarError
+                return (error as? CalendarError, transport.sent)
             }
         }()
 
         await pollUntil { waitSeam.durations.contains(.seconds(30)) }
         await pollUntil { waitSeam.resolveNext() }
 
-        guard case .timeout = await outcome else {
-            return XCTFail("ожидался .timeout, получено \(String(describing: await outcome))")
+        let result = await outcome
+        guard case .timeout = result.error else {
+            return XCTFail("ожидался .timeout, получено \(String(describing: result.error))")
         }
 
-        XCTAssertEqual(transport.sent.count, 3, "initialize, listCalendars, shutdown — по одному разу каждый")
-        XCTAssertTrue(transport.sent[1].contains(#""method":"listCalendars""#))
+        XCTAssertEqual(
+            result.sentAtThrow.count, 3, "initialize, listCalendars, shutdown — по одному разу каждый"
+        )
+        XCTAssertTrue(result.sentAtThrow[1].contains(#""method":"listCalendars""#))
         XCTAssertTrue(
-            transport.sent[2].contains(#""method":"shutdown""#),
+            result.sentAtThrow[2].contains(#""method":"shutdown""#),
             "shutdown ушёл ДО того, как .timeout вернулся вызывающей стороне"
         )
     }
