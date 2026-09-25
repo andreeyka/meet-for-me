@@ -92,7 +92,16 @@ public actor SessionMachine: SessionCoordinator {
     /// в захват не разбирая; средство — `FileLayout` (C-010 §1) — в дереве не объявлено
     /// вовсе. Взято по конвенции §3 правил проекта: каталог приходит функцией от
     /// `recordingId`, машина его не строит и не читает. Разбор и цена — в отчёте MEE-300.
-    let recordingDirectory: @Sendable (UUID) -> URL
+    ///
+    /// `async throws` добавлены MEE-440 (возврат РП, MEE-434 09:15 UTC): замыкание — тонкая
+    /// обвязка над `RecordingRepository.createDirectory(recordingId:)` (сам порт — `async
+    /// throws`, как и весь остальной `RecordingRepository`), которая обязана бросать
+    /// `StorageError.io` на отказе файловой системы, а не молча возвращать URL несуществующего
+    /// каталога (composition root раньше глотал этот отказ `try?`). Существующие замыкания
+    /// (продакшн и тесты), ни одно не асинхронное и не бросающее, остаются валидны без правки —
+    /// Swift сам приводит `(UUID) -> URL` к `(UUID) async throws -> URL` на месте передачи
+    /// значения.
+    let recordingDirectory: @Sendable (UUID) async throws -> URL
 
     /// `input`, `systemFormat`, `micFormat` `CaptureRequest`: ни C-018, ни `AppSettings`
     /// (C-016 §2) не называют для них ни значения, ни источника. Тот же исход, тот же
@@ -163,7 +172,7 @@ public actor SessionMachine: SessionCoordinator {
         power: PowerPort,
         settings: AppSettings,
         weights: SignalWeights,
-        recordingDirectory: @escaping @Sendable (UUID) -> URL,
+        recordingDirectory: @escaping @Sendable (UUID) async throws -> URL,
         captureInput: InputSelection,
         systemFormat: TrackFormat,
         micFormat: TrackFormat

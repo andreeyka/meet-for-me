@@ -100,6 +100,24 @@ final class GRDBRecordingRepository: RecordingRepository {
         )
     }
 
+    // MARK: - Создание каталога (MEE-440)
+
+    /// Симметрично `delete(recordingId:deleteFiles:)` ниже: та же `fileLayout`, та же
+    /// ошибка (`StorageError.io`) на отказе файловой системы, не `try?`. `FileManager.
+    /// createDirectory(withIntermediateDirectories: true)` — идемпотентно само по себе
+    /// (Apple: уже существующий каталог — не отказ), отдельной проверки `fileExists` перед
+    /// созданием тут не нужно, в отличие от `delete`, которому проверка нужна, чтобы не
+    /// бросить на НЕсуществующем каталоге.
+    func createDirectory(recordingId: UUID) async throws -> URL {
+        let directoryURL = fileLayout.recordingDirectory(recordingId.uuidString)
+        do {
+            try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+        } catch {
+            throw StorageError.io(message: String(describing: error))
+        }
+        return directoryURL
+    }
+
     // MARK: - Удаление
 
     func delete(recordingId: UUID, deleteFiles: Bool) async throws {

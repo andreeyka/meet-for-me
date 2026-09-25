@@ -56,13 +56,16 @@ extension PortDeclarationTests {
         "func delete(meetingIds: [UUID]) async throws"
     ]
 
+    /// `createDirectory` — C-010 v7 §5, MEE-440 (находка РП на приёмке composition root,
+    /// MEE-434, 09:15 UTC): симметрично `delete`, который уже владел файловым циклом каталога.
     static let recordingRepository = [
         "func save(_ record: RecordingRecord) async throws",
         "func recording(id: UUID) async throws -> RecordingRecord?",
         "func recordings(meetingId: UUID) async throws -> [RecordingRecord]",
         "func unfinalized() async throws -> [RecordingRecord]",
         "func adHoc() async throws -> [RecordingRecord]",
-        "func delete(recordingId: UUID, deleteFiles: Bool) async throws"
+        "func delete(recordingId: UUID, deleteFiles: Bool) async throws",
+        "func createDirectory(recordingId: UUID) async throws -> URL"
     ]
 
     /// `applyTextCorrections` — C-010 v19, инвариант 32 (IR-129, MEE-388, MEE-392).

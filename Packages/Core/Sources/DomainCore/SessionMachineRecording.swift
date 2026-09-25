@@ -44,7 +44,7 @@ extension SessionMachine {
         let request = CaptureRequest(
             recordingId: recordingId,
             meetingId: session.meetingId,
-            directory: recordingDirectory(recordingId),
+            directory: try await recordingDirectory(recordingId),
             group: target,
             input: captureInput,
             systemFormat: systemFormat,
