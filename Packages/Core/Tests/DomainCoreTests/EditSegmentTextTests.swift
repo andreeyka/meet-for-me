@@ -48,6 +48,7 @@ final class EditSegmentTextTests: XCTestCase {
             modelCatalog: FakeModelCatalogPort(),
             calendar: FakeCalendarPort(),
             sessionCoordinator: NoOpSessionCoordinator(),
+            settings: repositories.settings,
             clock: { Date() }
         )
         return Fixture(facade: facade, repositories: repositories, transcriptId: header.id, segmentId: segmentId)

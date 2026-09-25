@@ -30,17 +30,13 @@
 //
 //  `status()` — минимальная, честно неполная реализация: `activeSession`/`connectors`
 //  оставлены пустыми (группы Р/О ещё не реализованы), `permissionsReady` — консервативное
-//  `.notReady` (не вычисляется без `AppSettings`, которую `settings()` пока не умеет
-//  читать — см. ниже), `upcoming`/счётчики задач — нули/пусто до групп Н/К. Ни одно поле
-//  не изобретает данных, которых порты не дали.
+//  `.notReady` (инв. 26 — вычисление из снимка прав и действующих настроек — предмет
+//  своей, ещё не сделанной группы К плана MEE-410, не этой), `upcoming`/счётчики задач —
+//  нули/пусто до групп Н/К. Ни одно поле не изобретает данных, которых порты не дали.
 //
-//  `settings()`/`updateSettings` НЕ реализованы вовсе (бросают `notImplemented`), а не
-//  частично: `AppSettings.slice1Defaults` не объявлен (находка MEE-289, сообщена
-//  архитектору в `AppSettings.swift`, актуальна и здесь) — семь из двенадцати полей не
-//  имеют значения по умолчанию, названного текстом контракта. `settings()` без строки в
-//  `SettingsRepository` обязан вернуть эти умолчания (§2.1); подставить их самостоятельно
-//  значило бы изобрести продуктовое решение, которого контракт не называет. Ждёт ответа
-//  архитектора, тем же приёмом, что и весь этот пробел с момента MEE-289.
+//  `settings()`/`updateSettings()` (группа Ж) реализованы отдельным файлом,
+//  `AppFacadeImpl+Settings.swift` (MEE-425) — `AppSettings.slice1Defaults` объявлен
+//  (`AppSettings.swift`, IR-105 закрыт C-016 v10).
 
 import Foundation
 
@@ -54,6 +50,7 @@ public actor AppFacadeImpl: AppFacade {
     let modelCatalog: ModelCatalogPort
     let calendar: CalendarPort
     let sessionCoordinator: SessionCoordinator
+    let settingsRepository: SettingsRepository
     let clock: @Sendable () -> Date
 
     nonisolated let broadcaster = AppEventBroadcaster()
@@ -67,6 +64,7 @@ public actor AppFacadeImpl: AppFacade {
         modelCatalog: ModelCatalogPort,
         calendar: CalendarPort,
         sessionCoordinator: SessionCoordinator,
+        settings: SettingsRepository,
         clock: @escaping @Sendable () -> Date = { Date() }
     ) {
         self.meetingRepository = meetings
@@ -77,6 +75,7 @@ public actor AppFacadeImpl: AppFacade {
         self.modelCatalog = modelCatalog
         self.calendar = calendar
         self.sessionCoordinator = sessionCoordinator
+        self.settingsRepository = settings
         self.clock = clock
     }
 
