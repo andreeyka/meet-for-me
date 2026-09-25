@@ -68,8 +68,10 @@ public struct AppSettings: Codable, Equatable, Sendable {
 
     /// К53 перечня MEE-401 (дельта АА): семь значений, которые контракт называет сам —
     /// `armLeadSeconds`/`askLeadSeconds`/`missingSignalGraceSeconds`/`silenceStopSeconds`
-    /// (§2, дословные числа), `audioRetentionDays`/`voiceProfilesEnabled`/`notifyParticipants`
-    /// (architecture.md Q5/Q6 — согласие пользователя требуется явно). Пять оставшихся —
+    /// (§2, дословные числа); `audioRetentionDays` — `nil`, «хранить бессрочно» (§2, дословно,
+    /// без ссылки на архитектурный документ); `voiceProfilesEnabled` — `false` (Q6
+    /// архитектурного документа, согласие пользователя на функцию требуется явно);
+    /// `notifyParticipants` — `false` (Q5 архитектурного документа). Пять оставшихся —
     /// требование к DEV-2 (IR-105): architecture.md решения по ним не содержит вовсе, а
     /// `defaultProfileId` не может быть архитектурным решением в принципе — зависит от
     /// каталога моделей C-014 на конкретной машине. К54/К55 проверяют факт присвоения и

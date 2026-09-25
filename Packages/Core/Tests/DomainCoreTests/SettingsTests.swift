@@ -49,6 +49,19 @@ final class SettingsTests: XCTestCase {
         )
     }
 
+    /// Ещё одно отличимое значение, отличное и от `slice1Defaults`, И от `distinctSettings()`
+    /// — К24 (возврат РП, `4d1d45a5`) нужно ВТОРОЕ значение для отказавшего вызова поверх уже
+    /// непустого, не умолчательного хранилища, чтобы откат на удаление ключа отличался от
+    /// отката на восстановление прежнего значения (на пустом хранилище оба совпадают).
+    private static func otherDistinctSettings() -> AppSettings {
+        AppSettings(
+            recordingPolicy: .auto, armLeadSeconds: 200, askLeadSeconds: 40,
+            missingSignalGraceSeconds: 950, silenceStopSeconds: 350, defaultProfileId: "profile-y",
+            processOnACPowerOnly: false, processWhileRecording: false, audioRetentionDays: 30,
+            voiceProfilesEnabled: false, notifyParticipants: false, launchAtLogin: false
+        )
+    }
+
     // MARK: - К21 (§2.1, «строки нет — берётся значение из slice1Defaults»)
 
     func test_k21_settingsReturnSliceDefaultsWhenNoRowsExist() async throws {
@@ -91,8 +104,53 @@ final class SettingsTests: XCTestCase {
         )
     }
 
+    // MARK: - Возврат РП (MEE-425, комментарий `4d1d45a5`): инв. 19 у settingsField
+
+    /// `settingsField` раньше ловил только `StorageError` — прочая ошибка хранилища уходила
+    /// из `settings()` наружу СВОИМ типом, нарушая инв. 19 («ошибка нижнего слоя не пропускает
+    /// наружу свой тип, признак — не перечень имён»). `FailingSettingsRepository` бросает
+    /// заведомо постороннюю ошибку (не `StorageError`) — `settings()` обязана завернуть её в
+    /// `AppFacadeError.underlying`, тем же путём, что `updateSettings(_:)` уже делает своим
+    /// внешним `catch`.
+    func test_settingsWrapsNonStorageErrorFromRepositoryAsAppFacadeError() async throws {
+        let repositories = InMemoryRepositories()
+        let facade = AppFacadeImpl(
+            meetings: repositories.meetings,
+            recordings: repositories.recordings,
+            transcripts: repositories.transcripts,
+            persons: repositories.persons,
+            permissions: FakePermissionsPort(startingStatus: .granted, startingOutcome: .granted, checkedAt: Date()),
+            modelCatalog: FakeModelCatalogPort(),
+            calendar: FakeCalendarPort(),
+            sessionCoordinator: NoOpSessionCoordinator(),
+            settings: FailingSettingsRepository(),
+            clock: { Date() }
+        )
+
+        do {
+            _ = try await facade.settings()
+            XCTFail("ожидался AppFacadeError")
+        } catch let error as AppFacadeError {
+            guard case .underlying(let view) = error else {
+                return XCTFail("ожидался .underlying, получено \(error)")
+            }
+            XCTAssertTrue(
+                view.message.contains(FailingSettingsRepository.failureMessage),
+                "сообщение постороннней ошибки сохранено: \(view.message)"
+            )
+        } catch {
+            XCTFail("ожидался AppFacadeError, получено \(error)")
+        }
+    }
+
     // MARK: - К23 (§2.1, «ключ — имя поля, значение — DomainJSON.encode»; round-trip)
 
+    /// Возврат РП (MEE-425, комментарий `4d1d45a5`): имя ключа раньше сверялось только у
+    /// `recordingPolicy` — двенадцать ключей выписаны строками ДВАЖДЫ (`settings()` и
+    /// `settingsEntries(for:)`), и одинаковая опечатка в обоих местах (например,
+    /// `"launchOnLogin"` вместо `"launchAtLogin"`) прошла бы этот тест молча. `Mirror(reflecting:
+    /// settings).children` даёт метки полей НЕЗАВИСИМО от обоих мест — не третье переписывание
+    /// того же перечня, а получение состава прямо из значения через рефлексию.
     func test_k23_updateSettingsRoundTripsKeyAndDomainJSON() async throws {
         let fixture = makeFixture()
         let settings = Self.distinctSettings()
@@ -103,6 +161,13 @@ final class SettingsTests: XCTestCase {
         let decoded = try DomainJSON.decode(AppSettings.RecordingPolicy.self, from: XCTUnwrap(raw))
         XCTAssertEqual(decoded, .manual, "ключ строки — дословно имя поля \"recordingPolicy\", lowerCamelCase")
 
+        let writtenKeys = Set(fixture.repositories.settings.storedKeys)
+        let fieldLabels = Set(Mirror(reflecting: settings).children.compactMap(\.label))
+        XCTAssertEqual(
+            writtenKeys, fieldLabels,
+            "множество записанных ключей равно меткам полей AppSettings — ловит опечатку ключа в любом месте"
+        )
+
         let roundTripped = try await fixture.facade.settings()
         XCTAssertEqual(roundTripped, settings, "запись, прочитанная обратно, даёт равное значение")
     }
@@ -112,25 +177,35 @@ final class SettingsTests: XCTestCase {
     /// Отказ на третьем по порядку ключе (`askLeadSeconds` — `recordingPolicy`,
     /// `armLeadSeconds` идут раньше него в `AppSettings.init`, тот же порядок, что
     /// `settingsEntries(for:)`) — тот же пример, что называет сам перечень MEE-401.
+    ///
+    /// Возврат РП (MEE-425, комментарий `4d1d45a5`): откат раньше проверялся только на
+    /// ПУСТОМ хранилище — там «восстановить прежнее» и «удалить ключ» неотличимы (прежнего
+    /// значения не было вовсе). Здесь хранилище ПРЕДВАРИТЕЛЬНО заполнено не умолчательными
+    /// значениями (`original`, первый успешный `updateSettings`), и только ВТОРОЙ вызов
+    /// (другим значением, `otherDistinctSettings()`) отказывает на середине — откат удалением
+    /// ключа дал бы `settings()` смесь `original`/`slice1Defaults`, не `original` целиком.
     func test_k24_updateSettingsAtomicOnPartialWriteFailure() async throws {
         let fixture = makeFixture()
+        let original = Self.distinctSettings()
+        try await fixture.facade.updateSettings(original)
+
         fixture.repositories.settings.fail(with: .io(message: "диск недоступен"), on: .setValue, id: "askLeadSeconds")
 
         do {
-            try await fixture.facade.updateSettings(Self.distinctSettings())
+            try await fixture.facade.updateSettings(Self.otherDistinctSettings())
             XCTFail("ожидался отказ записи")
         } catch {
             // Ожидаемо — конкретный код здесь не предмет критерия, предмет ниже.
         }
 
         XCTAssertEqual(
-            fixture.repositories.settings.storedKeys, [],
-            "два уже записанных ключа (recordingPolicy, armLeadSeconds) откачены — ни один не остался"
+            fixture.repositories.settings.storedKeys.count, 12,
+            "откат ВОССТАНОВИЛ прежние значения двух уже записанных ключей — ключей не убавилось"
         )
         let afterFailure = try await fixture.facade.settings()
         XCTAssertEqual(
-            afterFailure, AppSettings.slice1Defaults,
-            "состояние равно тому, что было до вызова — частично применённых настроек не бывает"
+            afterFailure, original,
+            "состояние равно тому, что было ДО второго вызова (непустое, не умолчания) — не бывает частично применённых"
         )
     }
 
@@ -196,17 +271,43 @@ final class SettingsTests: XCTestCase {
         block.firstIndex { $0.contains(marker) }
     }
 
-    /// Комментарий «на месте» — либо на самой строке присвоения (после `//`), либо на
-    /// непосредственно предшествующей строке (стиль `slice1Defaults` в этом файле — комментарий
-    /// строкой выше поля, которое он поясняет). Пусто, если нет ни того, ни другого.
+    /// Комментарий «на месте» — либо на самой строке присвоения (после `//`), либо ВЕСЬ
+    /// непрерывный блок `//`-строк непосредственно перед ней (стиль `slice1Defaults` в этом
+    /// файле — многострочный комментарий над полем, которое он поясняет), не только
+    /// последняя строка блока. Возврат РП (MEE-425, комментарий `4d1d45a5`): одна строка —
+    /// хрупко при переносе строк в комментарии; собирает от присвоения вверх, пока строки
+    /// начинаются с `//`, и склеивает в исходном порядке. Пусто, если нет ни того, ни другого.
     private static func precedingComment(before lineIndex: Int, in block: [String]) -> String {
         if let range = block[lineIndex].range(of: "//") {
             let inline = String(block[lineIndex][range.upperBound...]).trimmingCharacters(in: .whitespaces)
             if !inline.isEmpty { return inline }
         }
-        guard lineIndex > 0 else { return "" }
-        let previous = block[lineIndex - 1].trimmingCharacters(in: .whitespaces)
-        guard previous.hasPrefix("//") else { return "" }
-        return String(previous.dropFirst(2)).trimmingCharacters(in: .whitespaces)
+        var collected: [String] = []
+        var index = lineIndex - 1
+        while index >= 0 {
+            let trimmed = block[index].trimmingCharacters(in: .whitespaces)
+            guard trimmed.hasPrefix("//") else { break }
+            collected.append(String(trimmed.dropFirst(2)).trimmingCharacters(in: .whitespaces))
+            index -= 1
+        }
+        return collected.reversed().joined(separator: " ")
     }
+}
+
+/// `SettingsRepository`, чей `value(forKey:)` бросает заведомо ПОСТОРОННЮЮ ошибку (не
+/// `StorageError`) — единственный способ проверить, что `settingsField` заворачивает её в
+/// `AppFacadeError`, а не пропускает своим типом (инв. 19). `InMemorySettingsRepository.fail(
+/// with:on:)` для этого не годится: она типизирована на `StorageError` буквально в сигнатуре.
+private struct FailingSettingsRepository: SettingsRepository {
+    struct Opaque: Error {
+        let message: String
+    }
+
+    static let failureMessage = "постороннее хранилище отказало (не StorageError)"
+
+    func value(forKey key: String) async throws -> Data? {
+        throw Opaque(message: Self.failureMessage)
+    }
+
+    func setValue(_ value: Data?, forKey key: String) async throws {}
 }

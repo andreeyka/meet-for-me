@@ -7,11 +7,17 @@
 //  ОТОБРАЖЕНИЕ КЛЮЧ↔ПОЛЕ — ЗДЕСЬ, ОДНИМ МЕСТОМ, ДВАЖДЫ (§2.1: «правило выводит состав
 //  ключей из объявления… одно названное место — объявление AppSettings в §2»). Список
 //  двенадцати ключей не выписан отдельной таблицей нигде — он есть аргументы вызова
-//  `AppSettings.init` в `settings()` и `settingsEntries(for:)` в `updateSettings(_:)`,
-//  ОБА привязаны к сигнатуре `AppSettings.init` компилятором: добавление, переименование
-//  или смена типа поля в `AppSettings.swift` не пройдёт компиляцию ни здесь, ни там, пока
-//  оба места не поправлены вместе с ним — тот же эффект, которого требовал бы явный
-//  перечень, без второго источника истины сверх самого `AppSettings.init`.
+//  `AppSettings.init` в `settings()` и `settingsEntries(for:)` в `updateSettings(_:)`.
+//
+//  Возврат РП (MEE-425, комментарий `4d1d45a5`): компилятор здесь проверяет не всё —
+//  добавление, переименование или смена ТИПА поля `AppSettings.init` действительно не
+//  пройдёт компиляцию ни здесь, ни там (значения передаются доступом к самому полю,
+//  `settings.recordingPolicy`, а не строкой). Но СТРОКА `key:` — обычный `String`-литерал,
+//  и одинаковая опечатка в обоих местах (например, `"launchOnLogin"` вместо
+//  `"launchAtLogin"`) компилируется чисто и молча расходится с C-013/C-015, которые читают
+//  ключи напрямую, строкой. Эту половину проверяет не компилятор, а тест К23
+//  (`SettingsTests.swift`) — сверкой множества записанных ключей с `Mirror(reflecting:
+//  settings).children`, а не переписыванием того же перечня третий раз.
 //
 //  ПОРЯДОК КЛЮЧЕЙ В `settingsEntries(for:)` — порядок полей `AppSettings.init` (§2, дословно).
 //  Значим для К24 (атомарность на «третьем по порядку ключе» — сам порядок должен что-то
@@ -149,6 +155,11 @@ extension AppFacadeImpl {
     /// Читает один ключ, декодирует в объявленный тип поля — `nil` (строки нет) даёт
     /// `defaultValue` (§2.1); байты есть, но не разбираются `DomainJSON` в этот тип — бросает
     /// `settingsUnreadable(key:)` (инв. 28), не подставляя `defaultValue`.
+    ///
+    /// Возврат РП (MEE-425, комментарий `4d1d45a5`): раньше здесь ловился только `StorageError`
+    /// — прочая ошибка хранилища уходила наружу как есть, нарушая инв. 19 («ошибка нижнего
+    /// слоя не пропускает наружу свой тип, признак — не перечень имён»). Общий `catch` ниже
+    /// закрывает это тем же путём, что уже делает `updateSettings(_:)` своим внешним `catch`.
     private func settingsField<Value: Codable>(
         _ type: Value.Type, key: String, default defaultValue: Value
     ) async throws -> Value {
@@ -157,6 +168,8 @@ extension AppFacadeImpl {
             data = try await settingsRepository.value(forKey: key)
         } catch let error as StorageError {
             throw wrap(error)
+        } catch {
+            throw wrapUnexpected(error)
         }
         guard let data else { return defaultValue }
         guard let decoded = try? DomainJSON.decode(Value.self, from: data) else {
