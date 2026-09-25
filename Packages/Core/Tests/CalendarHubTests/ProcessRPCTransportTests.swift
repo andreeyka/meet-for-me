@@ -198,6 +198,29 @@ final class ProcessRPCTransportTests: XCTestCase {
             await transport.close()
         }
     }
+
+    /// DEBUG-TEMP (диагностика возврата РП 06:35 UTC — снять после диагностики): печатает в
+    /// stderr самого раннера маску заблокированных/игнорируемых сигналов РЕБЁНКА сразу после
+    /// `exec`, до того как он что-либо делает. Проверяет гипотезу «SIGTERM заблокирован в
+    /// потоке, из которого зовётся `process.run()`, и ребёнок наследует эту маску через `exec`
+    /// (POSIX сохраняет маску блокировки через `exec`, в отличие от диспозиции обработчиков)».
+    /// `>&2` — `grep` иначе пишет в stdout, который здесь занят протоколом кадров транспорта.
+    func test_debugTempLinuxSignalMaskDiagnostic() async throws {
+        try await withHangGuard {
+            let transport = try ProcessRPCTransport(
+                executablePath: "/usr/bin/env",
+                arguments: [
+                    "sh", "-c",
+                    "grep SigBlk /proc/self/status >&2; grep SigIgn /proc/self/status >&2; exec cat",
+                ],
+                onStderrLine: { line in
+                    FileHandle.standardError.write(Data("[PRT-SIGMASK-DEBUG] \(line)\n".utf8))
+                }
+            )
+            try await Task.sleep(for: .milliseconds(200))
+            await transport.close()
+        }
+    }
 }
 
 /// Строка из блоков по 4 КиБ, каждый начинается со своего десятичного индекса — соседние
