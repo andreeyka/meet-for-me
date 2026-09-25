@@ -55,7 +55,8 @@ final class CursorOrderingTests: XCTestCase {
             "delete пакета применён ДО сохранения его курсора"
         )
         XCTAssertEqual(harness.connectorRepository.storedRecords.first?.cursor, "abc123")
-        XCTAssertNil(try await harness.hub.event(id: existingId), "evt-old удалён")
+        let deletedEvent = try await harness.hub.event(id: existingId)
+        XCTAssertNil(deletedEvent, "evt-old удалён")
     }
 
     /// Единственный источник записи `externalId` — `delete()` целиком, не частичное
