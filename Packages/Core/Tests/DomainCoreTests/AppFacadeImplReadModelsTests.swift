@@ -59,8 +59,8 @@ final class AppFacadeImplReadModelsTests: XCTestCase {
         let fixture = makeFacade()
         let facade = fixture.facade
         let repositories = fixture.repositories
-        let earlierId = UUID(uuidString: "00000000-0000-0000-0000-000000000002")!
-        let laterId = UUID(uuidString: "00000000-0000-0000-0000-000000000001")!
+        let earlierId = UUID(uuidString: "00000000-0000-0000-0000-000000000001")!
+        let laterId = UUID(uuidString: "00000000-0000-0000-0000-000000000002")!
         let sameStart = epoch.addingTimeInterval(600)
         let firstId = UUID(uuidString: "00000000-0000-0000-0000-000000000099")!
         let events = try [
@@ -202,7 +202,7 @@ final class AppFacadeImplReadModelsTests: XCTestCase {
         let speakers = try [Transcript.Speaker(cluster: 0, embedding: nil, embeddingModelVersion: nil, totalMs: 1_000)]
         let segments = try [
             Transcript.Segment(
-                startMs: 0, endMs: 200, channel: .mic, speakerCluster: 0,
+                startMs: 0, endMs: 200, channel: .system, speakerCluster: 0,
                 text: "тихо громко", textOriginal: nil, textConfidence: 0.5, words: [lowWord, highWord]
             )
         ]
@@ -272,7 +272,7 @@ final class AppFacadeImplReadModelsTests: XCTestCase {
 
     private func segment(startMs: Int, endMs: Int, cluster: Int, text: String) throws -> Transcript.Segment {
         try Transcript.Segment(
-            startMs: startMs, endMs: endMs, channel: .mic, speakerCluster: cluster,
+            startMs: startMs, endMs: endMs, channel: .system, speakerCluster: cluster,
             text: text, textOriginal: nil, textConfidence: 0.9, words: []
         )
     }
@@ -280,7 +280,7 @@ final class AppFacadeImplReadModelsTests: XCTestCase {
     private func manifest(recordingId: UUID, meetingId: UUID?) throws -> RecordingManifest {
         try RecordingManifest(
             recordingId: recordingId, meetingId: meetingId, directoryName: recordingId.uuidString,
-            startedAt: epoch, endedAt: nil,
+            startedAt: epoch, endedAt: epoch.addingTimeInterval(600),
             tracks: [
                 try RecordingManifest.Track(
                     channel: .mic, fileName: "audio-mic.caf", sampleRate: 16_000, channelCount: 1, format: "pcm-caf"
