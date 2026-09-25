@@ -63,8 +63,8 @@ extension AppFacadeImpl {
             return .notFound(entity: "Prompt", id: promptId.uuidString)
         case .noRecordingInProgress(let recordingId):
             return .notFound(entity: "Recording", id: recordingId.uuidString)
-        case .alreadyRecording:
-            return .notAllowed(reason: "цель уже записывается другой сессией")
+        case .alreadyRecording(let sessionId):
+            return .notAllowed(reason: "цель уже записывается другой сессией \(sessionId.uuidString)")
         case .nothingToRecord:
             return .notAllowed(reason: "нет звучащей цели для записи")
         case .sessionIsTerminal(let sessionId, let state):
@@ -79,11 +79,26 @@ extension AppFacadeImpl {
     /// параметрами `String(describing:)` печатает одинаково — именем кейса, за которым для
     /// непустых идёт `(...)`, — так что имя кейса безопасно взять срезом до первой `(`, не
     /// теряя произвольного нового кейса, который добавят позже без правки этой функции.
+    ///
+    /// Инв. 23, §3.1: `permissionKind` заполнен, только когда отказ вызван недостающим
+    /// правом, — `.microphoneDenied` и `.systemAudioDenied` — иначе интерфейс теряет кнопку
+    /// выдачи права. Оба `PromptTimedOut` — это истечение ожидания системного промпта, а не
+    /// отказ права (право уже могло быть предоставлено позже пользователем), поэтому `nil`,
+    /// как и у остальных восьми кейсов.
     func wrap(_ error: CaptureError) -> AppFacadeError {
         let description = String(describing: error)
         let name = description.split(separator: "(", maxSplits: 1).first.map(String.init) ?? description
+        let permissionKind: PermissionKind?
+        switch error {
+        case .microphoneDenied:
+            permissionKind = .microphone
+        case .systemAudioDenied:
+            permissionKind = .systemAudioRecording
+        default:
+            permissionKind = nil
+        }
         return .underlying(AppErrorView(
-            code: "capture.\(name)", message: description, recoverySuggestion: nil, permissionKind: nil
+            code: "capture.\(name)", message: description, recoverySuggestion: nil, permissionKind: permissionKind
         ))
     }
 }
