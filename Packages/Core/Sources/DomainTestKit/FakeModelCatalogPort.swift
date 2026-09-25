@@ -192,7 +192,16 @@ public final class FakeModelCatalogPort: ModelCatalogPort, @unchecked Sendable {
         locked { profilesById.values }.sorted { $0.id < $1.id }
     }
 
+    /// Инвариант 13, дословно: `asrModelId`, которого нет в каталоге, — отказ, профиль не
+    /// сохраняется. Поиск по `id` без версии — тем же приёмом, что `resolve` (шапка, п. 2):
+    /// профиль версии модели не несёт, сверять её здесь не с чем. Только `asrModelId` —
+    /// инвариант 13 называет его один; необязательные роли инвариантом не покрыты (инв. 9:
+    /// «нет в каталоге» для них не ошибка ни на `resolve`, ни здесь).
     public func saveProfile(_ profile: TranscriptionProfile) async throws {
+        let known = locked { descriptorsByKey.keys.contains { $0.id == profile.asrModelId } }
+        guard known else {
+            throw ModelCatalogError.unknownModel(id: profile.asrModelId, version: "")
+        }
         locked { profilesById[profile.id] = profile }
         pushEvent(.profilesChanged)
     }

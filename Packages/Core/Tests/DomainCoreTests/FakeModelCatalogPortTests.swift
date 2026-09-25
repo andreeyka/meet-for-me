@@ -317,7 +317,7 @@ final class FakeModelCatalogPortTests: XCTestCase {
 
 // MARK: - Построители фикстур
 
-private func descriptor(
+func descriptor(
     id: String,
     version: String = "1.0.0",
     sizeBytes: Int64 = 1000,
@@ -341,7 +341,7 @@ private func descriptor(
     )
 }
 
-private func profile(
+func profile(
     id: String,
     asrModelId: String,
     vadModelId: String? = nil,
@@ -361,7 +361,7 @@ private func profile(
     )
 }
 
-private func bundle(modelId: String, version: String = "1.0.0", role: ModelRole) -> ModelBundle {
+func bundle(modelId: String, version: String = "1.0.0", role: ModelRole) -> ModelBundle {
     ModelBundle(
         modelId: modelId, version: version, role: role, runtime: .coreml,
         directoryURL: URL(fileURLWithPath: NSTemporaryDirectory())

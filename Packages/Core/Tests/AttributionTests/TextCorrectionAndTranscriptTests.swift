@@ -5,6 +5,7 @@
 //  расстояние Левенштейна, регистронезависимо — SpeakerAttribution+Similarity): «Анна.» против
 //  формы «Анна» — одна вставка на пять символов, `similarity == 0.8`, ровно порог по умолчанию.
 
+import Foundation
 import XCTest
 import DomainCore
 @testable import Attribution
@@ -40,6 +41,55 @@ final class TextCorrectionAndTranscriptTests: XCTestCase {
             "\(type(of: $1))" == "Transcript"
         }
         XCTAssertFalse(hasTranscriptField, "AttributionResult не обязан и не должен нести Transcript")
+
+        // Мех.-часть (MEE-411, правка по приёмке РП 00:42 UTC на #131): предыдущая версия
+        // сверяла строки, записанные в этом же тесте, — вакуумная проверка, зелёная при
+        // любом изменении протокола. Здесь читается реальный исходник `AttributionPort.swift`
+        // через `#filePath`, тем же приёмом, что `PortDeclarationTests:165` (DomainCoreTests);
+        // копия приёма, не импорт — `AttributionTests` не видит `DomainCoreTests` (разные
+        // таргеты SPM).
+        let requirements = try Self.attributionPortRequirements()
+        XCTAssertEqual(requirements.count, 3, "протокол должен объявлять ровно три метода")
+        for requirement in requirements {
+            XCTAssertFalse(requirement.contains("Transcript"),
+                            "\(requirement) не должна принимать/возвращать Transcript")
+        }
+    }
+
+    /// Тело протокола `AttributionPort` из реального файла, а не из строк этого теста.
+    private static func attributionPortRequirements() throws -> [String] {
+        let url = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Sources/DomainCore/AttributionPort.swift")
+        let text = try String(contentsOf: url, encoding: .utf8)
+        let header = "public protocol AttributionPort: Sendable {"
+        guard let headerRange = text.range(of: header) else {
+            struct HeaderNotFound: Error {}
+            throw HeaderNotFound()
+        }
+        var depth = 1
+        var body = ""
+        var index = headerRange.upperBound
+        while index < text.endIndex, depth > 0 {
+            let character = text[index]
+            if character == "{" { depth += 1 }
+            if character == "}" { depth -= 1 }
+            if depth > 0 { body.append(character) }
+            index = text.index(after: index)
+        }
+        var requirements: [String] = []
+        for rawLine in body.components(separatedBy: .newlines) {
+            let line = (rawLine.components(separatedBy: "//").first ?? "").trimmingCharacters(in: .whitespaces)
+            guard !line.isEmpty else { continue }
+            if line.hasPrefix("func ") {
+                requirements.append(line)
+            } else if !requirements.isEmpty {
+                requirements[requirements.count - 1] += " " + line
+            }
+        }
+        return requirements
     }
 
     func test_k15_lowConfidenceWordOnlyCandidateForCorrection() async throws {

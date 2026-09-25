@@ -18,11 +18,17 @@ final class AttributionBasicsTests: XCTestCase {
         let second = try await port.attribute(input, thresholds: .slice1Defaults)
         XCTAssertEqual(first, second)
 
+        // `otherInput` разделяет с `input` тот же дефолтный `transcriptId` (Fixture.input,
+        // MEE-411) — неравенство ниже обязано доказываться содержимым (другое число
+        // кластеров), а не случайным транскрипт-id, который раньше делал бы assert зелёным
+        // при любом содержимом.
         let (otherTranscript, otherSegmentIds) = try Fixture.transcript([
             SegmentSpec(channel: .system, cluster: 0), SegmentSpec(channel: .system, cluster: 1)
         ], speakers: [try Fixture.speaker(0), try Fixture.speaker(1)])
         let otherInput = Fixture.input(transcript: otherTranscript, segmentIds: otherSegmentIds)
+        XCTAssertEqual(otherInput.transcriptId, input.transcriptId)
         let third = try await port.attribute(otherInput, thresholds: .slice1Defaults)
+        XCTAssertNotEqual(third.assignments.count, first.assignments.count)
         XCTAssertNotEqual(third, first, "иной вход обязан дать независимый результат")
     }
 
