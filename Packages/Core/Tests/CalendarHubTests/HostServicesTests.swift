@@ -4,8 +4,9 @@
 //  ЧТО ЭТА ПРАВКА НЕ ПОКРЫВАЕТ ЗДЕСЬ, ЧЕСТНО:
 //  * К12 — целиком: сформулирован для stdio-пути («не более одного запроса в очереди» —
 //    свойство кадров `request`/`response` C-006 §2, у in-process вызова их попросту нет).
-//    Шов Ш2 (`RPCTransport`/`ScriptedRPCTransport`) — «ждёт кода calendar-hub» (план MEE-361,
-//    §1) — группа Ж, ещё не написана. Тестировать не на чем до неё.
+//    Шов Ш2 (`RPCTransport`/`ScriptedRPCTransport`, `StdioCalendarConnector`) написан МЕЕ-402
+//    шагом 2 (`StdioProtocolTests.swift`, К46-К56) — сам тест К12 всё ещё нет, следующая
+//    часть MEE-386.
 
 import Foundation
 import XCTest
