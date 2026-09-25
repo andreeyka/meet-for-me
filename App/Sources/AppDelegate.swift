@@ -27,6 +27,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             do {
                 let graph = try await CompositionRoot.build()
                 self.graph = graph
+                if graph.settingsUsedDefaults {
+                    Self.presentSettingsFallbackNotice()
+                }
                 await refreshStatus()
                 observeStatus(graph.facade)
             } catch {
@@ -66,10 +69,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         return .terminateLater
     }
 
-    /// Отказ `StorageDatabase`/`SignalWeights`/настроек на старте — сломанное окружение, не
+    /// IR-140 (MEE-439, решение архитектора): нечитаемая строка настроек на старте — БОЛЬШЕ
+    /// НЕ входит в «сломанное окружение» ниже — `CompositionRoot.build()` уже подставила
+    /// `AppSettings.slice1Defaults` и вернула готовый граф; здесь только одноразовое видимое
+    /// уведомление, без завершения процесса. Тот же `NSAlert`, что и у отказа старта — тот же
+    /// набор средств, доступных на этом шаге (нет `AppFacade`-независимого способа показать
+    /// уведомление без Dock-иконки, `LSUIElement`, кроме `NSAlert`/`NSUserNotification`;
+    /// `NSAlert` уже используется рядом, `UserNotifications` потребовал бы отдельного
+    /// запроса авторизации — за пределами точечной правки). Одна кнопка «Понятно», без
+    /// «Завершить»: закрытие уведомления просто продолжает обычный запуск.
+    private static func presentSettingsFallbackNotice() {
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "Настройки повреждены"
+        alert.informativeText = "Не удалось прочитать сохранённые настройки — использованы значения по умолчанию."
+        alert.addButton(withTitle: "Понятно")
+        NSApp.activate(ignoringOtherApps: true)
+        alert.runModal()
+    }
+
+    /// Отказ `StorageDatabase`/`SignalWeights`/каталога на старте — сломанное окружение, не
     /// пользовательское состояние (решение архитектора, MEE-430 «жизненный цикл»): нативный
     /// блокирующий alert (не через `AppFacade` — его на этом шаге ещё нет) и завершение, а не
-    /// тихое продолжение с пустышкой.
+    /// тихое продолжение с пустышкой. Нечитаемая строка НАСТРОЕК из этого класса исключена
+    /// (IR-140, MEE-439) — см. `presentSettingsFallbackNotice()` выше.
     private static func presentStartupFailureAndTerminate(_ error: Error) {
         let alert = NSAlert()
         alert.alertStyle = .critical

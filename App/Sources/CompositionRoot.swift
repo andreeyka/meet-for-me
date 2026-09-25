@@ -31,11 +31,18 @@ import Storage
 /// Готовый граф: единственное, что получает `MeetForMeApp` наружу.
 struct AppGraph: Sendable {
     let facade: AppFacade
+    /// IR-140 (MEE-439): строка настроек на старте была нечитаемой, подставлены
+    /// `AppSettings.slice1Defaults` — вызывающая сторона (`AppDelegate`) показывает
+    /// одноразовое уведомление ровно один раз, сразу после получения графа.
+    let settingsUsedDefaults: Bool
     private let sessionMachine: SessionMachine
     private let jobQueue: JobQueueEngine
 
-    fileprivate init(facade: AppFacade, sessionMachine: SessionMachine, jobQueue: JobQueueEngine) {
+    fileprivate init(
+        facade: AppFacade, settingsUsedDefaults: Bool, sessionMachine: SessionMachine, jobQueue: JobQueueEngine
+    ) {
         self.facade = facade
+        self.settingsUsedDefaults = settingsUsedDefaults
         self.sessionMachine = sessionMachine
         self.jobQueue = jobQueue
     }
@@ -65,9 +72,12 @@ enum CompositionRootError: Error, LocalizedError, Sendable {
 enum CompositionRoot {
 
     /// Строит граф. Бросает на сломанном окружении (диск, права каталога, повреждённый
-    /// бандл-ресурс, повреждённая строка настроек) — вызывающая сторона показывает нативный
-    /// alert и завершает процесс (решение архитектора, MEE-430 «жизненный цикл»), а не
-    /// продолжает с частично собранным графом.
+    /// бандл-ресурс) — вызывающая сторона показывает нативный alert и завершает процесс
+    /// (решение архитектора, MEE-430 «жизненный цикл»), а не продолжает с частично собранным
+    /// графом. Повреждённая СТРОКА НАСТРОЕК — исключение из этого правила (IR-140, MEE-439,
+    /// решение архитектора): не бросает, подставляет `AppSettings.slice1Defaults`
+    /// (`loadSettingsForStartup`, `CompositionRoot+Settings.swift`) — восстановиться есть чем,
+    /// в отличие от диска/каталога/`StorageDatabase`/`SignalWeights`.
     static func build() async throws -> AppGraph {
         let context = try makeStorageContext()
         let adapters = try makeSystemAdapters()
@@ -83,8 +93,8 @@ enum CompositionRoot {
             attribution: attribution, modelCatalog: modelCatalog, jobQueue: jobQueue
         )
 
-        let settings = try await loadSettings(from: context.storage.settingsRepository())
-        let sessionMachine = makeSessionMachine(partial, settings: settings)
+        let startupSettings = try await loadSettingsForStartup(from: context.storage.settingsRepository())
+        let sessionMachine = makeSessionMachine(partial, settings: startupSettings.settings)
         let facade = makeFacade(partial, sessionMachine: sessionMachine)
 
         await registerHandlers(partial, facade: facade)
@@ -95,7 +105,10 @@ enum CompositionRoot {
         await jobQueue.start()
         await sessionMachine.start(now: Date())
 
-        return AppGraph(facade: facade, sessionMachine: sessionMachine, jobQueue: jobQueue)
+        return AppGraph(
+            facade: facade, settingsUsedDefaults: startupSettings.usedDefaults,
+            sessionMachine: sessionMachine, jobQueue: jobQueue
+        )
     }
 
     /// `~/Library/Application Support/<bundle-id>` — каталог должен существовать (модуль
