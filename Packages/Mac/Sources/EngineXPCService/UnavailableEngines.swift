@@ -15,6 +15,7 @@
 //  назвать несуществующую модель в этом случае нечем, поэтому у `PostProcessor` вместо
 //  `.modelMissing` — `.runtimeFailure(message:)` с тем же честным «движок недоступен».
 
+import DomainCore
 import EngineKit
 
 public final class UnavailableTranscriptionEngine: TranscriptionEngine, Sendable {
