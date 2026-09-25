@@ -154,4 +154,22 @@ final class StdioProtocolRequestQueueingTests: XCTestCase {
             // Ожидаемо.
         }
     }
+
+    /// Возврат РП (MEE-386, комментарий 10:25): `cancel()` раньше стоял безусловно (`state =
+    /// .cancelled` в `defer`), в том числе ПОВЕРХ уже состоявшегося `grant()` — на акторе такой
+    /// порядок («выдача — потом отмена — потом регистрация») сегодня недостижим (та же причина,
+    /// что уже закрыла основную гонку `register()`/`grant()`), но докстринг типа обещает
+    /// устойчивость к любому порядку. Если бы `cancel()` откатил `.granted` обратно в
+    /// `.cancelled`, `register()` ниже разбудил бы continuation ОШИБКОЙ, хотя слот уже был
+    /// закреплён за этим ждущим — тест проверяет, что этого не происходит.
+    func test_k12_callSlotWaiterCancelAfterGrantDoesNotLoseTheSlot() async throws {
+        let waiter = CallSlotWaiter()
+
+        XCTAssertTrue(waiter.grant(), "слот выдан")
+        waiter.cancel()
+
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            waiter.register(continuation)
+        }
+    }
 }
