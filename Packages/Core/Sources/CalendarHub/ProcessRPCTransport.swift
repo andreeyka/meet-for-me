@@ -3,8 +3,18 @@
 //  кадр через stdin/stdout), stderr — колбэком вызывающего в журнал, смерть процесса —
 //  транспортная ошибка (`StdioCalendarConnector.awaitResponse`/`call` заворачивают любую
 //  ошибку `receive()`/`send()` в `ConnectorError.upstreamUnavailable`, разбирать конкретный
-//  тип им не нужно), shutdown — SIGTERM и закрытие каналов, не средствами RPCTransport
-//  (протокол их не называет — см. Seams.swift), а отдельным методом `close()` этого типа.
+//  тип им не нужно), shutdown — SIGTERM/SIGKILL и закрытие каналов, не средствами
+//  RPCTransport (протокол их не называет — см. Seams.swift), а отдельным методом `close()`.
+//
+//  Этот файл — публичная поверхность и жизненный цикл (`init`/`send`/`receive`/`close`/
+//  `deinit`); внутренние обработчики (`extractLine`, `handleStdout`/`handleStderr`,
+//  `markGone`, `waitForExit`) — `ProcessRPCTransport+Internals.swift`, тот же приём
+//  file_length/type_body_length, что у соседних составных типов модуля
+//  (`InMemoryMeetingRepository+Absorbing.swift` и т.п.): SwiftLint считает каждый файл
+//  отдельно, не суммой по типу. Члены, которым нужен доступ из обоих файлов, — internal
+//  (`private` в Swift ограничен ОДНИМ файлом, включая расширения того же типа в других
+//  файлах), не публичная поверхность модуля наружу — извне видны только `send`/`receive`/
+//  `close`/оба `init`, как и раньше.
 //
 //  Предел 8 МиБ на кадр здесь НЕ проверяется: `StdioCalendarConnector.awaitResponse` уже
 //  делает это после `receive()` (§5.1). Здесь важно не повредить кадр большего размера при
@@ -12,38 +22,59 @@
 //  (§7: «реальное чтение файла/запуск процесса — исключение»), поэтому у этого файла
 //  собственный интеграционный тест (MEE-417), не К-критерий.
 //
+//  `signal`/`kill`/`SIGPIPE`/`SIGKILL` ниже — без явного `import Darwin`/`import Glibc`
+//  (К58, `.github/scripts/calendar-hub-surface.py`, `ALLOWED_IMPORTS = {Foundation,
+//  DomainCore}`, запрещает оба явно) — рассчёт на то, что `Foundation` транзитивно делает
+//  эти POSIX-символы видимыми на обеих платформах (так исторически было и остаётся почти
+//  везде, где `Foundation`/`swift-corelibs-foundation` сама не помечает свой внутренний
+//  `import Darwin`/`import Glibc` как `@_implementationOnly`). Подтверждено прогоном CI
+//  (единственный доступный способ проверки без локального тулчейна) — не гипотеза,
+//  оставленная непроверенной.
+//
 //  Модуль: calendar-hub · Владелец: DEV-1 · Слой: домен
 
 import Foundation
 
-/// Ошибка транспорта: смерть процесса плагина, закрытый канал. `StdioCalendarConnector` не
-/// разбирает конкретный тип отдельно (см. заголовок файла) — текстового описания достаточно.
-/// Без `CustomStringConvertible` (не входит в разрешённый список поверхности calendar-hub,
-/// `.github/scripts/allowed-types/CalendarHub.json`, MEE-191): `"\(error)"` вызывающей
-/// стороны получает используемый по умолчанию дамп структуры — читаемость ниже, но текст
-/// `description` внутри всё равно виден, а расширение чужого списка не по контракту этой
-/// задачи не решается.
+/// Ошибка транспорта: смерть процесса плагина, закрытый канал, отказ записи в stdin.
+/// `StdioCalendarConnector` не разбирает конкретный тип отдельно (см. заголовок файла) —
+/// текстового описания достаточно. Без `CustomStringConvertible` (не входит в разрешённый
+/// список поверхности calendar-hub, `.github/scripts/allowed-types/CalendarHub.json`,
+/// MEE-191): `"\(error)"` вызывающей стороны получает используемый по умолчанию дамп
+/// структуры — читаемость ниже, но текст `description` внутри всё равно виден, а расширение
+/// чужого списка не по контракту этой задачи не решается.
 public struct ProcessRPCTransportError: Error, Sendable {
     public let description: String
 }
 
 /// Продовый `RPCTransport` — запускает плагин `Process`ом, кадрирует stdio по одной строке
-/// JSON на кадр. Чтение `stdout`/`stderr` — через `FileHandle.readabilityHandler`
-/// (диспетчер GCD, вне кооперативного пула Swift concurrency): запись большого кадра в
-/// `stdin` поэтому не может столкнуться в клинче с чтением того же кадра обратно у процесса,
-/// который его немедленно эхо-заворачивает (тестовый случай "кадр больше 8 МиБ") — ядро
-/// дренирует канал GCD-обработчиком независимо от того, когда актор обработает уже
-/// прочитанные байты.
+/// JSON на кадр. Чтение `stdout`/`stderr` — через `FileHandle.readabilityHandler` (диспетчер
+/// GCD, вне кооперативного пула Swift concurrency), каждый обработчик СИНХРОННО отдаёт кусок
+/// в свой `AsyncStream`, и уже единственный потребитель каждого потока разбирает куски по
+/// порядку прихода (возврат РП, приёмка PR #138: `Task` на каждый кусок из обработчика не
+/// гарантирует порядок входа в актор — независимые задачи Swift планирует не обязательно в
+/// порядке создания, и куски кадра ≥1 МиБ через несколько вызовов `readabilityHandler` могли
+/// переставиться местами).
 public actor ProcessRPCTransport: RPCTransport {
 
-    private let process = Process()
-    private let stdinHandle: FileHandle
-    private let stdoutHandle: FileHandle
-    private let stderrHandle: FileHandle
-    private var buffer = Data()
-    private var pendingReceive: CheckedContinuation<String, Error>?
-    private var pendingExits: [CheckedContinuation<Void, Never>] = []
-    private var terminated: ProcessRPCTransportError?
+    let process = Process()
+    let stdinHandle: FileHandle
+    let stdoutHandle: FileHandle
+    let stderrHandle: FileHandle
+    var buffer = Data()
+    var stderrBuffer = Data()
+    var pendingReceive: CheckedContinuation<String, Error>?
+    var pendingExits: [CheckedContinuation<Void, Never>] = []
+    var terminated: ProcessRPCTransportError?
+    let stdoutContinuation: AsyncStream<Data>.Continuation
+
+    /// Один раз на процесс хоста, а не на транспорт: `signal()` — глобальная настройка, не
+    /// свойство одного дескриптора (переносимого `F_SETNOSIGPIPE`, доступного только на
+    /// Darwin, здесь нет — портируемо только так). Без этого запись в `stdin` уже умершего
+    /// плагина (SIGPIPE, обработчик по умолчанию — завершение ВСЕГО процесса хоста, не только
+    /// этого actor'а) убила бы CI/приложение целиком (возврат РП, приёмка PR #138, п. 3).
+    private static let sigpipeIgnored: Void = {
+        signal(SIGPIPE, SIG_IGN)
+    }()
 
     public init(
         executablePath: String,
@@ -51,6 +82,7 @@ public actor ProcessRPCTransport: RPCTransport {
         currentDirectoryURL: URL? = nil,
         onStderrLine: @escaping @Sendable (String) -> Void = { _ in }
     ) throws {
+        _ = Self.sigpipeIgnored
         let stdinPipe = Pipe()
         let stdoutPipe = Pipe()
         let stderrPipe = Pipe()
@@ -64,28 +96,47 @@ public actor ProcessRPCTransport: RPCTransport {
         stdoutHandle = stdoutPipe.fileHandleForReading
         stderrHandle = stderrPipe.fileHandleForReading
 
+        var capturedStdoutContinuation: AsyncStream<Data>.Continuation!
+        let stdoutStream = AsyncStream<Data> { continuation in
+            capturedStdoutContinuation = continuation
+        }
+        stdoutContinuation = capturedStdoutContinuation
+
+        var capturedStderrContinuation: AsyncStream<Data>.Continuation!
+        let stderrStream = AsyncStream<Data> { continuation in
+            capturedStderrContinuation = continuation
+        }
+
         try process.run()
 
+        // Оба обработчика не захватывают `self` вовсе (ни прямо, ни через `[weak self]`) —
+        // снимают сами себя на EOF (возврат РП, п. 2: раньше это делал только `close()`,
+        // и после EOF обработчик продолжал вызываться вхолостую) и синхронно передают кусок
+        // дальше через continuation своего потока; порядок и разбор — забота потребителя.
+        stdoutHandle.readabilityHandler = { handle in
+            let data = handle.availableData
+            if data.isEmpty { handle.readabilityHandler = nil }
+            capturedStdoutContinuation.yield(data)
+        }
         stderrHandle.readabilityHandler = { handle in
             let data = handle.availableData
-            guard !data.isEmpty, let text = String(data: data, encoding: .utf8) else { return }
-            for line in text.split(separator: "\n", omittingEmptySubsequences: true) {
-                onStderrLine(String(line))
-            }
-        }
-        // `Task { [weak self] in … }` — капture-лист повторён НА САМОМ Task, не только на
-        // объемлющем замыкании `readabilityHandler`: неявный захват уже-слабой локальной
-        // `self` внешнего замыкания вложенным `Task { await self?...}` компилятор отвергает
-        // («reference to captured var 'self' in concurrently-executing code» — внутренняя
-        // ячейка слабой ссылки сама по себе мутабельна, и вложенное конкурентное замыкание
-        // не вправе на неё молча полагаться). Свежий `[weak self]` на самом `Task` — тот же
-        // приём, что и везде в этом файле, только явный дважды.
-        stdoutHandle.readabilityHandler = { [weak self] handle in
-            let data = handle.availableData
-            Task { [weak self] in await self?.handleStdout(data) }
+            if data.isEmpty { handle.readabilityHandler = nil }
+            capturedStderrContinuation.yield(data)
         }
         process.terminationHandler = { [weak self] proc in
             Task { [weak self] in await self?.handleTermination(status: proc.terminationStatus) }
+        }
+        Task { [weak self] in
+            for await data in stdoutStream {
+                guard let self else { return }
+                await self.handleStdout(data)
+            }
+        }
+        Task { [weak self] in
+            for await data in stderrStream {
+                guard let self, !data.isEmpty else { return }
+                await self.handleStderr(data, onLine: onStderrLine)
+            }
         }
     }
 
@@ -104,12 +155,20 @@ public actor ProcessRPCTransport: RPCTransport {
         )
     }
 
+    /// Запись — вне актора (`Task.detached`): плагин, который не читает свой `stdin`,
+    /// блокировал бы блокирующий `write()` НАВСЕГДА, а вместе с ним — весь актор, включая
+    /// `close()` (возврат РП, приёмка PR #138, п. 3, вторая половина). SIGPIPE на запись в
+    /// уже закрытый канал теперь не убивает хост (`sigpipeIgnored` выше) — `write(contentsOf:)`
+    /// вместо этого бросает обычной ошибкой (`EPIPE`), заворачиваемой ниже как обычно.
     public func send(_ frame: String) async throws {
         if let terminated { throw terminated }
         var data = Data(frame.utf8)
         data.append(0x0A)
+        let handle = stdinHandle
         do {
-            try stdinHandle.write(contentsOf: data)
+            try await Task.detached(priority: .utility) {
+                try handle.write(contentsOf: data)
+            }.value
         } catch {
             throw ProcessRPCTransportError(description: "запись в stdin плагина не удалась: \(error)")
         }
@@ -120,9 +179,15 @@ public actor ProcessRPCTransport: RPCTransport {
     /// гоняющая эту функцию наперегонки с тайм-аутом через `TaskGroup.cancelAll()`, иначе не
     /// смогла бы её реально прервать — отмена дошла бы до задачи, но не до уже висящего
     /// продолжения). `onCancel` не изолирован актором — хопает туда отдельным `Task`.
+    /// Второй одновременный вызов, пока первый ещё не разрешился, — отказ, а не молчаливая
+    /// перезапись `pendingReceive` (возврат РП, бэклог): без проверки первый вызывающий терял
+    /// бы своё продолжение навсегда, ничего не узнав об этом.
     public func receive() async throws -> String {
         if let line = try extractLine() { return line }
         if let terminated { throw terminated }
+        guard pendingReceive == nil else {
+            throw ProcessRPCTransportError(description: "receive() уже вызван — второй одновременный вызов запрещён")
+        }
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
                 pendingReceive = continuation
@@ -132,14 +197,18 @@ public actor ProcessRPCTransport: RPCTransport {
         }
     }
 
-    /// SIGTERM и закрытие каналов; возвращается, когда процесс вышел — по EOF `stdout`
-    /// (`handleStdout`, тот же путь, что и обычная смерть процесса) или по
-    /// `terminationHandler`, какой из двух сработает первым, плюс ограниченный сторож
-    /// (`waitForExit`) на случай, если на конкретной платформе не сработает ни один
-    /// (возврат РП: Linux, приёмка PR #138, — CI зависла именно здесь, `terminationHandler`
-    /// swift-corelibs-foundation исторически ненадёжен; EOF `stdout` — ядерный, не
-    /// Foundation-специфичный сигнал, сторож — конечная подстраховка, не политика тайм-аутов
-    /// «Поведения» C-006 §5.2, которую и запрещает «не на стенных часах»).
+    /// SIGTERM, затем SIGKILL, если процесс его проигнорировал (возврат РП, приёмка PR #138,
+    /// п. 4) — `Process` не даёт выбрать сигнал напрямую (`terminate()` — всегда SIGTERM),
+    /// поэтому эскалация — сырой `kill(pid, SIGKILL)`. Возвращается, когда процесс вышел — по
+    /// EOF `stdout` или по `terminationHandler`, какой из двух сработает первым, плюс
+    /// ограниченный сторож (`waitForExit`) на случай, если на конкретной платформе не
+    /// сработает ни один (возврат РП: Linux, приёмка PR #138 — `close()`/`roundTrip`/`manifest`
+    /// шли ровно по 5.00с, замеренному сторожем, а не настоящим сигналом: `terminationHandler`
+    /// swift-corelibs-foundation ненадёжен на Linux даже после этой правки; EOF `stdout` —
+    /// ядерный, не Foundation-специфичный сигнал, но и он там же не подоспевал вовремя после
+    /// `terminate()`. Сторож — конечная подстраховка, не политика тайм-аутов «Поведения» C-006
+    /// §5.2, которую и запрещает «не на стенных часах»; корректность не страдает — только
+    /// латентность на этой платформе).
     /// Не часть `RPCTransport` (протокол не называет остановку процесса — Seams.swift, «форма
     /// — решение этой задачи»): вызывающая сторона зовёт его отдельно от
     /// `CalendarConnector.shutdown()` (тот шлёт JSON-RPC уведомление тем же транспортом,
@@ -150,92 +219,23 @@ public actor ProcessRPCTransport: RPCTransport {
         if process.isRunning {
             process.terminate()
             await waitForExit()
+            if process.isRunning {
+                kill(process.processIdentifier, SIGKILL)
+                await waitForExit()
+            }
         }
         try? stdinHandle.close()
         try? stdoutHandle.close()
         try? stderrHandle.close()
     }
 
-    // MARK: - Внутреннее
-
-    /// `String(bytes:encoding:)` — падающий инициализатор (SwiftLint
-    /// `optional_data_string_conversion`), не `String(decoding:as:)`: тот молча заменяет
-    /// невалидный UTF-8 символом-заменителем вместо отказа — «кадр не в UTF-8» стало бы
-    /// неотличимо от кадра, которого никогда не присылали.
-    private func extractLine() throws -> String? {
-        guard let newlineIndex = buffer.firstIndex(of: 0x0A) else { return nil }
-        let lineBytes = buffer[..<newlineIndex]
-        buffer.removeSubrange(buffer.startIndex...newlineIndex)
-        guard let line = String(bytes: lineBytes, encoding: .utf8) else {
-            throw ProcessRPCTransportError(description: "кадр не в UTF-8")
+    /// Лучшее усилие на уничтожении: `close()` не вызван — `deinit` актора выполняется вне
+    /// изоляции (никакого `await` здесь быть не может), поэтому сигнал только посылается, не
+    /// дожидается выхода (возврат РП, приёмка PR #138, п. 4 — раньше не забытый процесс плагина
+    /// без явного `close()` не завершался вовсе).
+    deinit {
+        if process.isRunning {
+            process.terminate()
         }
-        return line
-    }
-
-    private func handleStdout(_ data: Data) {
-        guard !data.isEmpty else {
-            markGone(ProcessRPCTransportError(description: "плагин закрыл stdout"))
-            return
-        }
-        // `data.contains(0x0A)` — на самом ПРИШЕДШЕМ куске, до `append`, не на всём `buffer`
-        // (замер CI, macOS: 69.7с на одном тесте К48-подобного размера, 9 МиБ через `Pipe` —
-        // `FileHandle.readabilityHandler` там отдаёт кадр мелкими кусками по нескольку КиБ, и
-        // `extractLine()`, зовись он на КАЖДЫЙ такой кусок, пересканировал бы уже проверенное
-        // начало `buffer` заново — O(n·кусков), на практике квадратично от размера кадра.
-        // Перевод строки — однобайтовый разделитель, не может «размазаться» по границе двух
-        // кусков, поэтому его наличие в самом пришедшем куске — точный признак «искать в
-        // buffer есть смысл», без ложных пропусков.
-        let mayContainDelimiter = data.contains(0x0A)
-        buffer.append(data)
-        guard mayContainDelimiter else { return }
-        do {
-            guard let line = try extractLine(), let continuation = pendingReceive else { return }
-            pendingReceive = nil
-            continuation.resume(returning: line)
-        } catch {
-            failPendingReceive(error)
-        }
-    }
-
-    private func handleTermination(status: Int32) {
-        markGone(ProcessRPCTransportError(description: "процесс плагина завершился, код \(status)"))
-    }
-
-    /// Общая точка «процесса больше нет» для обоих независимых сигналов (EOF `stdout` в
-    /// `handleStdout`, `terminationHandler` в `init`) — какой бы ни сработал первым, отказывает
-    /// ожидающий `receive()` и снимает `waitForExit()` в `close()`. Идемпотентна: второй сигнал
-    /// (обычно оба приходят почти одновременно) видит уже пустые `pendingExits`/`pendingReceive`.
-    private func markGone(_ error: ProcessRPCTransportError) {
-        if terminated == nil { terminated = error }
-        failPendingReceive(error)
-        for continuation in pendingExits { continuation.resume() }
-        pendingExits.removeAll()
-    }
-
-    private func failPendingReceive(_ error: Error) {
-        guard let continuation = pendingReceive else { return }
-        pendingReceive = nil
-        continuation.resume(throwing: error)
-    }
-
-    /// Сторож на 5 секунд — конечная подстраховка на случай, если ни EOF `stdout`, ни
-    /// `terminationHandler` не сработают на конкретной платформе (не политика тайм-аутов
-    /// «Поведения», см. докстринг `close()`): без него `close()` рисковал бы зависнуть
-    /// навсегда, если оба сигнала почему-то молчат.
-    private func waitForExit() async {
-        if !process.isRunning { return }
-        let watchdog = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(5))
-            await self?.forceResolveExits()
-        }
-        await withCheckedContinuation { continuation in
-            pendingExits.append(continuation)
-        }
-        watchdog.cancel()
-    }
-
-    private func forceResolveExits() {
-        for continuation in pendingExits { continuation.resume() }
-        pendingExits.removeAll()
     }
 }

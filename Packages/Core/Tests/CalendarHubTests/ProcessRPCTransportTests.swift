@@ -95,6 +95,51 @@ final class ProcessRPCTransportTests: XCTestCase {
         )
     }
 
+    /// Возврат РП (приёмка PR #138, п. 3): запись в `stdin` уже умершего плагина (SIGPIPE) не
+    /// убивает ХОСТ (этот тест-процесс) целиком — если бы `signal(SIGPIPE, SIG_IGN)` не
+    /// сработал, весь `swift test` погиб бы молча, не показав ни `XCTFail`, ни зелёного
+    /// прогона; сам факт завершения этого теста — часть доказательства.
+    func test_sendAfterProcessDeathThrowsTransportErrorNotCrashingHost() async throws {
+        try await withHangGuard {
+            let transport = try ProcessRPCTransport(executablePath: "/usr/bin/env", arguments: ["sh", "-c", "exit 0"])
+            var sawError = false
+            for _ in 0..<50 {
+                do {
+                    try await transport.send("ping")
+                } catch {
+                    sawError = true
+                    break
+                }
+            }
+            XCTAssertTrue(sawError, "ожидалась ошибка отправки в мёртвый процесс, не тишина без конца")
+        }
+    }
+
+    /// Второй одновременный `receive()`, пока первый ещё не разрешился, — отказ, не
+    /// молчаливая перезапись `pendingReceive` (возврат РП, бэклог): без защиты первый
+    /// вызывающий терял бы своё продолжение навсегда, ничего не узнав об этом.
+    func test_secondConcurrentReceiveIsRejectedNotSilentlyOverwritingFirst() async throws {
+        try await withHangGuard {
+            let transport = try ProcessRPCTransport(executablePath: "/usr/bin/env", arguments: ["cat"])
+            async let first = transport.receive()
+            // Даёт первому вызову время реально встать в `pendingReceive` до второго —
+            // `cat` без входа ничего не пришлёт, первый вызов гарантированно подвиснет там.
+            try await Task.sleep(for: .milliseconds(100))
+
+            do {
+                _ = try await transport.receive()
+                XCTFail("второй одновременный receive() обязан отказать")
+            } catch is ProcessRPCTransportError {
+                // ожидаемо
+            }
+
+            try await transport.send("после-второго")
+            let received = try await first
+            XCTAssertEqual(received, "после-второго")
+            await transport.close()
+        }
+    }
+
     /// `extractLine()` использует падающий `String(bytes:encoding:)`, не лениво-заменяющий
     /// `String(decoding:as:)` (возврат РП, SwiftLint `optional_data_string_conversion`) —
     /// невалидный UTF-8 обязан выйти ошибкой транспорта, не тихой заменой байт на U+FFFD.
@@ -140,16 +185,18 @@ final class ProcessRPCTransportTests: XCTestCase {
 
 /// Гонка с сигналом отмены, не с молчаливым системным киллом (МЕЕ-329 у самого `swift test`
 /// уже проверяет собственный предел, но без единой строки о том, ГДЕ именно зависло —
-/// возврат РП, приёмка PR #138, Linux). 10с — во много раз больше самого медленного
-/// легитимного случая этого файла (9 МиБ через `Pipe`, ~1с даже с запасом), но много меньше
-/// 300с общего предела `swift test`, так что провал одного теста здесь не съедает предел
-/// остальных.
+/// возврат РП, приёмка PR #138, Linux). 15с — с запасом больше самого медленного легитимного
+/// случая этого файла: на Linux `close()` может пройти через ДВА последовательных 5с сторожа
+/// `ProcessRPCTransport` (SIGTERM, затем — если процесс всё ещё жив — SIGKILL, см. докстринг
+/// `close()`), то есть до ~10с само по себе, плюс кадр 9 МиБ — 15с даёт запас, не впритык.
+/// Много меньше 300с общего предела `swift test`, так что провал одного теста здесь не
+/// съедает предел остальных.
 private struct ProcessRPCTransportTestHang: Error, CustomStringConvertible {
-    var description: String { "зависание — не уложился в 10с (МЕЕ-417, диагностика Linux)" }
+    var description: String { "зависание — не уложился в 15с (МЕЕ-417, диагностика Linux)" }
 }
 
 private func withHangGuard(
-    seconds: Double = 10, file: StaticString = #filePath, line: UInt = #line,
+    seconds: Double = 15, file: StaticString = #filePath, line: UInt = #line,
     _ operation: @escaping @Sendable () async throws -> Void
 ) async throws {
     try await withThrowingTaskGroup(of: Void.self) { group in
