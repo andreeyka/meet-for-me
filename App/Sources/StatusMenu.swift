@@ -1,34 +1,47 @@
 //  StatusMenu — минимум статуса из `AppFacade.status()` (MEE-433, «MenuBarExtra показывает
-//  минимум статуса»). Экраны (окно встреч, просмотр транскрипта, настройки, мастер прав) —
+//  минимум статуса») + пункт «Завершить» (М1, возврат РП — без Dock-иконки у приложения нет
+//  штатного выхода). Экраны (окно встреч, просмотр транскрипта, настройки, мастер прав) —
 //  отдельная задача; этот файл — не она.
 //
-//  Модуль: app-ui · Владелец: DEV-1 · Слой: UI
+//  Статус — из `appDelegate.status`, не из собственного `.task`: подписка на
+//  `AppFacade.events()` (М4, возврат РП) живёт на `AppDelegate`, не на этом виде — в
+//  menu-стиле `MenuBarExtra` вид пересобирается при каждом открытии меню.
+//
+//  Возврат РП назвал `AppFacade.events()` рабочей заменой обновлению при открытии — но
+//  сегодня в domain-core `AppEvent.statusChanged` нигде не публикуется (сверено: `grep` по
+//  `.statusChanged(` в `Packages/Core/Sources/DomainCore` — ноль совпадений; публикуется
+//  только `.settingsChanged`, `AppFacadeImpl+Settings.swift:131`). Подписка в `AppDelegate`
+//  остаётся — начнёт работать сама, когда эта публикация появится, — но пока единственный
+//  путь не застрять на «Загрузка статуса…» это тоже обновление на открытии: `.onAppear`
+//  ниже, не `.task(id:)` (тот привязан к разовому условию «граф появился», а не к каждому
+//  открытию меню).
 
+import AppKit
 import DomainCore
 import SwiftUI
 
 struct StatusMenu: View {
     @ObservedObject var appDelegate: AppDelegate
-    @State private var status: AppStatus?
 
     var body: some View {
         Group {
-            if let facade = appDelegate.graph?.facade {
-                if let status {
-                    Text(summary(for: status))
-                } else {
-                    Text("Загрузка статуса…")
-                }
-                Button("Обновить") {
-                    Task { status = await facade.status() }
-                }
-            } else {
+            if appDelegate.graph == nil {
                 Text("Запуск…")
+            } else if let status = appDelegate.status {
+                Text(summary(for: status))
+            } else {
+                Text("Загрузка статуса…")
+            }
+            Button("Обновить") {
+                Task { await appDelegate.refreshStatus() }
+            }
+            Divider()
+            Button("Завершить") {
+                NSApp.terminate(nil)
             }
         }
-        .task(id: appDelegate.graph != nil) {
-            guard let facade = appDelegate.graph?.facade else { return }
-            status = await facade.status()
+        .onAppear {
+            Task { await appDelegate.refreshStatus() }
         }
     }
 

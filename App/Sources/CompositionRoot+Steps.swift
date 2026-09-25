@@ -109,7 +109,17 @@ extension CompositionRoot {
             power: partial.adapters.power,
             settings: settings,
             weights: partial.adapters.weights,
-            recordingDirectory: { id in fileLayout.recordingDirectory(id.uuidString) },
+            // Б1 (возврат РП, MEE-433): каталог записи никто не создавал — замыкание только
+            // считало URL, а TrackFile открывает файл O_CREAT, каталог сам не заводит →
+            // directoryUnusable на первой же живой записи. `(UUID) -> URL` не throws (контракт
+            // SessionMachine, не этого файла) — try? лучшим усилием: если создание всё же
+            // откажет (диск, права), последующая попытка записи откажет тем же путём, что и
+            // раньше, просто на шаг позже, а не тихим "каталог недоступен" без причины.
+            recordingDirectory: { id in
+                let directory = fileLayout.recordingDirectory(id.uuidString)
+                try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+                return directory
+            },
             // Срез 1 не даёт настройке выбора устройства своего поля в
             // AppSettings.slice1Defaults (MEE-430 §3) — выбор конкретного uid остаётся за
             // пределами этой задачи.
