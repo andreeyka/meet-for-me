@@ -94,6 +94,10 @@ public final class EngineXPCClient: TranscriptionServicePort, @unchecked Sendabl
             throw TranscriptionServiceError.serviceUnavailable(message: "неожиданный ответ на ping: \(reply)")
         }
         try requireMatchingProtocolVersion(serviceProtocolVersion: serviceProtocolVersion)
+        // Успешный явный `ping()` — то же доказательство рукопожатия, что и внутренний
+        // (`handshakeGate`): следующий рабочий запрос на этом соединении не обязан
+        // повторять его сам (К21 — один раз на соединение, а не один раз на вызов `ping`).
+        locked { handshakeVerified = true }
         return serviceVersion
     }
 
@@ -104,7 +108,7 @@ public final class EngineXPCClient: TranscriptionServicePort, @unchecked Sendabl
         let profile = try await resolveProfile(spec.profileId)
         var bundles = [profile.asr]
         if let vad = profile.vad { bundles.append(vad) }
-        return try await withModelUse(bundles) {
+        return try await withModelUse(profileId: spec.profileId, bundles) {
             let audio = try Self.placeholderAudioRef(recordingId: spec.recordingId)
             let request = try TranscriptionRequest(
                 audio: [audio], language: spec.language, wantWordTimestamps: spec.wantWordTimestamps,
@@ -125,7 +129,7 @@ public final class EngineXPCClient: TranscriptionServicePort, @unchecked Sendabl
                 profileId: profileId, message: "профиль не называет модель эмбеддингов"
             )
         }
-        return try await withModelUse([embeddingModel]) {
+        return try await withModelUse(profileId: profileId, [embeddingModel]) {
             let audio = try Self.placeholderAudioRef(recordingId: recordingId)
             let slice = try AudioSlice(source: audio, startMs: startMs, endMs: endMs)
             let request = try EmbeddingRequest(slice: slice, model: embeddingModel)
@@ -149,15 +153,16 @@ public final class EngineXPCClient: TranscriptionServicePort, @unchecked Sendabl
 
     /// `resolve`/`beginUse` до отправки запроса движку (К46: счётчик отправок транспорта
     /// не растёт при отказе любого из двух); `endUse` в `defer`-эквиваленте — на успехе,
-    /// отказе и отмене `Task` одинаково (К53).
+    /// отказе и отмене `Task` одинаково (К53). `profileId` — отдельным параметром, а не из
+    /// `bundles.first?.modelId`: это ID МОДЕЛИ (например, «asr-1»), не ID профиля («p1»),
+    /// который обязан нести `modelsNotReady` — тот же профиль, что назвал вызывающий.
     private func withModelUse<Value>(
-        _ bundles: [ModelBundle], _ body: () async throws -> Value
+        profileId: String, _ bundles: [ModelBundle], _ body: () async throws -> Value
     ) async throws -> Value {
         let token: ModelUseToken
         do {
             token = try await modelCatalog.beginUse(bundles)
         } catch {
-            let profileId = bundles.first?.modelId ?? ""
             throw TranscriptionServiceError.modelsNotReady(profileId: profileId, message: "\(error)")
         }
         do {

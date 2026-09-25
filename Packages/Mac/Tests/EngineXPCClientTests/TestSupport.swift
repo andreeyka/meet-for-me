@@ -89,7 +89,13 @@ final class TestEngineXPCService: NSObject, EngineXPCServiceProtocol, @unchecked
             reply(nil, Self.transportError(code: EngineTransportFault.invalidRequest.rawValue, userInfo: userInfo))
             return
         }
-        locked { receivedJobIdsValue.append(Self.jobId(of: request)) }
+        // К22 считает jobId «рабочих/cancel» кадров — `ping` не несёт настоящего jobId
+        // (клиент синтезирует случайный UUID только чтобы завести запись `PendingJob`),
+        // и его учёт здесь ложно раздувал бы счётчик уникальных jobId внутренним
+        // рукопожатием, которое тест вообще не запрашивал явно.
+        if case .ping = request {} else {
+            locked { receivedJobIdsValue.append(Self.jobId(of: request)) }
+        }
         if let overrideBuilder = locked({ forcedReplyOverride }) {
             respond(overrideBuilder(Self.jobId(of: request)), reply: reply)
             return
