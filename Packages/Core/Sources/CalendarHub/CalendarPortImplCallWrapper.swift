@@ -50,6 +50,13 @@ extension CalendarPortImpl {
         operation: @escaping @Sendable () async throws -> Value
     ) async throws -> Value {
         var attempt = 0
+        // К56, вход «исчерпание» (найдено буквальным тестом, стдио-хост MEE-402 шаг 2, ни разу
+        // не годного `retryAfterSeconds`): задержка ПОСЛЕДНЕГО реально состоявшегося повтора —
+        // единственный источник «фактической задержки», которую §5.2 требует в `<N>`, когда
+        // ГОДНОГО значения не пришло ни разу за все попытки. Сырое (негодное) значение из
+        // ЧЕТВЁРТОГО, уже не повторяемого ответа для этого не годится — это как раз то
+        // значение, которое привело к фолбэку, а не то, что реально ждал хост.
+        var lastDelay = 0
         while true {
             do {
                 return try await raceTimeout(source: source, timeout: timeout, operation: operation)
@@ -64,12 +71,17 @@ extension CalendarPortImpl {
                     if case .upstreamUnavailable = error {
                         capabilities[source] = nil
                     }
+                    if retryable, case .rateLimited(let retryAfterSeconds) = error {
+                        let effectiveN = (0...3600).contains(retryAfterSeconds) ? retryAfterSeconds : lastDelay
+                        throw Self.mapConnectorError(.rateLimited(retryAfterSeconds: effectiveN), source: source)
+                    }
                     throw Self.mapConnectorError(error, source: source)
                 }
                 attempt += 1
                 let delay = (0...3600).contains(retryAfterSeconds)
                     ? min(retryAfterSeconds, 60)
                     : Self.fallbackRetryDelays[attempt - 1]
+                lastDelay = delay
                 do {
                     try await waitSeam.sleep(for: .seconds(delay))
                 } catch {
@@ -99,14 +111,16 @@ extension CalendarPortImpl {
             }
         } catch let error as CalendarError {
             if case .timeout = error {
-                // К9 вход Б (кадр shutdown на таймауте) — обязанность stdio-адаптера
-                // (group Ж, ещё не написан): здесь только сбрасываем кэш `capabilities`,
-                // чтобы следующий вызов инициализировал заново (тот же принцип, что К10/Р10).
+                // К9 вход Б (кадр shutdown на таймауте) — обязанность stdio-адаптера:
+                // `StdioCalendarConnector` (MEE-402 шаг 2) теперь умеет отправлять кадр
+                // `shutdown`, но вызов его ЗДЕСЬ, на таймауте, — ещё не сделан (следующая
+                // часть MEE-386); здесь пока только сбрасываем кэш `capabilities`, чтобы
+                // следующий вызов инициализировал заново (тот же принцип, что К10/Р10).
                 // СТРОКА: звать ли `connector.shutdown()` здесь же, для ЛЮБОГО коннектора
                 // (не только stdio) — контракт не решает для in-process пути. Не зову: у
                 // in-process коннектора зависшая Task не обязана значить «процесс мёртв»
                 // (процесса и нет), а К9 вход А не проверяет вызов shutdown — решение
-                // оставлено до группы Ж, чтобы не придумывать наблюдаемое поведение, о
+                // оставлено до К9 вход Б, чтобы не придумывать наблюдаемое поведение, о
                 // котором перечень MEE-347 не говорит ни здесь, ни там.
                 capabilities[source] = nil
             }
