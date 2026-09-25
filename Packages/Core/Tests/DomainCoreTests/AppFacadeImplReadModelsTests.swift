@@ -19,26 +19,35 @@ final class AppFacadeImplReadModelsTests: XCTestCase {
         let facade: AppFacadeImpl
         let repositories: InMemoryRepositories
         let permissions: FakePermissionsPort
+        let sessionCoordinator: FakeSessionCoordinator
     }
 
     func makeFacade(
         clock: @escaping @Sendable () -> Date = { Date() },
+        permissions permissionsOverride: FakePermissionsPort? = nil,
+        meetings meetingsOverride: ((InMemoryMeetingRepository) -> MeetingRepository)? = nil,
         transcripts transcriptsOverride: ((InMemoryTranscriptRepository) -> TranscriptRepository)? = nil
     ) -> Fixture {
         let repositories = InMemoryRepositories()
-        let permissions = FakePermissionsPort(startingStatus: .granted, startingOutcome: .granted, checkedAt: epoch)
+        let permissions = permissionsOverride
+            ?? FakePermissionsPort(startingStatus: .granted, startingOutcome: .granted, checkedAt: epoch)
+        let meetings = meetingsOverride?(repositories.meetings) ?? repositories.meetings
         let transcripts = transcriptsOverride?(repositories.transcripts) ?? repositories.transcripts
+        let sessionCoordinator = FakeSessionCoordinator()
         let facade = AppFacadeImpl(
-            meetings: repositories.meetings,
+            meetings: meetings,
             recordings: repositories.recordings,
             transcripts: transcripts,
             persons: repositories.persons,
             permissions: permissions,
             modelCatalog: FakeModelCatalogPort(),
             calendar: FakeCalendarPort(),
+            sessionCoordinator: sessionCoordinator,
             clock: clock
         )
-        return Fixture(facade: facade, repositories: repositories, permissions: permissions)
+        return Fixture(
+            facade: facade, repositories: repositories, permissions: permissions, sessionCoordinator: sessionCoordinator
+        )
     }
 
     // MARK: - К4 (инв. 3, 20): идемпотентность чтения

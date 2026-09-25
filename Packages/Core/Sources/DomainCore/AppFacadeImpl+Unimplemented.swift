@@ -1,7 +1,8 @@
-//  AppFacadeImpl — команды, не реализованные этим срезом MEE-420 части 2. См. заголовок
+//  AppFacadeImpl — команды, не реализованные этим срезом MEE-420 части 3. См. заголовок
 //  `AppFacadeImpl.swift`: каждая ждёт своего PR по группе плана MEE-410, названной в
 //  сообщении отказа. Разведено в отдельный файл, чтобы группа, чья реализация появится
-//  следующей, меняла один метод в одном файле, не трогая остальные ~25.
+//  следующей, меняла один метод в одном файле, не трогая остальные ~22. Группа В (К10-К12,
+//  startRecording/stopRecording) реализована — см. `AppFacadeImpl+Recording.swift`.
 //
 //  Модуль: domain-core · Владелец: DEV-2 · Слой: домен
 
@@ -9,15 +10,7 @@ import Foundation
 
 extension AppFacadeImpl {
 
-    // MARK: - Команды записи (группа В плана)
-
-    public func startRecording(meetingId: UUID?) async throws -> UUID {
-        throw notImplemented("startRecording(meetingId:)", group: "В (команды записи)")
-    }
-
-    public func stopRecording(recordingId: UUID) async throws {
-        throw notImplemented("stopRecording(recordingId:)", group: "В (команды записи)")
-    }
+    // MARK: - Команды записи (группа Х плана — skipMeeting, соседи startRecording/stopRecording уже реализованы)
 
     public func skipMeeting(meetingId: UUID) async throws {
         throw notImplemented("skipMeeting(meetingId:)", group: "Х (skipMeeting и соседи)")

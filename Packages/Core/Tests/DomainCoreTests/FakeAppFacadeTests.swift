@@ -15,8 +15,9 @@ final class FakeAppFacadeTests: XCTestCase {
 
     // MARK: - Умение 1: заставить любую команду бросить любую AppFacadeError
 
-    /// Табличный тест (приёмка РП по PR #141, `111b061b`, п.5): прежняя версия проверяла
-    /// три метода из ~27 бросающих команд — здесь названы все.
+    /// Табличный тест (приёмка РП по PR #141, `111b061b`, п.5; расширено приёмкой `bf3970d`,
+    /// 08:45 UTC, п.3 бэклога — добавлены шесть бросающих чтений и `settings()`): прежняя
+    /// версия проверяла три метода из ~27 бросающих команд — здесь названы все ~34.
     func test_k44_forcedErrorThrownByAnyCommand() async throws {
         let facade = Self.makeFacade()
         facade.forcedError = .notAllowed(reason: "тестовый отказ")
@@ -33,8 +34,10 @@ final class FakeAppFacadeTests: XCTestCase {
         }
     }
 
-    /// Все ~27 бросающих команд `AppFacade`, каждая обёрнута вызовом на заданном фейке —
-    /// оснастка табличного теста выше.
+    /// Все ~34 бросающих метода `AppFacade` (28 команд + 6 бросающих чтений — `status()`/
+    /// `permissions()`/`models()`/`modelState()`/`profiles()` не бросают вовсе, контракт
+    /// объявляет их без `throws`), каждый обёрнут вызовом на заданном фейке — оснастка
+    /// табличного теста выше.
     private static func allThrowingCommands(
         on facade: FakeAppFacade
     ) -> [(name: String, call: () async throws -> Void)] {
@@ -47,6 +50,13 @@ final class FakeAppFacadeTests: XCTestCase {
             isBuiltIn: false
         )
         return [
+            ("meetings", { _ = try await facade.meetings(from: Date(), to: Date()) }),
+            ("meeting", { _ = try await facade.meeting(id: UUID()) }),
+            ("transcript", { _ = try await facade.transcript(id: UUID()) }),
+            ("latestTranscript", { _ = try await facade.latestTranscript(recordingId: UUID()) }),
+            ("search", { _ = try await facade.search(query: "запрос", limit: 10, offset: 0) }),
+            ("jobs", { _ = try await facade.jobs(status: .pending) }),
+            ("settings", { _ = try await facade.settings() }),
             ("startRecording", { _ = try await facade.startRecording(meetingId: nil) }),
             ("stopRecording", { try await facade.stopRecording(recordingId: UUID()) }),
             ("skipMeeting", { try await facade.skipMeeting(meetingId: UUID()) }),
