@@ -30,7 +30,12 @@ extension AppFacadeImpl {
             throw AppFacadeError.notAllowed(reason: "уже идёт запись другой сессии")
         }
         do {
-            return try await sessionCoordinator.startRecording(meetingId: meetingId, now: clock())
+            let recordingId = try await sessionCoordinator.startRecording(meetingId: meetingId, now: clock())
+            // К33 (МЕЕ-437, группа Л, инв. 15/16): `activeSession` в `AppStatus` меняется
+            // ровно здесь — публикация после успешного старта, не до (отказавший старт не
+            // менял состояния, которому стоило бы сообщать подписчикам).
+            publish(.statusChanged(await status()))
+            return recordingId
         } catch let error as SessionError {
             throw wrap(error)
         } catch {
@@ -46,6 +51,8 @@ extension AppFacadeImpl {
     public func stopRecording(recordingId: UUID) async throws {
         do {
             try await sessionCoordinator.stopRecording(recordingId: recordingId, now: clock())
+            // К33: симметрично со стороной старта — публикация после успешной остановки.
+            publish(.statusChanged(await status()))
         } catch let error as SessionError {
             throw wrap(error)
         } catch {

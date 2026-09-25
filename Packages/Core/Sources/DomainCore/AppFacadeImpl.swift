@@ -31,10 +31,10 @@
 //  календарь/настройки/события, не группу Х целиком.
 //
 //  `status()` — минимальная, честно неполная реализация: `activeSession`/`connectors`
-//  оставлены пустыми (группы Р/О ещё не реализованы), `permissionsReady` — консервативное
-//  `.notReady` (инв. 26 — вычисление из снимка прав и действующих настроек — предмет
-//  своей, ещё не сделанной группы К плана MEE-410, не этой), `upcoming`/счётчики задач —
-//  нули/пусто до групп Н/К. Ни одно поле не изобретает данных, которых порты не дали.
+//  оставлены пустыми (группы Р/О ещё не реализованы), `upcoming`/счётчики задач — нули/пусто
+//  до групп Н/К. Ни одно поле не изобретает данных, которых порты не дали.
+//  `permissionsReady` — вычисляется (МЕЕ-437, группа К, `AppFacadeImpl+PermissionsReadiness.
+//  swift`), больше не литерал `.notReady`.
 //
 //  `settings()`/`updateSettings()` (группа Ж) реализованы отдельным файлом,
 //  `AppFacadeImpl+Settings.swift` (MEE-425, слито в main после этого PR) —
@@ -63,6 +63,12 @@ public actor AppFacadeImpl: AppFacade {
 
     nonisolated let broadcaster = AppEventBroadcaster()
 
+    /// Возврат РП (приёмка 10:15 UTC, находка 4): снимок готовности «на данный момент» —
+    /// сравнивается с ним при каждом новом `PermissionsPort.changes()` в
+    /// `AppFacadeImpl+PermissionsObservation.swift`. Живёт весь срок жизни актора — тот же
+    /// класс долгоживущего состояния, что `AppEventBroadcaster.continuations`.
+    var lastKnownPermissionsReadiness: PermissionsReadiness?
+
     public init(
         meetings: MeetingRepository,
         recordings: RecordingRepository,
@@ -89,6 +95,26 @@ public actor AppFacadeImpl: AppFacade {
         self.attribution = attribution
         self.settingsRepository = settings
         self.clock = clock
+        // Возврат РП (находка 4): подписка на смену прав живёт весь срок жизни фасада —
+        // `permissions.changes()` вызван ЗДЕСЬ, синхронно, до возврата из `init` (`AsyncStream`
+        // регистрирует подписчика синхронно при построении — тот же приём, что `events()`/
+        // `AppEventBroadcaster.subscribe()`), поэтому ни один снимок, отправленный сразу после
+        // конструирования, не потеряется, даже если фоновая `Task` ниже ещё не дошла до
+        // `for await` (буфер `AsyncStream` по умолчанию не ограничен). См.
+        // `AppFacadeImpl+PermissionsObservation.swift` за телом обработчика одного снимка.
+        //
+        // Возврат РП (повторная приёмка 11:05 UTC, находка 4): `[weak self]`, не сильный
+        // захват, — бессрочная `Task` иначе держит актор живым весь процесс, даже когда его
+        // больше никто не держит (тестовая фикстура, например), и не даёт ему освободиться.
+        // `self` берётся заново на КАЖДОЕ пришедшее событие, а не один раз перед циклом, —
+        // между событиями Task не держит актор вовсе.
+        let permissionChanges = permissions.changes()
+        Task { [weak self] in
+            for await snapshot in permissionChanges {
+                guard let self else { return }
+                await self.handlePermissionsChange(snapshot)
+            }
+        }
     }
 
     /// Отказ методов, которых эта часть PR не реализует — см. заголовок файла.
@@ -114,8 +140,22 @@ public actor AppFacadeImpl: AppFacade {
         await modelCatalog.profiles()
     }
 
+    /// К33 (МЕЕ-437, группа Л): единственный сегодня реализованный метод, чей естественный
+    /// повод для `.meetingsChanged` — группа Н (`downloadModel`/`setConnectorEnabled` и т.п.)
+    /// вне периметра этой задачи. Публикуется безусловно — сама синхронизация уже
+    /// безусловна (`CalendarPort.sync` не throws, каждый `CalendarSyncResult` несёт свой
+    /// отказ по коннектору отдельно), а не только когда список встреч правда изменился:
+    /// подписчик не платит за лишний пересчёт дороже одного чтения.
+    ///
+    /// Возврат РП (приёмка 10:15 UTC, находка 4): `.statusChanged` — тоже безусловно и
+    /// тоже здесь, не только `.meetingsChanged`. `AppStatus.upcoming` строится из встреч
+    /// (`status()`, `meetingListItems`) — синхронизация меняет ИМЕННО его, значит меняет
+    /// и сам статус, независимо от того, различалось ли что-то в `permissionsReady`.
     public func syncCalendars() async -> [CalendarSyncResult] {
-        await calendar.sync(trigger: .manual)
+        let results = await calendar.sync(trigger: .manual)
+        publish(.meetingsChanged)
+        publish(.statusChanged(await status()))
+        return results
     }
 
     public func requestPermission(_ kind: PermissionKind) async -> PermissionRequestOutcome {
@@ -162,6 +202,16 @@ public actor AppFacadeImpl: AppFacade {
 
     // MARK: - editSegmentText (группа Г плана MEE-410; К13, К14)
 
+    // К33 (МЕЕ-437, группа Л, инв. 15; возврат РП, приёмка 10:15 UTC, «мелочи»): эта команда
+    // ДОЛЖНА публиковать `.transcriptChanged(transcriptId:)` (сама меняет текст сегмента),
+    // но принимает только `segmentId` (C-016 §4, дословно) — резолвинг `segmentId →
+    // transcriptId` не входит ни в один метод `TranscriptRepository` C-010 (сверено
+    // `PortContractExpectations.swift` — `transcriptRepository`, десять методов, ни один не
+    // даёт этого). Заведённый было `transcriptId(forSegmentId:)` красил `PortDeclarationTests.
+    // test_mee289_everyPortDeclaresExactlyTheRequirementsOfItsContract` — протокол обязан
+    // зеркалить контракт дословно, не шире. Нужен новый метод в САМОМ контракте C-010 (не
+    // только в Swift) — решение архитектора/РП, не эта задача; публикация здесь остаётся
+    // дырой сознательно, не по недосмотру.
     /// К13 (инв. 13, часть 1): ровно один вызов `TranscriptRepository.updateSegmentText(
     /// isUserEdited: true)`, без `applyTextCorrections` — правка целиком заменяет текст
     /// сегмента, а не накладывает список точечных замен слов (`applyTextCorrections` сама
@@ -182,13 +232,18 @@ public actor AppFacadeImpl: AppFacade {
 
     public func status() async -> AppStatus {
         let upcomingItems = (try? await meetingListItems(from: clock(), to: .distantFuture)) ?? []
+        let snapshot = await permissionsPort.snapshot()
+        // Битая строка настроек не должна ронять status() (он не throws, §2 контракта) —
+        // slice1Defaults на этот один расчёт то же умолчание, что settingsRepository() ещё
+        // не читало ни разу (§2.1: «строки нет — берётся значение из slice1Defaults»).
+        let currentSettings = (try? await settings()) ?? AppSettings.slice1Defaults
         return AppStatus(
             activeSession: nil,
             upcoming: upcomingItems,
             runningJobs: [],
             pendingJobCount: 0,
             failedJobCount: 0,
-            permissionsReady: .notReady,
+            permissionsReady: permissionsReady(snapshot: snapshot, settings: currentSettings),
             connectors: [],
             updatedAt: clock()
         )

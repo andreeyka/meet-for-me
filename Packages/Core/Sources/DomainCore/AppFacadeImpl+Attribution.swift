@@ -134,6 +134,10 @@ extension AppFacadeImpl {
     /// К16: пометка идёт ПОСЛЕ всех трёх вызовов применения (`AttributionSupport.apply`),
     /// не только после последнего. К51 (дельта Щ): помечен ВЕСЬ кластер — каждый его сегмент,
     /// не только те, что попали в `segmentUpdates`, — и ни один сегмент другого кластера.
+    ///
+    /// К33 (МЕЕ-437, группа Л): общая точка для всех трёх вызывающих методов
+    /// (`assignSpeaker`/`clearSpeaker`/`createPersonAndAssign`) — публикация здесь одна на
+    /// всех троих, а не по копии в каждом.
     private func applyResultAndMarkCluster(
         _ result: AttributionResult, transcriptId: UUID, cluster: Int
     ) async throws {
@@ -143,6 +147,7 @@ extension AppFacadeImpl {
         )
         let segmentIds = try await clusterSegmentIds(transcriptId: transcriptId, cluster: cluster)
         try await transcripts.markSegmentsUserEdited(segmentIds: segmentIds)
+        publish(.transcriptChanged(transcriptId: transcriptId))
     }
 
     private func clusterSegmentIds(transcriptId: UUID, cluster: Int) async throws -> [Int64] {
