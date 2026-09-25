@@ -29,12 +29,15 @@ final class StdioProtocolTimeoutShutdownTests: XCTestCase {
         transport.enqueue(StdioHarness.initializeFrame(id: 1))
         transport.hangOnNextReceive()
 
+        // Не типизированный `catch let error as CalendarError` — тот не исчерпывающий (любой
+        // ДРУГОЙ тип ошибки ушёл бы дальше, и компилятор считает всё замыкание бросающим,
+        // требуя `try` на каждом чтении `async let` ниже, хотя оно логически не бросает).
         async let outcome: CalendarError? = {
             do {
                 _ = try await hub.listCalendars(source: StdioHarness.source)
                 return nil
-            } catch let error as CalendarError {
-                return error
+            } catch {
+                return error as? CalendarError
             }
         }()
 
