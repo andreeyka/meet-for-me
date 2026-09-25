@@ -255,6 +255,11 @@ public protocol TranscriptRepository: Sendable {
     func segments(transcriptId: UUID) async throws -> [SegmentRow]
     func updateAttribution(_ updates: [SegmentAttributionUpdate]) async throws
     func updateSegmentText(segmentId: Int64, text: String, isUserEdited: Bool) async throws
+    /// C-010 v25, инвариант 34 (IR-135, MEE-421): ставит только `is_user_edited = 1` —
+    /// `text`/`text_original`/`words_json` и атрибуцию не трогает. Уже помеченная строка —
+    /// не отказ. Чужой id — `constraintViolation`. Пустой список — ничего не делает,
+    /// повтор id в списке помечает ту же строку один раз. Атомарно: все или ни одна.
+    func markSegmentsUserEdited(segmentIds: [Int64]) async throws
     /// C-010 v19, инвариант 32 (IR-129, MEE-388): применяет постправку словарём имён.
     func applyTextCorrections(segmentId: Int64, text: String, corrections: [TextCorrection]) async throws
     func search(query: String, limit: Int, offset: Int) async throws -> [SearchHit]

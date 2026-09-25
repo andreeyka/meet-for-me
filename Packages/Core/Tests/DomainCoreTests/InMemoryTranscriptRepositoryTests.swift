@@ -68,17 +68,30 @@ final class InMemoryTranscriptRepositoryTests: XCTestCase {
         let afterFirst = try await repositories.transcripts.segments(transcriptId: header.id)
         XCTAssertEqual(afterFirst.first?.personId, personId, "непомеченная строка правится")
 
-        // Помечаем правкой человека и повторяем — изменение обязано не дойти, и без отказа.
+        // Помечаем правкой человека и повторяем автоматическим источником — изменение
+        // обязано не дойти, и без отказа.
         try await repositories.transcripts.updateSegmentText(
             segmentId: target.id, text: afterFirst.first?.segment.text ?? "", isUserEdited: true
         )
-        let second = SegmentAttributionUpdate(
-            segmentId: target.id, personId: UUID(), speakerConfidence: 0.1, attributionSource: .user
+        let automatic = SegmentAttributionUpdate(
+            segmentId: target.id, personId: UUID(), speakerConfidence: 0.1, attributionSource: .oneOnOne
         )
-        try await repositories.transcripts.updateAttribution([second])
-        let afterSecond = try await repositories.transcripts.segments(transcriptId: header.id)
-        XCTAssertEqual(afterSecond.first?.personId, personId, "правка человека не перезаписана")
-        XCTAssertEqual(afterSecond.first?.attributionSource, AttributionSource.voiceProfile)
+        try await repositories.transcripts.updateAttribution([automatic])
+        let afterAutomatic = try await repositories.transcripts.segments(transcriptId: header.id)
+        XCTAssertEqual(afterAutomatic.first?.personId, personId, "автоматический источник не перезаписал правку")
+        XCTAssertEqual(afterAutomatic.first?.attributionSource, AttributionSource.voiceProfile)
+
+        // C-010 v25 инв. 17-исключение (IR-135, MEE-421): .user пишется несмотря на
+        // isUserEdited — решение человека не отклоняется собственной же пометкой.
+        let userPersonId = UUID()
+        let userSource = SegmentAttributionUpdate(
+            segmentId: target.id, personId: userPersonId, speakerConfidence: 1.0, attributionSource: .user
+        )
+        try await repositories.transcripts.updateAttribution([userSource])
+        let afterUser = try await repositories.transcripts.segments(transcriptId: header.id)
+        XCTAssertEqual(afterUser.first?.personId, userPersonId, ".user пишется despite isUserEdited")
+        XCTAssertEqual(afterUser.first?.attributionSource, AttributionSource.user)
+        XCTAssertTrue(afterUser.first?.isUserEdited ?? false, "остаётся true — метод его не трогает")
     }
 
     /// Инвариант 18: порядок по возрастанию `rank`; `limit == 0` — пустой массив.
