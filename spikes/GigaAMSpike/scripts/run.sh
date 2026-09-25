@@ -1,13 +1,13 @@
 #!/bin/zsh
 # Запуск напрямую — не через `open`/LaunchServices: тому нужна TCC-привязка к bundle id
-# (см. CaptureManualHarness/scripts/run.sh), а у этого спайка нет ни одной защищённой
-# возможности, привязывать нечего.
+# (см. Packages/Mac/Sources/CaptureManualHarness/scripts/run.sh), а у этого спайка нет ни одной
+# защищённой возможности, привязывать нечего.
 #
-#   scripts/run.sh --model models/gigaam-v3-e2e-ctc/gigaam_v3_e2e_ctc.onnx \
+#   scripts/run.sh --model models/gigaam-v3-e2e-ctc/gigaam_v3_e2e_ctc_int8.onnx \
 #     --tokens models/gigaam-v3-e2e-ctc/gigaam_v3_e2e_ctc_tokens.txt \
 #     --wav /path/to/16k-mono.wav
 set -euo pipefail
-cd "${0:A:h}/../../.."   # -> Packages/Mac
+cd "${0:A:h}/.."   # -> spikes/GigaAMSpike
 
 BIN=".build/release/GigaAMSpikeHarness"
 if [[ ! -x "$BIN" ]]; then

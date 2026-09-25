@@ -3,11 +3,13 @@
 //  Спайк R12 (docs/architecture.md) · Владелец задачи: Архитектор (MEE-426) · Слой: спайк
 //
 //  Каталог — код спайка, а не модуль (docs/module-map.md: «Спайки не принадлежат модулям»):
-//  живёт в Packages/Mac, а не в spikes/, только потому что spikes/ не собирает CI
-//  (spikes/README.md: «CI спайки не собирает»), а этому спайку нужна проверка сборки на
-//  macos-14 (готовность MEE-426). Результат спайка — измерения комментарием в MEE-426, не
-//  код, переезжающий в модуль `gigaam` (Packages/Core/Sources/GigaAM/, владелец DEV-2) без
-//  отдельной задачи с контрактом (тот же файл module-map.md).
+//  отдельный пакет spikes/GigaAMSpike/, не таргет Packages/Mac — sherpa-onnx тянет ~168 МиБ
+//  бинарников, и эта цена не должна ложиться на каждую сборку общего пакета и на каждый
+//  прогон CI (возврат РП, MEE-426, приёмка #158). CI этот пакет не собирает (spikes/README.md
+//  — «CI спайки не собирает», тот же приём, что уже принят для spikes/capture-cli). Результат
+//  спайка — измерения комментарием в MEE-426, не код, переезжающий в модуль `gigaam`
+//  (Packages/Core/Sources/GigaAM/, владелец DEV-2) без отдельной задачи с контрактом (тот же
+//  файл module-map.md).
 //
 //  Назначение — R12: реальная скорость (RTF), пиковая память и время загрузки GigaAM v3
 //  `e2e_ctc` на Apple Silicon через sherpa-onnx (C API — решение Q10 architecture.md,
@@ -18,7 +20,10 @@
 //  Формат модели GigaAM `e2e_ctc` — одноэнкодерный CTC-граф в стиле NeMo (не transducer,
 //  не whisper): конфигурация `nemo_ctc`/`modelType: "nemo_ctc"`, тот же путь, которым
 //  sherpa-onnx уже поддерживает произвольные экспорты NeMo-CTC-моделей (записка MEE-426,
-//  §2 — источник модели и довод, почему это тот же класс формата).
+//  §2 — источник модели и довод, почему это тот же класс формата). Размерность мел-признаков —
+//  64, явно (не значение по умолчанию 80 из примеров sherpa-onnx для Whisper/Paraformer):
+//  подтверждено приёмкой РП (MEE-426, #158) — верное значение стоит за метаданными
+//  `is_giga_am=1` экспорта, которые без реальной загрузки в этой сессии проверить нельзя было.
 //
 //  Модель и WAV — аргументами командной строки; ни то, ни другое в репозиторий не кладётся.
 //  Точки вызова sherpa-onnx списаны с `swift-api-examples/decode-file-non-streaming.swift`
@@ -65,11 +70,11 @@ GigaAMSpikeHarness — спайк R12 (docs/architecture.md): GigaAM v3 e2e_ctc 
 через sherpa-onnx (NeMo-CTC).
 
   run --model PATH-К-ONNX --tokens PATH-К-TOKENS.TXT --wav PATH [--threads 4]
-      --model  файл энкодера CTC (например, `gigaam_v3_e2e_ctc.onnx` — точное имя
-               и источник называет записка MEE-426, §2).
+      --model  файл энкодера CTC (`gigaam_v3_e2e_ctc_int8.onnx` — точное имя и источник
+               называет записка MEE-426, §2, и приёмка РП).
       --tokens файл словаря токенов, тем же экспортом.
       --wav    16 кГц, моно, PCM — отказ с точным несовпадением на любом другом формате.
-      --threads число потоков ONNX Runtime (по умолчанию 4).
+      --threads число потоков ONNX Runtime, целое число (по умолчанию 4).
 
   Печатает: распознанный текст, RTF (время расшифровки / длительность записи),
   пиковую резидентную память процесса (МБ), время загрузки модели (с).
@@ -82,7 +87,19 @@ private let arguments = Arguments(Array(rawArguments.dropFirst()))
 guard let modelPath = arguments["model"] else { fail("--model обязателен\n\n" + usage) }
 guard let tokensPath = arguments["tokens"] else { fail("--tokens обязателен\n\n" + usage) }
 guard let wavPath = arguments["wav"] else { fail("--wav обязателен\n\n" + usage) }
-let threadCount = Int(arguments["threads"] ?? "") ?? 4
+
+// Нечисловое значение — явная ошибка, не молчаливый откат к 4: спайк меряет производительность,
+// и тихая подмена аргумента, который читатель измерений посчитал заданным, исказила бы RTF
+// без единого следа в выводе.
+let threadCount: Int
+if let rawThreads = arguments["threads"] {
+    guard let parsed = Int(rawThreads) else {
+        fail("--threads: '\(rawThreads)' не целое число")
+    }
+    threadCount = parsed
+} else {
+    threadCount = 4
+}
 
 // MARK: - Загрузка WAV: 16 кГц, моно — точное несовпадение обязано отказать, не подгонять
 
@@ -142,7 +159,7 @@ let modelConfig = sherpaOnnxOfflineModelConfig(
     provider: "cpu",
     modelType: "nemo_ctc"
 )
-let featConfig = sherpaOnnxFeatureConfig(sampleRate: 16_000, featureDim: 80)
+let featConfig = sherpaOnnxFeatureConfig(sampleRate: 16_000, featureDim: 64)
 var recognizerConfig = sherpaOnnxOfflineRecognizerConfig(featConfig: featConfig, modelConfig: modelConfig)
 let recognizer = SherpaOnnxOfflineRecognizer(config: &recognizerConfig)
 let loadSeconds = Date().timeIntervalSince(loadStart)
