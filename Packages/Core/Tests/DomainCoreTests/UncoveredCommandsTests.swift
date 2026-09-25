@@ -7,7 +7,13 @@
 //  `skip` вызовом §3.1, «их зовёт фасад C-016 §4», — тем же классом, что `startRecording`/
 //  `stopRecording`. Первая редакция шла мимо машины, через `MeetingRepository.setStatus`
 //  напрямую, — правка и разбор в докстринге `skipMeeting` (`AppFacadeImpl+Recording.swift`).
-//  Фикстура здесь поэтому — `FakeSessionCoordinator`, не `NoOpSessionCoordinator`.
+//
+//  `TestSkipSessionCoordinator` — СВОЙ, а не `DomainTestKit.FakeSessionCoordinator`: К88
+//  плана MEE-288 (`SessionCoordinatorFakeTraceTests.swift`) красит любой файл в `Tests/
+//  DomainCoreTests/`, кодово ссылающийся на тот фейк, кроме его собственного теста —
+//  тот же довод и то же решение, что уже принял `RecordingCommandsTests.swift`
+//  (`TestSessionCoordinator`, приёмка РП MEE-420, 09:50 UTC: «свои заглушки координатора —
+//  допустимое решение, сторож не ослаблен»).
 //
 //  К48(а): `requestPermission` уже реализован (`AppFacadeImpl.swift`, сквозная обёртка) —
 //  этот файл добавляет для него первый тест. Состав `PermissionRequestOutcome` контракт
@@ -25,13 +31,13 @@ final class UncoveredCommandsTests: XCTestCase {
         let facade: AppFacadeImpl
         let repositories: InMemoryRepositories
         let permissions: FakePermissionsPort
-        let sessionCoordinator: FakeSessionCoordinator
+        let sessionCoordinator: TestSkipSessionCoordinator
     }
 
     private func makeFixture() -> Fixture {
         let repositories = InMemoryRepositories()
         let permissions = FakePermissionsPort(startingStatus: .granted, startingOutcome: .granted, checkedAt: Date())
-        let sessionCoordinator = FakeSessionCoordinator(log: repositories.log)
+        let sessionCoordinator = TestSkipSessionCoordinator()
         let facade = AppFacadeImpl(
             meetings: repositories.meetings,
             recordings: repositories.recordings,
@@ -65,10 +71,10 @@ final class UncoveredCommandsTests: XCTestCase {
 
         try await fixture.facade.skipMeeting(meetingId: meetingId)
 
-        XCTAssertEqual(
-            fixture.sessionCoordinator.recordedCommands,
-            [.skip(meetingId: meetingId, now: Date(timeIntervalSince1970: 1_000))]
-        )
+        let calls = fixture.sessionCoordinator.recordedSkipCalls
+        XCTAssertEqual(calls.count, 1, "\(calls)")
+        XCTAssertEqual(calls.first?.meetingId, meetingId)
+        XCTAssertEqual(calls.first?.now, Date(timeIntervalSince1970: 1_000))
         let events = await collectEvents(stream, count: 1, timeoutSeconds: 1)
         XCTAssertEqual(events.count, 1, "\(events)")
     }
@@ -78,7 +84,7 @@ final class UncoveredCommandsTests: XCTestCase {
     func test_k47_skipMeeting_sessionCoordinatorFailureWrapped() async throws {
         let fixture = makeFixture()
         let meetingId = UUID()
-        fixture.sessionCoordinator.fail(.skip, with: .noSuchMeeting(meetingId: meetingId))
+        fixture.sessionCoordinator.failSkip(with: .noSuchMeeting(meetingId: meetingId))
 
         do {
             try await fixture.facade.skipMeeting(meetingId: meetingId)
@@ -132,4 +138,46 @@ final class UncoveredCommandsTests: XCTestCase {
 
         XCTAssertEqual(fixture.permissions.requestCallCount(for: .microphone), 0, "вызван только заданный kind")
     }
+}
+
+/// См. докстринг файла — К88 (`SessionCoordinatorFakeTraceTests.swift`) запрещает ссылаться
+/// на `DomainTestKit.FakeSessionCoordinator` вне его собственного теста; несёт только то,
+/// что нужно К47: запись вызовов `skip` и отказ по требованию.
+private final class TestSkipSessionCoordinator: SessionCoordinator, @unchecked Sendable {
+    private let lock = NSLock()
+    private var skipCalls: [(meetingId: UUID, now: Date)] = []
+    private var skipError: SessionError?
+
+    private func locked<Value>(_ body: () -> Value) -> Value {
+        lock.lock()
+        defer { lock.unlock() }
+        return body()
+    }
+
+    func failSkip(with error: SessionError) {
+        locked { skipError = error }
+    }
+
+    var recordedSkipCalls: [(meetingId: UUID, now: Date)] {
+        locked { skipCalls }
+    }
+
+    func sessions() async -> [SessionSnapshot] { [] }
+    func session(id: UUID) async -> SessionSnapshot? { nil }
+    func prompts() async -> [SessionPrompt] { [] }
+    func changes() -> AsyncStream<SessionChange> { AsyncStream { _ in } }
+    func startRecording(meetingId: UUID?, now: Date) async throws -> UUID { UUID() }
+    func stopRecording(recordingId: UUID, now: Date) async throws {}
+
+    func skip(meetingId: UUID, now: Date) async throws {
+        locked { skipCalls.append((meetingId: meetingId, now: now)) }
+        if let error = locked({ skipError }) {
+            throw error
+        }
+    }
+
+    func answer(promptId: UUID, _ answer: SessionPromptAnswer, now: Date) async throws {}
+    func start(now: Date) async {}
+    func tick(now: Date) async {}
+    func stop() async {}
 }
