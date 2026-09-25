@@ -115,9 +115,7 @@ final class GRDBMeetingRepository: MeetingRepository {
         guard !meetingIds.isEmpty else { return }
         do {
             try await database.dbPool.write { db in
-                for id in meetingIds {
-                    try db.execute(sql: "DELETE FROM meetings WHERE id = ?", arguments: [id.uuidString])
-                }
+                try Self.deleteMeetingRows(meetingIds, db: db)
             }
         } catch {
             throw StorageErrorMapping.mapWrite(error)

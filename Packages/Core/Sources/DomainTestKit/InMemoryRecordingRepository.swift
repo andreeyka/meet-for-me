@@ -144,6 +144,19 @@ public final class InMemoryRecordingRepository: RecordingRepository, @unchecked 
         }
     }
 
+    /// C-010 v21, инвариант 33: переносит привязку «запись → встреча» с проигравших на
+    /// победителя — шаг (1) `save(_:absorbing:)`, до удаления проигравших (в отличие от
+    /// `detachFromDeletedMeetings`, которая её снимает). Зовёт
+    /// `InMemoryMeetingRepository.save(_:absorbing:)` — единственный вызывающий, наружу
+    /// поверхности не несёт (возврат РП, приёмка #134).
+    func reassignFromDeletedMeetings(_ losingIds: Set<UUID>, to winnerId: UUID) {
+        locked {
+            for (recordingId, boundMeetingId) in meetingBinding where losingIds.contains(boundMeetingId) {
+                meetingBinding[recordingId] = winnerId
+            }
+        }
+    }
+
     // MARK: - Оснастка
 
     private func failureIfAny(_ method: RecordingRepositoryMethod, id: String?) -> StorageError? {
