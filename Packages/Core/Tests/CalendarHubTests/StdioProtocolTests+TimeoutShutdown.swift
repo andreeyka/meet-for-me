@@ -65,4 +65,57 @@ final class StdioProtocolTimeoutShutdownTests: XCTestCase {
             "shutdown ушёл ДО того, как .timeout вернулся вызывающей стороне"
         )
     }
+
+    /// К9, вторая часть возврата (MEE-386, «Оставшиеся К»): таймаут НЕ расходует счётчик
+    /// повтора §5.2. Верно структурно — `raceTimeout` бросает `CalendarError.timeout`, не
+    /// `ConnectorError`, и `catch let error as ConnectorError` внутри `callConnector`
+    /// (`CalendarPortImplCallWrapper.swift`) его не ловит вовсе, так что `attempt += 1` для
+    /// таймаута физически недостижимо, — но наблюдаемого теста на это не было. Здесь: первая
+    /// физическая попытка (id=2) получает `-32003` (обычный повтор, `attempt` становится 1),
+    /// ВТОРАЯ (id=3) виснет и проигрывает гонку СВОЕМУ таймауту `.other` (30с) — итоговая
+    /// ошибка снаружи ровно `.timeout`, а не «повторы исчерпаны» (`.transport`, тот путь,
+    /// которым уходит четвёртая подряд `-32003` — `test_k56_exhaustionAfterThreeRetries...`,
+    /// `StdioProtocolTests+Retries.swift`) — таймаут обрывает цикл повтора целиком, а не
+    /// встраивается в его подсчёт.
+    func test_k09_secondVector_timeoutDuringRetryLoopSurfacesAsTimeoutNotAsRetryExhaustion() async throws {
+        let bundle = StdioHarness.make()
+        let hub = bundle.hub
+        let transport = bundle.transport
+        let waitSeam = bundle.waitSeam
+        let ids = StdioProtocolTests.IdCounter()
+        transport.enqueue(StdioHarness.initializeFrame(id: ids.advance()))
+        transport.enqueue(StdioHarness.errorFrame(id: ids.advance(), code: -32003, message: "slow down"))
+        transport.hangOnNextReceive()
+
+        async let outcome: (error: CalendarError?, sentAtThrow: [String]) = {
+            do {
+                _ = try await hub.listCalendars(source: StdioHarness.source)
+                return (nil, transport.sent)
+            } catch {
+                return (error as? CalendarError, transport.sent)
+            }
+        }()
+
+        // Первая физическая попытка получает -32003 — обычная задержка повтора (1с, фолбэк).
+        await pollUntil { StdioProtocolTests.retryDelays(waitSeam).count == 1 }
+        await pollUntil { waitSeam.resolveNext() }
+
+        // Вторая физическая попытка виснет — гонка со СВОИМ таймаутом .other, не с повтором.
+        await pollUntil { waitSeam.durations.contains(.seconds(30)) }
+        await pollUntil { waitSeam.resolveNext() }
+
+        let result = await outcome
+        guard case .timeout = result.error else {
+            return XCTFail("ожидался .timeout, получено \(String(describing: result.error))")
+        }
+        XCTAssertEqual(
+            StdioProtocolTests.retryDelays(waitSeam).count, 1,
+            "таймаут не добавил своей записи в задержки повтора — цикл §5.2 прерван, не продолжен"
+        )
+        XCTAssertEqual(
+            result.sentAtThrow.count, 4,
+            "initialize, listCalendars (попытка 1, -32003), listCalendars (попытка 2, виснет), shutdown"
+        )
+        XCTAssertTrue(result.sentAtThrow[3].contains(#""method":"shutdown""#))
+    }
 }

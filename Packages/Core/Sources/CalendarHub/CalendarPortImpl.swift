@@ -394,6 +394,6 @@ public actor CalendarPortImpl: CalendarPort {
 
     // MARK: - Обёртка вызова: таймаут (К9) + повтор §5.2 (К56/К67) + отображение ошибок (К13)
     //
-    // MethodTimeout, callConnector(source:connector:timeout:retryable:operation:), raceTimeout,
-    // mapConnectorError — CalendarPortImplCallWrapper.swift (тот же довод, что у Sync.swift).
+    // MethodTimeout, callConnector(source:connector:timeout:passthroughCursorInvalid:operation:),
+    // raceTimeout, mapConnectorError — CalendarPortImplCallWrapper.swift (тот же довод, что у Sync.swift).
 }

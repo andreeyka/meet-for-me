@@ -28,8 +28,16 @@ extension CalendarPortImpl {
 
     /// К9: таймаут гонкой с Ш3, на границе, не раньше/позже. К56/К67: повтор на
     /// `.rateLimited` — до трёх раз, потолок задержки 60с, отмена во время ожидания —
-    /// `.cancelled`, не `.transport`. `retryable: false` — только для `shutdown()`
-    /// (инв. 20: «shutdown никогда не повторяется»).
+    /// `.cancelled`, не `.transport`.
+    ///
+    /// Возврат РП (дефект 3, MEE-386): параметр `retryable: Bool` был заведён ИМЕННО для
+    /// `stop()` (`shutdown()` не должен повторяться, инв. 20, `callConnector(..., retryable:
+    /// false) { await connector.shutdown() }`), но та первая правка вешала CI на зависшем
+    /// коннекторе (см. `CalendarPortImpl.stop()`) и была заменена на `shutdownWithTimeout` —
+    /// свою гонку с `waitSeam`, без повторов по конструкции, В ОБХОД `callConnector` целиком.
+    /// Параметр остался — ни один вызов в модуле больше не передаёт `false`. Снят вместе с
+    /// обеими его `retryable &&`-проверками ниже (обе были тавтологией: `retryable` всегда
+    /// `true`).
     ///
     /// СТРОКА (найдено буквальным чтением при написании теста К64 вход Б — до этого
     /// теста на `.cursorInvalid` не было вовсе, ни здесь, ни у К55): `passthroughCursorInvalid`
@@ -46,7 +54,7 @@ extension CalendarPortImpl {
     /// из прочих вызовов `callConnector` в модуле.
     func callConnector<Value: Sendable>(
         source: CalendarSourceId, connector: CalendarConnector, timeout: MethodTimeout,
-        retryable: Bool = true, passthroughCursorInvalid: Bool = false,
+        passthroughCursorInvalid: Bool = false,
         operation: @escaping @Sendable () async throws -> Value
     ) async throws -> Value {
         var attempt = 0
@@ -66,14 +74,14 @@ extension CalendarPortImpl {
                 if passthroughCursorInvalid, case .cursorInvalid = error {
                     throw error
                 }
-                guard case .rateLimited(let retryAfterSeconds) = error, retryable, attempt < 3 else {
+                guard case .rateLimited(let retryAfterSeconds) = error, attempt < 3 else {
                     // Развилка Р10: `upstreamUnavailable` — тот же сигнал «переподключить
                     // заново», что таймаут (raceTimeout ниже) — следующий вызов этого
                     // источника инициализирует с нуля, не полагаясь на кэш `capabilities`.
                     if case .upstreamUnavailable = error {
                         capabilities[source] = nil
                     }
-                    if retryable, case .rateLimited(let retryAfterSeconds) = error {
+                    if case .rateLimited(let retryAfterSeconds) = error {
                         let effectiveN = (0...3600).contains(retryAfterSeconds) ? retryAfterSeconds : lastDelay
                         throw Self.mapConnectorError(.rateLimited(retryAfterSeconds: effectiveN), source: source)
                     }
