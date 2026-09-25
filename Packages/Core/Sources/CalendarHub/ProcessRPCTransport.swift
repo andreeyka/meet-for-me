@@ -162,8 +162,10 @@ public actor ProcessRPCTransport: RPCTransport {
     /// вместо этого бросает обычной ошибкой (`EPIPE`), заворачиваемой ниже как обычно.
     public func send(_ frame: String) async throws {
         if let terminated { throw terminated }
-        var data = Data(frame.utf8)
-        data.append(0x0A)
+        // `let`, не `var` + `.append` — тот же класс ошибки, что и захват `self` в `init`
+        // («reference to captured var в конкурентно исполняющемся коде»): `Task.detached`
+        // ниже требует неизменяемого захваченного значения, не мутируемой локальной переменной.
+        let data = Data(frame.utf8) + [0x0A]
         let handle = stdinHandle
         do {
             try await Task.detached(priority: .utility) {
