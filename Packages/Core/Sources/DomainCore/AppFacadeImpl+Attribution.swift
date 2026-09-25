@@ -173,14 +173,28 @@ extension AppFacadeImpl {
         }
     }
 
-    /// Инв. 19, §3.1: шесть кейсов `AttributionError`, ни одному не нужен `permissionKind`
-    /// или отдельная ветка — код всегда `attribution.<имя кейса>`, тем же приёмом, что
-    /// `wrap(_ error: CaptureError)` в `AppFacadeImpl+Recording.swift`.
+    /// Инв. 19, §3.1: шесть кейсов `AttributionError`, ни одному не нужен `permissionKind`.
+    /// Приёмка РП (MEE-420, 07:30 UTC): явный `switch`, а не разбор `String(describing:)` —
+    /// шесть случаев далеко не упираются в `cyclomatic_complexity` (порог 10), в отличие от
+    /// одиннадцати у `CaptureError` в `AppFacadeImpl+Recording.swift`.
     private func wrap(_ error: AttributionError) -> AppFacadeError {
-        let description = String(describing: error)
-        let name = description.split(separator: "(", maxSplits: 1).first.map(String.init) ?? description
+        let code: String
+        switch error {
+        case .unknownTranscript:
+            code = "attribution.unknownTranscript"
+        case .unknownCluster:
+            code = "attribution.unknownCluster"
+        case .unknownPerson:
+            code = "attribution.unknownPerson"
+        case .embeddingModelMismatch:
+            code = "attribution.embeddingModelMismatch"
+        case .segmentIdsMismatch:
+            code = "attribution.segmentIdsMismatch"
+        case .voiceProfilesDisabled:
+            code = "attribution.voiceProfilesDisabled"
+        }
         return .underlying(AppErrorView(
-            code: "attribution.\(name)", message: description, recoverySuggestion: nil, permissionKind: nil
+            code: code, message: String(describing: error), recoverySuggestion: nil, permissionKind: nil
         ))
     }
 }

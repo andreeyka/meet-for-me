@@ -9,17 +9,16 @@
 //  и «одно названное место, где отображение живёт, — объявление `AppSettings` в §2».
 //  Поэтому имена и порядок полей здесь дословны по контракту и правятся только вместе с ним.
 //
-//  `AppSettings.slice1Defaults` НЕ ОБЪЯВЛЕН — но НАХОДКА MEE-289, на которой держалось это
-//  отсутствие, устарела. C-016 v10 (основание версии 10, приёмка РП IR-105/MEE-291) сама
-//  разводит все двенадцать полей: семь названы контрактом дословно — `armLeadSeconds` 120,
-//  `askLeadSeconds` 30, `missingSignalGraceSeconds` 900, `silenceStopSeconds` 300,
-//  `audioRetentionDays` nil, `notifyParticipants` false, `voiceProfilesEnabled` false (Q6
-//  architecture.md — функция требует явного согласия пользователя). Оставшиеся пять —
-//  `recordingPolicy`, `defaultProfileId`, `processOnACPowerOnly`, `processWhileRecording`,
-//  `launchAtLogin` — контракт сознательно не называет и явно требует значения от DEV-2 (не
-//  ждёт архитектора). Объявление `slice1Defaults` — предмет своей группы плана MEE-410 (Ж),
-//  не заведено этим файлом сейчас, чтобы не решать чужую задачу попутно; строка на будущее,
-//  не молчаливый долг.
+//  `AppSettings.slice1Defaults` НЕ ОБЪЯВЛЕН, И ЭТО НЕ ПРОПУСК, А НАХОДКА.
+//  Контракт объявляет его `public static let slice1Defaults: AppSettings`, но значений
+//  называет пять из двенадцати — `armLeadSeconds` 120, `askLeadSeconds` 30,
+//  `missingSignalGraceSeconds` 900, `silenceStopSeconds` 300, `notifyParticipants` false.
+//  Для `recordingPolicy`, `defaultProfileId`, `processOnACPowerOnly`, `processWhileRecording`,
+//  `audioRetentionDays`, `voiceProfilesEnabled` и `launchAtLogin` значения по умолчанию
+//  не названы нигде в тексте C-016 — проверено прогоном по опубликованному описанию целиком.
+//  Объявить эту константу значило бы придумать семь значений, на которые уже опираются
+//  инвариант 28 («строки нет — берётся значение из slice1Defaults») и §8.1 C-018
+//  (`armAt = start − armLeadSeconds`). Находка — строка архитектору C-016, отчёт MEE-289.
 //
 //  `ExportFormat` из того же §2 не объявлен: на нём не стоит ни один пункт плана MEE-288,
 //  и §6 плана его не называет. Назван в отчёте.
