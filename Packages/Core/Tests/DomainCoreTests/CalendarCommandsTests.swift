@@ -1,5 +1,10 @@
 //  CalendarCommandsTests — К39, К40 (группа О плана MEE-410, перечень MEE-401, C-016 v10,
-//  MEE-441).
+//  MEE-441). Разведено на три файла по объёму (`type_body_length`, SwiftLint `--strict`
+//  краснит уже на предупреждении): этот — фикстура + К39 (`beginConnectorAuth`/
+//  `completeConnectorAuth`/`setConnectorEnabled`); `CalendarCommandsTests+K40.swift` — К40;
+//  `CalendarCommandsTests+ErrorWrapping.swift` — табличный тест `wrap(_:CalendarError)`.
+//  Общие `Fixture`/`makeFixture()` — здесь, не `private` (тот же приём, что `EventsTests.swift`
+//  для своих файлов-расширений).
 //
 //  ФИКСТУРА ОТСТУПАЕТ ОТ КОЛОНКИ ПЛАНА НА ОДНОМ МЕСТЕ, НАЗВАНО ПРЯМО. План/перечень называют
 //  фикстурой К39/К40 только ФКП (`FakeCalendarPort`) и описывают все четыре метода К39
@@ -19,13 +24,13 @@ import DomainTestKit
 
 final class CalendarCommandsTests: XCTestCase {
 
-    private struct Fixture {
+    struct Fixture {
         let facade: AppFacadeImpl
         let repositories: InMemoryRepositories
         let calendar: FakeCalendarPort
     }
 
-    private func makeFixture() -> Fixture {
+    func makeFixture() -> Fixture {
         let repositories = InMemoryRepositories()
         let calendar = FakeCalendarPort(log: repositories.log)
         let facade = AppFacadeImpl(
@@ -68,7 +73,7 @@ final class CalendarCommandsTests: XCTestCase {
     /// задачей (см. докстринг `ErrorDictionaryTests.swift`, «ВНЕ ДОСЯГАЕМОСТИ»).
     /// `permissionKind` — по `ConnectorRecord.type` (возврат РП, приёмка 12:00 UTC,
     /// находка 3), поэтому запись коннектора здесь задана явно — точные векторы по типу vs
-    /// имени источника см. `test_wrapCalendarError_permissionKindByConnectorTypeNotBySourceName`.
+    /// имени источника см. `CalendarCommandsTests+ErrorWrapping.swift`.
     func test_k39_beginConnectorAuth_wrapsCalendarError() async throws {
         let fixture = makeFixture()
         let sourceId = CalendarSourceId(rawValue: "eventkit")
@@ -85,103 +90,6 @@ final class CalendarCommandsTests: XCTestCase {
         } catch AppFacadeError.underlying(let view) {
             XCTAssertEqual(view.code, "calendar.authorizationRequired")
             XCTAssertEqual(view.permissionKind, .calendars, "тип коннектора eventkit — право .calendars")
-        }
-    }
-
-    // MARK: - wrap(_:CalendarError) — §3.1, все шесть случаев (возврат РП, приёмка 12:00 UTC, находка 3)
-
-    private struct CalendarErrorRow {
-        let error: CalendarError
-        let expectedCode: String
-    }
-
-    private func calendarErrorRows(sourceId: CalendarSourceId) -> [CalendarErrorRow] {
-        [
-            CalendarErrorRow(error: .notConfigured(sourceId: sourceId), expectedCode: "calendar.notConfigured"),
-            CalendarErrorRow(
-                error: .authorizationRequired(sourceId: sourceId), expectedCode: "calendar.authorizationRequired"
-            ),
-            CalendarErrorRow(
-                error: .transport(sourceId: sourceId, message: "m"), expectedCode: "calendar.transport"
-            ),
-            CalendarErrorRow(
-                error: .protocolViolation(sourceId: sourceId, message: "m"), expectedCode: "calendar.protocolViolation"
-            ),
-            CalendarErrorRow(
-                error: .timeout(sourceId: sourceId, seconds: 5), expectedCode: "calendar.timeout"
-            ),
-            CalendarErrorRow(error: .cancelled, expectedCode: "calendar.cancelled")
-        ]
-    }
-
-    /// Все шесть случаев `CalendarError` — код строится правилом `calendar.<имя case>`, тем
-    /// же приёмом, что К27 у `StorageError`/`PermissionsError` (`ErrorDictionaryTests.swift`).
-    /// Проведено через `beginConnectorAuth` — любой из шести методов группы О одинаково
-    /// зовёт один и тот же `wrap(_:CalendarError)`.
-    func test_wrapCalendarError_codePerCase() async throws {
-        let sourceId = CalendarSourceId(rawValue: "eventkit")
-        for row in calendarErrorRows(sourceId: sourceId) {
-            let fixture = makeFixture()
-            fixture.calendar.fail(with: row.error, on: .beginAuth, source: sourceId)
-
-            do {
-                _ = try await fixture.facade.beginConnectorAuth(sourceId: sourceId)
-                XCTFail("\(row.error): ожидался отказ")
-            } catch AppFacadeError.underlying(let view) {
-                XCTAssertEqual(view.code, row.expectedCode, "\(row.error)")
-            }
-        }
-    }
-
-    /// `permissionKind` для `.authorizationRequired` — по `ConnectorRecord.type`, НЕ по
-    /// `sourceId.rawValue` (возврат РП, приёмка 12:00 UTC, находка 3, `:164`). Три вектора:
-    /// stdio-тип → `nil`; имя источника НЕ "eventkit", но тип "eventkit" → `.calendars`
-    /// (отличает проверку по типу от проверки по имени в одну сторону); имя источника
-    /// "eventkit", но тип "stdio" → `nil` (отличает в другую сторону — старая, забракованная
-    /// реализация сверяла бы имя и дала `.calendars` здесь).
-    private struct ConnectorTypeVector {
-        let sourceId: String
-        let type: String
-        let expected: PermissionKind?
-    }
-
-    func test_wrapCalendarError_permissionKindByConnectorTypeNotBySourceName() async throws {
-        let vectors = [
-            ConnectorTypeVector(sourceId: "stdio-plugin", type: "stdio", expected: nil),
-            ConnectorTypeVector(sourceId: "graph-work", type: "eventkit", expected: .calendars),
-            ConnectorTypeVector(sourceId: "eventkit", type: "stdio", expected: nil)
-        ]
-        for vector in vectors {
-            let fixture = makeFixture()
-            let sourceId = CalendarSourceId(rawValue: vector.sourceId)
-            fixture.repositories.connectors.seed([ConnectorRecord(
-                id: vector.sourceId, type: vector.type, pluginId: nil, settingsJson: Data(),
-                keychainNamespace: vector.sourceId, selectedCalendarIds: [], isEnabled: true,
-                lastSyncAt: nil, cursor: nil, lastError: nil
-            )])
-            fixture.calendar.fail(with: .authorizationRequired(sourceId: sourceId), on: .beginAuth, source: sourceId)
-
-            do {
-                _ = try await fixture.facade.beginConnectorAuth(sourceId: sourceId)
-                XCTFail("\(vector.sourceId)/\(vector.type): ожидался отказ")
-            } catch AppFacadeError.underlying(let view) {
-                XCTAssertEqual(view.permissionKind, vector.expected, "\(vector.sourceId)/\(vector.type)")
-            }
-        }
-    }
-
-    /// Источник без записи в `ConnectorRepository` — тип определить не из чего,
-    /// `permissionKind == nil` (не `.calendars` по умолчанию).
-    func test_wrapCalendarError_unknownConnectorGivesNilPermissionKind() async throws {
-        let fixture = makeFixture()
-        let sourceId = CalendarSourceId(rawValue: "eventkit")
-        fixture.calendar.fail(with: .authorizationRequired(sourceId: sourceId), on: .beginAuth, source: sourceId)
-
-        do {
-            _ = try await fixture.facade.beginConnectorAuth(sourceId: sourceId)
-            XCTFail("ожидался отказ")
-        } catch AppFacadeError.underlying(let view) {
-            XCTAssertNil(view.permissionKind, "неизвестный коннектор — тип не определён")
         }
     }
 
@@ -264,113 +172,5 @@ final class CalendarCommandsTests: XCTestCase {
         } catch AppFacadeError.underlying(let view) {
             XCTAssertEqual(view.code, "calendar.notConfigured")
         }
-    }
-
-    // MARK: - К40: connectorSettingsSchema/configureConnector — байты не разобраны
-
-    /// Байты `CalendarPort.settingsSchema` возвращаются как есть — даже заведомо невалидный
-    /// для JSON Schema набор байт не бросает здесь (критерий проверяет отсутствие разбора).
-    func test_k40_connectorSettingsSchema_returnsCalendarPortBytesUnparsed() async throws {
-        let fixture = makeFixture()
-        let sourceId = CalendarSourceId(rawValue: "eventkit")
-        let invalidSchema = Data([0xFF, 0x00, 0xDE, 0xAD])
-        fixture.calendar.setSettingsSchema(invalidSchema, for: sourceId)
-
-        let result = try await fixture.facade.connectorSettingsSchema(sourceId: sourceId)
-
-        XCTAssertEqual(result, invalidSchema)
-    }
-
-    /// `configure` вызван ровно раз, байты переданы без разбора; успех не бросает.
-    func test_k40_configureConnector_passesBytesThroughUnparsedAndPublishesStatusChanged() async throws {
-        let fixture = makeFixture()
-        let sourceId = CalendarSourceId(rawValue: "eventkit")
-        let settings = Data([0x01, 0x02, 0x03])
-        let stream = fixture.facade.events()
-
-        try await fixture.facade.configureConnector(sourceId: sourceId, settings: settings)
-
-        XCTAssertEqual(fixture.calendar.configuredSettings(for: sourceId), settings)
-        XCTAssertEqual(fixture.repositories.log.count(port: "CalendarPort", method: "configure(source:settings:)"), 1)
-        let events = await collectEvents(stream, count: 1)
-        guard case .statusChanged = events.first else {
-            return XCTFail("ожидался .statusChanged, получено \(events)")
-        }
-    }
-
-    /// На невалидных (по мнению порта) байтах `configure` бросает — фасад сам байты не
-    /// проверяет, отказ порта пробрасывается как `.underlying` (словарь §3.1).
-    func test_k40_configureConnector_invalidBytesPropagatesCalendarError() async throws {
-        let fixture = makeFixture()
-        let sourceId = CalendarSourceId(rawValue: "eventkit")
-        fixture.calendar.fail(with: .protocolViolation(sourceId: sourceId, message: "bad schema"), on: .configure)
-
-        do {
-            try await fixture.facade.configureConnector(sourceId: sourceId, settings: Data([0x00]))
-            XCTFail("ожидался отказ")
-        } catch AppFacadeError.underlying(let view) {
-            XCTAssertEqual(view.code, "calendar.protocolViolation")
-        }
-    }
-
-    // MARK: - К40: connectorHealth — ConnectorHealthView, не сырой ConnectorHealth
-
-    /// Супермножество полей (IR-120, C-016 v7): `status`/`message`/`lastSyncAt` — от
-    /// `CalendarPort.healthCheck`; `isEnabled` — от `ConnectorRepository`, если запись есть.
-    func test_k40_connectorHealth_returnsConnectorHealthViewSupersetOfRawHealth() async throws {
-        let fixture = makeFixture()
-        let sourceId = CalendarSourceId(rawValue: "eventkit")
-        let moment = Date(timeIntervalSince1970: 1_000)
-        fixture.calendar.setConnectorHealth(
-            ConnectorHealth(status: .degraded, message: "нужна повторная авторизация", lastSuccessfulSyncAt: moment),
-            for: sourceId
-        )
-        fixture.repositories.connectors.seed([ConnectorRecord(
-            id: sourceId.rawValue, type: "eventkit", pluginId: nil, settingsJson: Data(),
-            keychainNamespace: "eventkit", selectedCalendarIds: [], isEnabled: true,
-            lastSyncAt: nil, cursor: nil, lastError: nil
-        )])
-
-        let view = try await fixture.facade.connectorHealth(sourceId: sourceId)
-
-        XCTAssertEqual(view.sourceId, sourceId)
-        XCTAssertEqual(view.status, .degraded)
-        XCTAssertEqual(view.message, "нужна повторная авторизация")
-        XCTAssertEqual(view.lastSyncAt, moment)
-        XCTAssertEqual(view.isEnabled, true)
-    }
-
-    /// Возврат РП (приёмка 12:00 UTC, «мелочи»): второй вектор `isEnabled` — `false`, не
-    /// только `true`, — чтобы поле не сходило за случайно верное умолчание.
-    func test_k40_connectorHealth_isEnabledFalseVector() async throws {
-        let fixture = makeFixture()
-        let sourceId = CalendarSourceId(rawValue: "eventkit")
-        fixture.calendar.setConnectorHealth(
-            ConnectorHealth(status: .ok, message: nil, lastSuccessfulSyncAt: nil), for: sourceId
-        )
-        fixture.repositories.connectors.seed([ConnectorRecord(
-            id: sourceId.rawValue, type: "eventkit", pluginId: nil, settingsJson: Data(),
-            keychainNamespace: "eventkit", selectedCalendarIds: [], isEnabled: false,
-            lastSyncAt: nil, cursor: nil, lastError: nil
-        )])
-
-        let view = try await fixture.facade.connectorHealth(sourceId: sourceId)
-
-        XCTAssertEqual(view.isEnabled, false)
-    }
-
-    // MARK: - К40: stopConnectors — не метод протокола (мех.-половина)
-
-    /// `stopConnectors` не входит в протокол `AppFacade` — снят v7 контракта (C-016), звонит
-    /// `CalendarPort.stop()` напрямую composition root, не через фасад. Читает исходный текст
-    /// протокола через `#filePath`, тем же приёмом, что К1 (`AppFacadeGeneralTests.swift`) —
-    /// не компиляцией (`grep`-проверка живого исходника, не своё же утверждение).
-    func test_k40_stopConnectorsIsNotAProtocolMethod() throws {
-        var url = URL(fileURLWithPath: #filePath)
-        for _ in 0..<3 { url.deleteLastPathComponent() }
-        url = url.appendingPathComponent("Sources").appendingPathComponent("DomainCore")
-            .appendingPathComponent("AppFacade.swift")
-        let source = try String(contentsOf: url, encoding: .utf8)
-        XCTAssertFalse(source.contains("stopConnectors"), "AppFacade — протокол не должен объявлять stopConnectors")
     }
 }
