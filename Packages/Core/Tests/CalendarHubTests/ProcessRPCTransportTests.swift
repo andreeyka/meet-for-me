@@ -82,20 +82,21 @@ final class ProcessRPCTransportTests: XCTestCase {
     /// — `receive()` обязан вернуть настоящий ответ, даже если вызван уже ПОСЛЕ того, как
     /// `terminationHandler` отметил процесс мёртвым (реальный путь: `StdioCalendarConnector.
     /// awaitResponse` зовёт `receive()` не гонкой с самим `fetch`, а уже после того, как цикл
-    /// синхронизации получил уведомление о завершении). Явная задержка перед `receive()` —
-    /// чтобы гарантированно застать `terminated` уже выставленным ДО первого вызова, не
-    /// полагаясь на случайное совпадение тайминга. До фикса (`if let terminated` в `receive()`)
-    /// этот тест обязан был бы падать: `receive()` отказал бы транспортной ошибкой мимо уже
-    /// записанного в `buffer`/на подходе в `AsyncStream` ответа.
+    /// синхронизации получил уведомление о завершении). `pollUntil` на `terminated != nil`, не
+    /// сон по часам (возврат РП, приёмка PR #146, бэклог): гарантирует, что `terminationHandler`
+    /// УЖЕ отработал ДО первого вызова `receive()` по факту события, не по угаданной задержке —
+    /// `terminated`, а не `stdoutClosed`, потому что именно `terminationHandler` (не EOF) обычно
+    /// успевает первым в этом сценарии (см. докстринг `recordTermination`), и это ровно тот
+    /// сигнал, гонку с которым тест обязан гарантированно выиграть. До фикса (`if let terminated`
+    /// в `receive()`) этот тест обязан был бы падать: `receive()` отказал бы транспортной
+    /// ошибкой мимо уже записанного в `buffer`/на подходе в `AsyncStream` ответа.
     func test_receiveGetsResponseEvenAfterPluginAlreadyExited() async throws {
         try await withHangGuard {
             let transport = try ProcessRPCTransport(
                 executablePath: "/usr/bin/env", arguments: ["sh", "-c", #"read l; echo "$l"; exit 0"#]
             )
             try await transport.send("привет-и-сразу-выхожу")
-            // Даёт плагину время дочитать строку, ответить и завершиться ДО вызова receive() —
-            // не гонкой с ним, а заведомо после того, как terminationHandler уже отработал.
-            try await Task.sleep(for: .milliseconds(300))
+            await pollUntil { await transport.terminated != nil }
 
             let received = try await transport.receive()
             XCTAssertEqual(received, "привет-и-сразу-выхожу")
