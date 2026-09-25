@@ -114,6 +114,29 @@ jobs:
           bash .github/scripts/annotate.sh "Символьный граф · Core (Linux)" "$status" "$log" || true
           exit $status
 
+      # К58/К59 перечня MEE-347 (calendar-hub) держались только на ручном grep
+      # исполнителя на приёмке (находка PR #129, MEE-386) — в CI механизма не
+      # было ни одного. Проверка текстовая (не через symbol-graph), сборки не
+      # требует — стоит здесь, а не в работе macOS ниже, потому что calendar-hub
+      # существует только в Packages/Core, а этой работы для зелёного вердикта
+      # достаточно одной.
+      - name: К58/К59 (calendar-hub)
+        shell: bash
+        env:
+          PYTHONIOENCODING: utf-8
+        run: |
+          set -o pipefail
+          log="$RUNNER_TEMP/calendar-hub-surface.log"
+          status=0
+          ( set -eux
+            python3 .github/scripts/calendar-hub-surface.py --self-test
+            python3 .github/scripts/calendar-hub-surface.py \
+              --sources Packages/Core/Sources/CalendarHub \
+              --job "Core (Linux)"
+          ) 2>&1 | tee "$log" || status=$?
+          bash .github/scripts/annotate.sh "К58/К59 · Core (Linux)" "$status" "$log" || true
+          exit $status
+
       # Исход шага называл таргет, а не вектор: в сессии без сырых логов
       # красная CI говорила «что-то в Core упало», а не «упал Q50» (MEE-263).
       # Разложить весь файл по векторам отвергнуто: это заводит зависимость
