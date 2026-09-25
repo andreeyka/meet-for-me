@@ -53,7 +53,7 @@ public actor AppFacadeImpl: AppFacade {
         permissions: PermissionsPort,
         modelCatalog: ModelCatalogPort,
         calendar: CalendarPort,
-        clock: @escaping @Sendable () -> Date = Date.init
+        clock: @escaping @Sendable () -> Date = { Date() }
     ) {
         self.meetingRepository = meetings
         self.recordings = recordings
@@ -108,6 +108,8 @@ public actor AppFacadeImpl: AppFacade {
             try await permissionsPort.openSettings(for: kind)
         } catch let error as PermissionsError {
             throw wrap(error)
+        } catch {
+            throw wrapUnexpected(error)
         }
     }
 
@@ -119,6 +121,16 @@ public actor AppFacadeImpl: AppFacade {
         }
         return .underlying(AppErrorView(
             code: code, message: String(describing: error), recoverySuggestion: nil, permissionKind: nil
+        ))
+    }
+
+    /// Инв. 19, §3.1: ошибки снизу вне словаря §3.1 (например `DomainValidationError`,
+    /// `DecodingError`) не должны уходить наружу как есть — приёмка `bf060b8` вернула это
+    /// как пропуск. Сводим их к `.underlying` с кодом `app.internalError`, а не к тому, что
+    /// не сможет разобрать вызывающая сторона.
+    func wrapUnexpected(_ error: Error) -> AppFacadeError {
+        .underlying(AppErrorView(
+            code: "app.internalError", message: String(describing: error), recoverySuggestion: nil, permissionKind: nil
         ))
     }
 

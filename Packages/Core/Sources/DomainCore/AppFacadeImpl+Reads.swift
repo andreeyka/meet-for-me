@@ -23,6 +23,8 @@ extension AppFacadeImpl {
             records = try await meetingRepository.meetings(from: from, to: to)
         } catch let error as StorageError {
             throw wrap(error)
+        } catch {
+            throw wrapUnexpected(error)
         }
         var items: [MeetingListItem] = []
         items.reserveCapacity(records.count)
@@ -42,6 +44,8 @@ extension AppFacadeImpl {
             recordingsForMeeting = try await recordings.recordings(meetingId: event.id)
         } catch let error as StorageError {
             throw wrap(error)
+        } catch {
+            throw wrapUnexpected(error)
         }
         var hasTranscript = false
         for recording in recordingsForMeeting {
@@ -50,6 +54,8 @@ extension AppFacadeImpl {
                 headers = try await transcripts.headers(recordingId: recording.manifest.recordingId)
             } catch let error as StorageError {
                 throw wrap(error)
+            } catch {
+                throw wrapUnexpected(error)
             }
             if !headers.isEmpty {
                 hasTranscript = true
@@ -73,16 +79,17 @@ extension AppFacadeImpl {
     /// К6 (инв. 5): `segments` по `startMs`; `speakers` — по убыванию `totalMs`. К7 (инв.
     /// 6): `displayName` синтезируется «Спикер N» (N = `cluster + 1`) при `personId ==
     /// nil`, иначе — имя из `PersonRepository`. К8 (инв. 7, 8): `isUncertain`/
-    /// `lowConfidenceWordIndexes` по порогам `AttributionThresholds` — фасад их не
-    /// пересчитывает и не хранит, они приходят вызывающей стороне: этот срез строит их из
-    /// `thresholds`, переданных явно, потому что источник порогов (C-015 §7 конфигурации)
-    /// вне зоны групп А/Б этого PR — см. заголовок файла реализации.
+    /// `lowConfidenceWordIndexes` вычисляются по `AttributionThresholds.slice1Defaults` —
+    /// источник порогов на вызывающей стороне (C-015 §7 конфигурации) вне зоны групп А/Б
+    /// этого PR, так что этот срез берёт умолчания напрямую, а не параметром.
     public func transcript(id: UUID) async throws -> TranscriptView? {
         let transcript: Transcript?
         do {
             transcript = try await transcripts.transcript(id: id)
         } catch let error as StorageError {
             throw wrap(error)
+        } catch {
+            throw wrapUnexpected(error)
         }
         guard let transcript else { return nil }
         let headers: [TranscriptHeader]
@@ -90,8 +97,10 @@ extension AppFacadeImpl {
             headers = try await transcripts.headers(recordingId: transcript.recordingId)
         } catch let error as StorageError {
             throw wrap(error)
+        } catch {
+            throw wrapUnexpected(error)
         }
-        guard let header = headers.first(where: { $0.recordingId == transcript.recordingId }) else {
+        guard let header = headers.first(where: { $0.id == id }) else {
             return nil
         }
         return try await buildTranscriptView(id: id, header: header, transcript: transcript)
@@ -103,6 +112,8 @@ extension AppFacadeImpl {
             header = try await transcripts.latest(recordingId: recordingId)
         } catch let error as StorageError {
             throw wrap(error)
+        } catch {
+            throw wrapUnexpected(error)
         }
         guard let header else { return nil }
         let transcript: Transcript?
@@ -110,6 +121,8 @@ extension AppFacadeImpl {
             transcript = try await transcripts.transcript(id: header.id)
         } catch let error as StorageError {
             throw wrap(error)
+        } catch {
+            throw wrapUnexpected(error)
         }
         guard let transcript else { return nil }
         return try await buildTranscriptView(id: header.id, header: header, transcript: transcript)
@@ -123,6 +136,8 @@ extension AppFacadeImpl {
             rows = try await transcripts.segments(transcriptId: id)
         } catch let error as StorageError {
             throw wrap(error)
+        } catch {
+            throw wrapUnexpected(error)
         }
         let rowsByCluster = Dictionary(grouping: rows) { $0.segment.speakerCluster }
         let personIds = Set(rows.compactMap(\.personId))
@@ -131,6 +146,8 @@ extension AppFacadeImpl {
             personRecords = try await persons.persons(ids: Array(personIds))
         } catch let error as StorageError {
             throw wrap(error)
+        } catch {
+            throw wrapUnexpected(error)
         }
         let personById = Dictionary(uniqueKeysWithValues: personRecords.map { ($0.id, $0) })
 
@@ -159,10 +176,11 @@ extension AppFacadeImpl {
         let attributed = rowsOfCluster.sorted { $0.segment.startMs < $1.segment.startMs }.first { $0.personId != nil }
         let personId = attributed?.personId
         let confidence = attributed?.speakerConfidence ?? 0
-        // Инв. 6: «Спикер N» только когда personId == nil. Источник AttributionSource для
-        // ещё не атрибутированного кластера контракт не называет — до первой атрибуции
-        // `.micChannel` используется как нейтральное значение по умолчанию, не как
-        // утверждение о канале; ни один К группы Б не проверяет это значение отдельно.
+        // Инв. 6: «Спикер N» только когда personId == nil.
+        // СТРОКА: источник AttributionSource для ещё не атрибутированного кластера контракт
+        // не называет — `.micChannel` здесь просто нейтральное значение по умолчанию, не
+        // утверждение о канале; ни один К группы Б не проверяет его отдельно. Ждёт ответа
+        // архитектора, тем же приёмом, что и `AppSettings.slice1Defaults` (MEE-289).
         let source = attributed?.attributionSource ?? .micChannel
         let displayName = personId.flatMap { personById[$0]?.displayName } ?? "Спикер \(speaker.cluster + 1)"
         return SpeakerView(

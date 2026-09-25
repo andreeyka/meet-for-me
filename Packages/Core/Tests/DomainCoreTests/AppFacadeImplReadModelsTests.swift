@@ -10,26 +10,33 @@ import DomainTestKit
 
 final class AppFacadeImplReadModelsTests: XCTestCase {
 
-    private let epoch = Date(timeIntervalSince1970: 1_800_000_000)
+    /// Не `private` — используется и из `AppFacadeImplReadModelsTests+Return.swift`.
+    let epoch = Date(timeIntervalSince1970: 1_800_000_000)
 
-    /// Тип, а не трёхчленный кортеж: `large_tuple` разрешает два члена.
-    private struct Fixture {
+    /// Тип, а не трёхчленный кортеж: `large_tuple` разрешает два члена. Не `private` — нужен
+    /// файлу `AppFacadeImplReadModelsTests+Return.swift` (тот же класс, другой файл).
+    struct Fixture {
         let facade: AppFacadeImpl
         let repositories: InMemoryRepositories
         let permissions: FakePermissionsPort
     }
 
-    private func makeFacade() -> Fixture {
+    func makeFacade(
+        clock: @escaping @Sendable () -> Date = { Date() },
+        transcripts transcriptsOverride: ((InMemoryTranscriptRepository) -> TranscriptRepository)? = nil
+    ) -> Fixture {
         let repositories = InMemoryRepositories()
         let permissions = FakePermissionsPort(startingStatus: .granted, startingOutcome: .granted, checkedAt: epoch)
+        let transcripts = transcriptsOverride?(repositories.transcripts) ?? repositories.transcripts
         let facade = AppFacadeImpl(
             meetings: repositories.meetings,
             recordings: repositories.recordings,
-            transcripts: repositories.transcripts,
+            transcripts: transcripts,
             persons: repositories.persons,
             permissions: permissions,
             modelCatalog: FakeModelCatalogPort(),
-            calendar: FakeCalendarPort()
+            calendar: FakeCalendarPort(),
+            clock: clock
         )
         return Fixture(facade: facade, repositories: repositories, permissions: permissions)
     }
@@ -56,7 +63,8 @@ final class AppFacadeImplReadModelsTests: XCTestCase {
     // MARK: - К5 (инв. 4): по возрастанию start, при равенстве — по meetingId
 
     func test_k05_meetingsSortedByStartThenMeetingId() async throws {
-        let fixture = makeFacade()
+        let clock = ManualClock(now: epoch)
+        let fixture = makeFacade(clock: { clock.now() })
         let facade = fixture.facade
         let repositories = fixture.repositories
         let earlierId = UUID(uuidString: "00000000-0000-0000-0000-000000000001")!
@@ -71,12 +79,17 @@ final class AppFacadeImplReadModelsTests: XCTestCase {
         repositories.meetings.seed(
             events.map { MeetingRecord(event: $0, dedupKey: nil, status: .scheduled, sources: []) }
         )
+        let expectedOrder = ["Первая по времени", "Раньше по id при равном start", "Позже по id при равном start"]
 
         let items = try await facade.meetings(from: epoch.addingTimeInterval(-1), to: epoch.addingTimeInterval(3_600))
 
+        XCTAssertEqual(items.map(\.title), expectedOrder)
+
+        // Инв. 4: «AppStatus.upcoming отсортирован так же» — тот же порядок с той же точки
+        // отсчёта (clock() зафиксирован на epoch), без верхней границы.
+        let status = await facade.status()
         XCTAssertEqual(
-            items.map(\.title),
-            ["Первая по времени", "Раньше по id при равном start", "Позже по id при равном start"]
+            status.upcoming.map(\.title), expectedOrder, "status().upcoming — та же сортировка, что meetings"
         )
     }
 
@@ -113,39 +126,7 @@ final class AppFacadeImplReadModelsTests: XCTestCase {
         XCTAssertFalse(neither.hasTranscript)
     }
 
-    // MARK: - К6 (инв. 5): segments по startMs, speakers по убыванию totalMs
-
-    /// `Transcript.init` сам требует `segments` уже по неубыванию `startMs` (инв. 3) —
-    /// подать их в обратном порядке, чтобы отдельно проверить пересортировку фасада,
-    /// поэтому нельзя; наблюдаемое здесь — что `view.segments` приходит по возрастанию
-    /// `startMs`, а `view.speakers` — по убыванию `totalMs`, при их обратном порядке
-    /// в исходном массиве спикеров (тот массив инвариант не упорядочивает).
-    func test_k06_transcriptViewSortsSegmentsAscendingAndSpeakersDescending() async throws {
-        let fixture = makeFacade()
-        let facade = fixture.facade
-        let repositories = fixture.repositories
-        let recordingId = RecordingManifestFixtures.hourlyTwoChannels.recordingId
-        let speakers = try [
-            Transcript.Speaker(cluster: 0, embedding: nil, embeddingModelVersion: nil, totalMs: 1_000),
-            Transcript.Speaker(cluster: 1, embedding: nil, embeddingModelVersion: nil, totalMs: 5_000)
-        ]
-        let segments = try [
-            segment(startMs: 0, endMs: 1_000, cluster: 0, text: "первый по времени"),
-            segment(startMs: 2_000, endMs: 3_000, cluster: 1, text: "второй по времени")
-        ]
-        let header = try await repositories.transcripts.save(
-            try Transcript(
-                recordingId: recordingId, language: "ru", engine: "e", modelVersion: "1",
-                createdAt: epoch, segments: segments, speakers: speakers
-            )
-        )
-
-        let view = try await facade.transcript(id: header.id)
-
-        let unwrapped = try XCTUnwrap(view)
-        XCTAssertEqual(unwrapped.segments.map(\.text), ["первый по времени", "второй по времени"])
-        XCTAssertEqual(unwrapped.speakers.map(\.cluster), [1, 0], "по убыванию totalMs: 5000 раньше 1000")
-    }
+    // MARK: - К6 (инв. 5): segments по startMs, speakers по убыванию totalMs — см. файл +Return
 
     // MARK: - К7 (инв. 6): displayName синтезируется «Спикер N» при personId == nil
 
@@ -236,6 +217,8 @@ final class AppFacadeImplReadModelsTests: XCTestCase {
         XCTAssertEqual(segmentView.lowConfidenceWordIndexes, [0], "только слово 0 ниже textConfidenceMax")
     }
 
+    // К8, продолжение (случай isUncertain == false, confidence nil/на пороге) — см. файл +Return
+
     // MARK: - К9 (мех.): ни одного поля цвета/презентации в SpeakerView/SegmentView
 
     func test_k09_presentationModelsCarryNoColorFields() throws {
@@ -247,6 +230,8 @@ final class AppFacadeImplReadModelsTests: XCTestCase {
             XCTAssertFalse(source.contains(needle), "поле/тип \(needle) не место в моделях чтения")
         }
     }
+
+    // Возврат приёмки bf060b8 п.1 (transcript(id:)) и п.2 (инв. 19 catch-all) — см. файл +Return
 
     // MARK: - К48(б), группа Х: code == "permissions.settingsPaneUnavailable", permissionKind == nil
 
@@ -267,7 +252,8 @@ final class AppFacadeImplReadModelsTests: XCTestCase {
 
     // MARK: - Оснастка
 
-    private func event(id: UUID, start: Date, title: String) throws -> MeetingEvent {
+    /// Не `private` — используется и из `AppFacadeImplReadModelsTests+Return.swift`.
+    func event(id: UUID, start: Date, title: String) throws -> MeetingEvent {
         try MeetingEvent(
             id: id, sourceConnectorId: "eventkit", externalId: "evt-\(id.uuidString.prefix(8))", icalUid: nil,
             title: title, start: start, end: start.addingTimeInterval(1_800), timeZone: "UTC",
@@ -276,14 +262,14 @@ final class AppFacadeImplReadModelsTests: XCTestCase {
         )
     }
 
-    private func segment(startMs: Int, endMs: Int, cluster: Int, text: String) throws -> Transcript.Segment {
+    func segment(startMs: Int, endMs: Int, cluster: Int, text: String) throws -> Transcript.Segment {
         try Transcript.Segment(
             startMs: startMs, endMs: endMs, channel: .system, speakerCluster: cluster,
             text: text, textOriginal: nil, textConfidence: 0.9, words: []
         )
     }
 
-    private func manifest(recordingId: UUID, meetingId: UUID?) throws -> RecordingManifest {
+    func manifest(recordingId: UUID, meetingId: UUID?) throws -> RecordingManifest {
         try RecordingManifest(
             recordingId: recordingId, meetingId: meetingId, directoryName: recordingId.uuidString,
             startedAt: epoch, endedAt: epoch.addingTimeInterval(600),
