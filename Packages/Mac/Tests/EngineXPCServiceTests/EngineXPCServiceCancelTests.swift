@@ -59,7 +59,7 @@ final class EngineXPCServiceCancelTests: XCTestCase {
         XCTAssertNil(cancelData)
         XCTAssertNil(cancelError)
 
-        let (data, error) = await originalReply
+        let (data, error) = try await originalReply
         XCTAssertNil(error)
         let reply = try EngineWire.decode(EngineReply.self, from: try XCTUnwrap(data))
         XCTAssertEqual(reply, .cancelled(jobId))
