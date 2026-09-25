@@ -23,13 +23,20 @@ import DomainCore
 import DomainTestKit
 @testable import CalendarHub
 
-private enum StdioHarness {
+/// Не кортеж из четырёх элементов (`StdioHarness.make()`'s прежняя форма) — SwiftLint
+/// `large_tuple` (по умолчанию: предел два элемента) считает такой кортеж нарушением;
+/// именованные поля читаются на месте вызова не хуже, и линт доволен.
+struct StdioHarnessBundle {
+    let hub: CalendarPortImpl
+    let transport: ScriptedRPCTransport
+    let connectorRepository: InMemoryConnectorRepository
+    let waitSeam: FakeWaitSeam
+}
+
+enum StdioHarness {
     static let source = CalendarSourceId(rawValue: "src-1")
 
-    static func make(deltaSync: Bool = false, cursor: String? = nil) -> (
-        hub: CalendarPortImpl, transport: ScriptedRPCTransport,
-        connectorRepository: InMemoryConnectorRepository, waitSeam: FakeWaitSeam
-    ) {
+    static func make(deltaSync: Bool = false, cursor: String? = nil) -> StdioHarnessBundle {
         let transport = ScriptedRPCTransport()
         let connector = StdioCalendarConnector(transport: transport)
         let connectorRepository = InMemoryConnectorRepository(log: PortCallLog())
@@ -44,13 +51,15 @@ private enum StdioHarness {
         // гонку и `group.cancelAll()` не снимет его, — тот же приём, что у всех остальных
         // файлов `CalendarHubTests`. Задержки повтора §5.2 (К56) — отдельная, НЕ гонящаяся
         // пересылка `waitSeam.sleep(for:)` внутри `callConnector`; тесты К56 отпускают её
-        // явно (`awaitAfterRetries` ниже), а не полагаются на авторазрешение.
+        // явно (`callThroughRetries` ниже), а не полагаются на авторазрешение.
         connectorRepository.seed([Harness.record(id: "src-1", cursor: cursor)])
         let hub = CalendarPortImpl(
             connectorRepository: connectorRepository, meetingRepository: meetingRepository,
             waitSeam: waitSeam, secretStore: FakeSecretStore(), connectors: [source: connector]
         )
-        return (hub, transport, connectorRepository, waitSeam)
+        return StdioHarnessBundle(
+            hub: hub, transport: transport, connectorRepository: connectorRepository, waitSeam: waitSeam
+        )
     }
 
     static func initializeFrame(id: Int, deltaSync: Bool = false) -> String {
@@ -72,7 +81,9 @@ final class StdioProtocolTests: XCTestCase {
     // MARK: - К46 (инв. 3 — запрос↔ответ по id; отдельный вход — id не переиспользуется)
 
     func test_k46_wrongResponseIdIsImmediateProtocolViolation_idsNeverReused() async throws {
-        let (hub, transport, _, _) = StdioHarness.make()
+        let bundle = StdioHarness.make()
+        let hub = bundle.hub
+        let transport = bundle.transport
         transport.enqueue(StdioHarness.initializeFrame(id: 1))
         // listCalendars получит id=2 — сценарий отвечает id=99, которого хост не посылал.
         transport.enqueue(#"{"schemaVersion":1,"id":99,"result":{"calendars":[]}}"#)
@@ -94,7 +105,9 @@ final class StdioProtocolTests: XCTestCase {
     // MARK: - К47 (инв. 4 — notification без ответа)
 
     func test_k47_notificationFramesAcceptedAnytimeAndDoNotBreakTheWaitForResponse() async throws {
-        let (hub, transport, _, _) = StdioHarness.make()
+        let bundle = StdioHarness.make()
+        let hub = bundle.hub
+        let transport = bundle.transport
         transport.enqueue(StdioHarness.initializeFrame(id: 1))
         transport.enqueue(#"{"schemaVersion":1,"method":"host/log","params":{"level":"info","message":"hi"}}"#)
         transport.enqueue(
@@ -109,451 +122,5 @@ final class StdioProtocolTests: XCTestCase {
         let notified = await hub.recordedNotifications(for: StdioHarness.source)
         XCTAssertEqual(logged.map(\.message), ["hi"])
         XCTAssertEqual(notified.map(\.kind), [.authExpired])
-    }
-
-    // MARK: - К48 (§2, §5 — кадрирование)
-
-    func test_k48_inputA_frameLongerThan8MiBIsProtocolViolation() async throws {
-        let (hub, transport, _, _) = StdioHarness.make()
-        transport.enqueue(StdioHarness.initializeFrame(id: 1))
-        let huge = String(repeating: "x", count: 9 * 1024 * 1024)
-        transport.enqueue(#"{"schemaVersion":1,"id":2,"result":{"calendars":[]},"huge":""# + huge + "\"}")
-
-        await assertListCalendarsFails(hub)
-    }
-
-    func test_k48_inputB_unparsableFrameIsProtocolViolation() async throws {
-        let (hub, transport, _, _) = StdioHarness.make()
-        transport.enqueue(StdioHarness.initializeFrame(id: 1))
-        transport.enqueue("это не json вовсе")
-
-        await assertListCalendarsFails(hub)
-    }
-
-    func test_k48_inputC_duplicateKeyIsProtocolViolation() async throws {
-        let (hub, transport, _, _) = StdioHarness.make()
-        transport.enqueue(StdioHarness.initializeFrame(id: 1))
-        transport.enqueue(#"{"schemaVersion":1,"schemaVersion":1,"id":2,"result":{"calendars":[]}}"#)
-
-        await assertListCalendarsFails(hub)
-    }
-
-    func test_k48_inputD_nonCanonicalDateFieldIsProtocolViolation() async throws {
-        // Целочисленное поле вне канонической формы — то же самое отображение, тем же путём,
-        // покрыто К51 (`schemaVersion` конверта) отдельным тестом ниже; здесь — половина
-        // вектора, специфичная payload'у события (`Date`): пробел вместо `T` вне грамматики
-        // §0.4 (`YYYY-MM-DDThh:mm:ss[.f{1,9}](Z|±hh:mm)`).
-        let (hub, transport, _, _) = StdioHarness.make()
-        transport.enqueue(StdioHarness.initializeFrame(id: 1))
-        transport.enqueue(Self.fetchEventsResultFrame(id: 2, events: [
-            Self.eventJSON(start: "2024-01-01 00:00:00.000Z")
-        ]))
-
-        let results = await hub.sync(trigger: .manual)
-        Self.assertFailureIsProtocolViolation(results.first?.failure, "не-канонической дате")
-    }
-
-    private func assertListCalendarsFails(_ hub: CalendarPortImpl, file: StaticString = #filePath, line: UInt = #line) async {
-        do {
-            _ = try await hub.listCalendars(source: StdioHarness.source)
-            XCTFail("ожидался protocolViolation", file: file, line: line)
-        } catch let error as CalendarError {
-            guard case .protocolViolation = error else {
-                return XCTFail("ожидался .protocolViolation, получено \(error)", file: file, line: line)
-            }
-        } catch {
-            XCTFail("неожиданный тип ошибки: \(error)", file: file, line: line)
-        }
-    }
-
-    // MARK: - К49 (инв. 10 — один негодный объект отбрасывает весь ответ)
-
-    func test_k49_oneInvalidEventInFetchEventsResponseDiscardsWholeResponse() async throws {
-        let (hub, transport, _, _) = StdioHarness.make()
-        transport.enqueue(StdioHarness.initializeFrame(id: 1))
-        // Первое событие валидно, второе — без обязательного `sourceConnectorId`.
-        transport.enqueue(Self.fetchEventsResultFrame(id: 2, events: [
-            Self.eventJSON(externalId: "e1"),
-            Self.eventJSON(includeSourceConnectorId: false, externalId: "e2")
-        ]))
-
-        let results = await hub.sync(trigger: .manual)
-        Self.assertFailureIsProtocolViolation(results.first?.failure, "частично негодный ответ")
-    }
-
-    // MARK: - К50 (инв. 9, 13, 15 — MeetingEventPayload через провод)
-
-    func test_k50_inputA_idKeyInPayloadIsRejectedBeforeOtherFields() async throws {
-        let (hub, transport, _, _) = StdioHarness.make()
-        transport.enqueue(StdioHarness.initializeFrame(id: 1))
-        transport.enqueue(Self.fetchEventsResultFrame(id: 2, events: [Self.eventJSON(includeId: true)]))
-
-        let results = await hub.sync(trigger: .manual)
-        Self.assertFailureIsProtocolViolation(results.first?.failure, "ключ id в payload")
-    }
-
-    func test_k50_inputB_c001InvariantViolationIsRejected() async throws {
-        let (hub, transport, _, _) = StdioHarness.make()
-        transport.enqueue(StdioHarness.initializeFrame(id: 1))
-        // `organizer.email` без `@` — нарушение C-001, не приведённое к `nil` источником.
-        transport.enqueue(Self.fetchEventsResultFrame(id: 2, events: [
-            Self.eventJSON(organizerJSON: #"{"email":"not-an-email","name":null}"#)
-        ]))
-
-        let results = await hub.sync(trigger: .manual)
-        Self.assertFailureIsProtocolViolation(results.first?.failure, "нарушение инварианта C-001")
-    }
-
-    private static func assertFailureIsProtocolViolation(
-        _ failure: CalendarError?, _ label: String, file: StaticString = #filePath, line: UInt = #line
-    ) {
-        guard case .protocolViolation = failure else {
-            return XCTFail("\(label): ожидался .protocolViolation, получено \(String(describing: failure))",
-                            file: file, line: line)
-        }
-    }
-
-    private static func fetchEventsResultFrame(id: Int, events: [String]) -> String {
-        #"{"schemaVersion":1,"id":\#(id),"result":{"events":[\#(events.joined(separator: ","))]}}"#
-    }
-
-    private static func eventJSON(
-        includeId: Bool = false,
-        includeSourceConnectorId: Bool = true,
-        externalId: String = "e1",
-        start: String = "2024-01-01T00:00:00.000Z",
-        organizerJSON: String = "null"
-    ) -> String {
-        let idField = includeId ? #""id":"00000000-0000-0000-0000-000000000001","# : ""
-        let sourceField = includeSourceConnectorId ? #""sourceConnectorId":"src-1","# : ""
-        return #"""
-        {\#(idField)\#(sourceField)"externalId":"\#(externalId)","icalUid":null,"title":"t","start":"\#(start)",
-         "end":"2024-01-01T01:00:00.000Z","timeZone":"UTC","isAllDay":false,"isCancelled":false,
-         "organizer":\#(organizerJSON),"attendees":[],"location":null,"bodyText":null,"conference":null,
-         "lastModified":"2024-01-01T00:00:00.000Z"}
-        """#
-    }
-
-    // MARK: - К51 (§1.2, инв. 16 — schemaVersion конверта)
-
-    func test_k51_schemaVersionMismatchIsProtocolViolation() async throws {
-        let (hub, transport, _, _) = StdioHarness.make()
-        transport.enqueue(StdioHarness.initializeFrame(id: 1))
-        transport.enqueue(#"{"schemaVersion":2,"id":2,"result":{"calendars":[]}}"#)
-
-        await assertListCalendarsFails(hub)
-    }
-
-    func test_k51_schemaVersionMissingIsProtocolViolation() async throws {
-        let (hub, transport, _, _) = StdioHarness.make()
-        transport.enqueue(StdioHarness.initializeFrame(id: 1))
-        transport.enqueue(#"{"id":2,"result":{"calendars":[]}}"#)
-
-        await assertListCalendarsFails(hub)
-    }
-
-    // MARK: - К52 (§7 — манифест, разбор байт тем же декодером, что кадры)
-
-    func test_k52_manifestDuplicateKeyRejectedSameMechanismAsFrames() {
-        let bytes = Data(#"""
-        {"schemaVersion":1,"schemaVersion":1,"id":"p","name":"P","version":"1.0",
-         "protocolVersion":"1.0","executable":"./p","args":[],"networkHosts":[],"hostServices":[]}
-        """#.utf8)
-
-        XCTAssertThrowsError(try PluginManifestLoader.parse(bytes))
-    }
-
-    // MARK: - К53 (§7 — schemaVersion/protocolVersion манифеста)
-
-    func test_k53_manifestSchemaVersionMismatchRejectsWhole() {
-        let bytes = Self.manifestJSON(schemaVersion: 2, protocolVersion: "1.0")
-        XCTAssertThrowsError(try PluginManifestLoader.parse(bytes)) { error in
-            XCTAssertEqual(error as? PluginManifestError, .unsupportedSchemaVersion(found: 2, supported: 1))
-        }
-    }
-
-    func test_k53_manifestIncompatibleMajorProtocolVersionRejectsBeforeInitialize() {
-        let bytes = Self.manifestJSON(schemaVersion: 1, protocolVersion: "2.0")
-        XCTAssertThrowsError(try PluginManifestLoader.parse(bytes)) { error in
-            XCTAssertEqual(error as? PluginManifestError, .incompatibleProtocolMajor(found: "2.0", supportedMajor: 1))
-        }
-    }
-
-    func test_k53_manifestMinorVersionDifferenceIsNotFatal() throws {
-        let bytes = Self.manifestJSON(schemaVersion: 1, protocolVersion: "1.9")
-        let manifest = try PluginManifestLoader.parse(bytes)
-        XCTAssertEqual(manifest.protocolVersion, "1.9")
-    }
-
-    private static func manifestJSON(schemaVersion: Int, protocolVersion: String) -> Data {
-        Data(#"""
-        {"schemaVersion":\#(schemaVersion),"id":"p","name":"P","version":"1.0",
-         "protocolVersion":"\#(protocolVersion)","executable":"./p","args":[],"networkHosts":[],
-         "hostServices":[]}
-        """#.utf8)
-    }
-
-    // MARK: - К54 (§5.1 — таблица отображения кодов, векторы с собственным кодом)
-
-    private struct ErrorMappingVector {
-        let name: String
-        let code: Int
-        let message: String
-        let data: String?
-        let expected: CalendarError
-    }
-
-    private static let errorMappingVectors: [ErrorMappingVector] = [
-        .init(name: "-32700 parse error", code: -32700, message: "bad json", data: nil,
-              expected: .protocolViolation(sourceId: StdioHarness.source, message: "bad json")),
-        .init(name: "-32600 invalid request", code: -32600, message: "bad request", data: nil,
-              expected: .protocolViolation(sourceId: StdioHarness.source, message: "bad request")),
-        .init(name: "-32601 method not found", code: -32601, message: "no method", data: nil,
-              expected: .protocolViolation(sourceId: StdioHarness.source, message: "no method")),
-        .init(name: "-32602 invalid params", code: -32602, message: "bad params", data: nil,
-              expected: .protocolViolation(sourceId: StdioHarness.source, message: "bad params")),
-        .init(name: "-32603 internal error", code: -32603, message: "boom", data: nil,
-              expected: .transport(sourceId: StdioHarness.source, message: "boom")),
-        .init(name: "-32001 authorizationRequired", code: -32001, message: "need auth", data: nil,
-              expected: .authorizationRequired(sourceId: StdioHarness.source)),
-        .init(name: "-32002 notConfigured", code: -32002, message: "not configured", data: nil,
-              expected: .notConfigured(sourceId: StdioHarness.source)),
-        .init(name: "-32005 upstreamUnavailable", code: -32005, message: "down", data: nil,
-              expected: .transport(sourceId: StdioHarness.source, message: "down")),
-        .init(name: "-32006 protocolViolation", code: -32006, message: "violated", data: nil,
-              expected: .protocolViolation(sourceId: StdioHarness.source, message: "violated")),
-        .init(name: "прочий код -32000...-32099", code: -32050, message: "weird", data: nil,
-              expected: .transport(sourceId: StdioHarness.source, message: "нераспознанный код -32050: weird")),
-        .init(name: "код вне всех диапазонов", code: -1, message: "n/a", data: nil,
-              expected: .protocolViolation(sourceId: StdioHarness.source, message: "код вне диапазона: -1")),
-    ]
-
-    func test_k54_errorMappingTableCodeDrivenRowsPlusSourceId() async throws {
-        for vector in Self.errorMappingVectors {
-            let (hub, transport, _, _) = StdioHarness.make()
-            transport.enqueue(StdioHarness.initializeFrame(id: 1))
-            transport.enqueue(StdioHarness.errorFrame(id: 2, code: vector.code, message: vector.message))
-
-            do {
-                _ = try await hub.listCalendars(source: StdioHarness.source)
-                XCTFail("\(vector.name): ожидалась ошибка")
-            } catch let error as CalendarError {
-                XCTAssertEqual(error, vector.expected, vector.name)
-                XCTAssertEqual(error.sourceIdForTesting, StdioHarness.source, "\(vector.name): sourceId")
-            }
-        }
-    }
-
-    // MARK: - К55 (инв. 19 — протухший курсор)
-
-    func test_k55_cursorInvalidForgetsCursorThenFetchesFullWindowOnce() async throws {
-        let (hub, transport, connectorRepository, _) = StdioHarness.make(deltaSync: true, cursor: "old-cursor")
-        transport.enqueue(StdioHarness.initializeFrame(id: 1, deltaSync: true))
-        transport.enqueue(StdioHarness.errorFrame(id: 2, code: -32004, message: "cursor invalid"))
-        transport.enqueue(#"{"schemaVersion":1,"id":3,"result":{"events":[]}}"#)
-
-        let results = await hub.sync(trigger: .manual)
-
-        XCTAssertNil(results.first?.failure, "инв. 19 — протухший курсор не выходит наружу")
-        XCTAssertNil(connectorRepository.storedRecords.first?.cursor, "курсор забыт")
-        XCTAssertEqual(transport.sent.count, 3, "initialize, fetchChanges, fetchEvents (полное окно) — по одному разу")
-    }
-
-    func test_k55_repeatedCursorInvalidOnRecoveryFetchEventsSurfacesAsFailure() async throws {
-        let (hub, transport, _, _) = StdioHarness.make(deltaSync: true, cursor: "old-cursor")
-        transport.enqueue(StdioHarness.initializeFrame(id: 1, deltaSync: true))
-        transport.enqueue(StdioHarness.errorFrame(id: 2, code: -32004, message: "cursor invalid"))
-        // Новый вектор: резервный fetchEvents ТОЖЕ отвечает -32004 — не забытый третий повтор
-        // §5.2 (тот про -32003), а `ConnectorError.protocolViolation`, выходящий наружу.
-        transport.enqueue(StdioHarness.errorFrame(id: 3, code: -32004, message: "cursor invalid again"))
-
-        let results = await hub.sync(trigger: .manual)
-
-        guard case .protocolViolation = results.first?.failure else {
-            return XCTFail("повторный cursorInvalid обязан выйти наружу, получено \(String(describing: results.first?.failure))")
-        }
-    }
-
-    // MARK: - К56 (§5.2, инв. 20 — политика повторов)
-
-    /// Каждая физическая попытка (в том числе повтор ТОЙ ЖЕ логической операции) — отдельный
-    /// исходящий `request` со своим `id` (К46, «id не переиспользуется») — счётчик здесь
-    /// строго повторяет `StdioCalendarConnector.nextId`, чтобы не считать вручную в каждом
-    /// тесте и не разъехаться с реальной последовательностью на лишнем/забытом повторе.
-    private final class IdCounter {
-        private var next = 1
-        func advance() -> Int { defer { next += 1 }; return next }
-    }
-
-    /// Отпускает `retries` ожидаемых задержек §5.2 по одной, пока сам вызов идёт параллельно
-    /// своим `Task`: обычный плоский `try await` завис бы навсегда — задержка повтора НЕ
-    /// гонится ни с чем внутри `callConnector` (в отличие от 10/120/30с таймаута
-    /// `raceTimeout`, которому ЕСТЬ с кем «выиграть» — операция всегда обгоняет никогда не
-    /// отпускаемый ворота-таймаут сама), а висит в `FakeWaitSeam` до явного `resolveNext()`
-    /// (её докстринг, TestSupport.swift, «режим ворот»). `pollUntil { resolveNext() }` и
-    /// ждёт появления нужного ожидания, и отпускает его — одним выражением, без риска отпустить
-    /// раньше времени чужое (в любой момент здесь висит не больше одного вызова `sleep`: гонка
-    /// таймаута снята к этому моменту предыдущим `raceTimeout`, следующая — стартует только
-    /// после того, как этот отпущен).
-    private static func callThroughRetries<Value: Sendable>(
-        _ waitSeam: FakeWaitSeam, retries: Int, _ operation: @escaping @Sendable () async throws -> Value
-    ) async throws -> Value {
-        let task = Task { try await operation() }
-        for _ in 0 ..< retries {
-            await pollUntil { waitSeam.resolveNext() }
-        }
-        return try await task.value
-    }
-
-    /// `waitSeam.durations` — общий журнал ЛЮБОГО `sleep(for:)`, включая гонку `raceTimeout`
-    /// самого таймаута (10с `.initialize`/30с `.other`) на КАЖДОЙ попытке (записывается,
-    /// когда `sleep(for:)` вызван, раньше любой отмены — тот же приём, на который опираются
-    /// уже принятые тесты этого модуля, см. `InitializationTests.swift`/
-    /// `ControlSurfaceEntryPointsTests.swift`, ни один из них не сравнивает `durations`
-    /// целиком). Отфильтровано здесь ровно так же — оставляет только задержки повтора §5.2,
-    /// которые эти тесты и проверяют.
-    private static func retryDelays(_ waitSeam: FakeWaitSeam) -> [Duration] {
-        waitSeam.durations.filter { $0 != .seconds(10) && $0 != .seconds(30) }
-    }
-
-    func test_k56_defaultRateLimitedUsesFixedBackoff1_2_4() async throws {
-        let (hub, transport, _, waitSeam) = StdioHarness.make()
-        let ids = IdCounter()
-        transport.enqueue(StdioHarness.initializeFrame(id: ids.advance()))
-        transport.enqueue(StdioHarness.errorFrame(id: ids.advance(), code: -32003, message: "slow down"))
-        transport.enqueue(StdioHarness.errorFrame(id: ids.advance(), code: -32003, message: "slow down"))
-        transport.enqueue(StdioHarness.errorFrame(id: ids.advance(), code: -32003, message: "slow down"))
-        transport.enqueue(#"{"schemaVersion":1,"id":\#(ids.advance()),"result":{"calendars":[]}}"#)
-
-        _ = try await Self.callThroughRetries(waitSeam, retries: 3) {
-            try await hub.listCalendars(source: StdioHarness.source)
-        }
-
-        XCTAssertEqual(Self.retryDelays(waitSeam), [.seconds(1), .seconds(2), .seconds(4)])
-    }
-
-    func test_k56_validRetryAfterSecondsUsedVerbatim() async throws {
-        let (hub, transport, _, waitSeam) = StdioHarness.make()
-        let ids = IdCounter()
-        transport.enqueue(StdioHarness.initializeFrame(id: ids.advance()))
-        for _ in 0 ..< 3 {
-            transport.enqueue(StdioHarness.errorFrame(
-                id: ids.advance(), code: -32003, message: "slow down", data: #"{"retryAfterSeconds":5}"#
-            ))
-        }
-        transport.enqueue(#"{"schemaVersion":1,"id":\#(ids.advance()),"result":{"calendars":[]}}"#)
-
-        _ = try await Self.callThroughRetries(waitSeam, retries: 3) {
-            try await hub.listCalendars(source: StdioHarness.source)
-        }
-
-        XCTAssertEqual(Self.retryDelays(waitSeam), [.seconds(5), .seconds(5), .seconds(5)])
-    }
-
-    func test_k56_retryAfterSecondsCeilingIsSixty() async throws {
-        let (hub, transport, _, waitSeam) = StdioHarness.make()
-        let ids = IdCounter()
-        transport.enqueue(StdioHarness.initializeFrame(id: ids.advance()))
-        transport.enqueue(StdioHarness.errorFrame(
-            id: ids.advance(), code: -32003, message: "slow down", data: #"{"retryAfterSeconds":3600}"#
-        ))
-        transport.enqueue(#"{"schemaVersion":1,"id":\#(ids.advance()),"result":{"calendars":[]}}"#)
-
-        _ = try await Self.callThroughRetries(waitSeam, retries: 1) {
-            try await hub.listCalendars(source: StdioHarness.source)
-        }
-
-        XCTAssertEqual(Self.retryDelays(waitSeam), [.seconds(60)], "потолок ожидания — 60с, не 3600")
-    }
-
-    func test_k56_exhaustionAfterThreeRetriesSurfacesTransportError() async throws {
-        let (hub, transport, _, waitSeam) = StdioHarness.make()
-        let ids = IdCounter()
-        transport.enqueue(StdioHarness.initializeFrame(id: ids.advance()))
-        for _ in 0 ..< 4 {
-            transport.enqueue(StdioHarness.errorFrame(id: ids.advance(), code: -32003, message: "slow down"))
-        }
-
-        do {
-            _ = try await Self.callThroughRetries(waitSeam, retries: 3) {
-                try await hub.listCalendars(source: StdioHarness.source)
-            }
-            XCTFail("четыре подряд -32003 обязаны исчерпать повторы")
-        } catch let error as CalendarError {
-            XCTAssertEqual(error, .transport(sourceId: StdioHarness.source, message: "rateLimited, retryAfter=4"))
-        }
-        XCTAssertEqual(Self.retryDelays(waitSeam), [.seconds(1), .seconds(2), .seconds(4)], "ровно три задержки, не четыре")
-    }
-
-    func test_k56_initializeAlsoParticipatesInRetryPolicy() async throws {
-        let (hub, transport, _, waitSeam) = StdioHarness.make()
-        let ids = IdCounter()
-        for _ in 0 ..< 3 {
-            transport.enqueue(StdioHarness.errorFrame(id: ids.advance(), code: -32003, message: "slow down"))
-        }
-        transport.enqueue(StdioHarness.initializeFrame(id: ids.advance()))
-        transport.enqueue(#"{"schemaVersion":1,"id":\#(ids.advance()),"result":{"calendars":[]}}"#)
-
-        let calendars = try await Self.callThroughRetries(waitSeam, retries: 3) {
-            try await hub.listCalendars(source: StdioHarness.source)
-        }
-
-        XCTAssertEqual(calendars, [])
-        XCTAssertEqual(Self.retryDelays(waitSeam), [.seconds(1), .seconds(2), .seconds(4)], "initialize тоже повторяется")
-    }
-
-    func test_k56_nonIntegerRetryAfterSecondsFallsBackToFixedDelay() async throws {
-        let (hub, transport, _, waitSeam) = StdioHarness.make()
-        let ids = IdCounter()
-        transport.enqueue(StdioHarness.initializeFrame(id: ids.advance()))
-        transport.enqueue(StdioHarness.errorFrame(
-            id: ids.advance(), code: -32003, message: "slow down", data: #"{"retryAfterSeconds":1.5}"#
-        ))
-        transport.enqueue(#"{"schemaVersion":1,"id":\#(ids.advance()),"result":{"calendars":[]}}"#)
-
-        _ = try await Self.callThroughRetries(waitSeam, retries: 1) {
-            try await hub.listCalendars(source: StdioHarness.source)
-        }
-
-        XCTAssertEqual(Self.retryDelays(waitSeam), [.seconds(1)], "1.5 не целое — фолбэк, не округление")
-    }
-
-    /// Отдельно от `1.5`: `1e400` вне представимости `Double` на переполнении экспоненты — §2
-    /// прямо предупреждает, что поведение разборщика Foundation здесь НЕ описано ни одним
-    /// документом и вправе отличаться между Linux и Darwin (МЕЕ-361, «К56, вектор 1e400») —
-    /// единственный вектор всего перечня, где кросс-платформенное тождество САМО часть
-    /// критерия. Отдельный тест — если платформы разойдутся, красным станет только этот
-    /// вектор, не увлекая за собой соседний `1.5` (обычное нецелое число, без такого риска).
-    func test_k56_overflowRetryAfterSecondsFallsBackToFixedDelay() async throws {
-        let (hub, transport, _, waitSeam) = StdioHarness.make()
-        let ids = IdCounter()
-        transport.enqueue(StdioHarness.initializeFrame(id: ids.advance()))
-        transport.enqueue(StdioHarness.errorFrame(
-            id: ids.advance(), code: -32003, message: "slow down", data: #"{"retryAfterSeconds":1e400}"#
-        ))
-        transport.enqueue(#"{"schemaVersion":1,"id":\#(ids.advance()),"result":{"calendars":[]}}"#)
-
-        _ = try await Self.callThroughRetries(waitSeam, retries: 1) {
-            try await hub.listCalendars(source: StdioHarness.source)
-        }
-
-        XCTAssertEqual(Self.retryDelays(waitSeam), [.seconds(1)])
-    }
-}
-
-extension CalendarError {
-    /// К54: единая точка сравнения `sourceId` независимо от конкретного случая — без неё
-    /// пришлось бы разбирать каждый `case` таблицы вручную только ради этого поля.
-    var sourceIdForTesting: CalendarSourceId? {
-        switch self {
-        case .notConfigured(let sourceId), .authorizationRequired(let sourceId):
-            return sourceId
-        case .transport(let sourceId, _), .protocolViolation(let sourceId, _):
-            return sourceId
-        case .timeout(let sourceId, _):
-            return sourceId
-        case .cancelled:
-            return nil
-        }
     }
 }
