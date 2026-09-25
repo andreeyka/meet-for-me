@@ -96,50 +96,17 @@ public actor ProcessRPCTransport: RPCTransport {
         stdoutHandle = stdoutPipe.fileHandleForReading
         stderrHandle = stderrPipe.fileHandleForReading
 
-        var capturedStdoutContinuation: AsyncStream<Data>.Continuation!
-        let stdoutStream = AsyncStream<Data> { continuation in
-            capturedStdoutContinuation = continuation
-        }
-        // `let`, не `var` — тот же класс ошибки, что уже дважды встречался в этом файле
-        // («reference to captured var в конкурентно исполняющемся коде»): `var` выше нужен
-        // только чтобы выбраться из замыкания `AsyncStream.init`, дальше замыкания
-        // `readabilityHandler` обязаны захватывать уже неизменяемое значение.
-        let stdoutContinuationForHandler = capturedStdoutContinuation!
+        let (stdoutStream, stdoutContinuationForHandler) = Self.makeByteStream()
         stdoutContinuation = stdoutContinuationForHandler
-
-        var capturedStderrContinuation: AsyncStream<Data>.Continuation!
-        let stderrStream = AsyncStream<Data> { continuation in
-            capturedStderrContinuation = continuation
-        }
-        let stderrContinuationForHandler = capturedStderrContinuation!
+        let (stderrStream, stderrContinuationForHandler) = Self.makeByteStream()
 
         try process.run()
-
         // Возврат РП (приёмка PR #138): родитель обязан закрыть СВОИ копии концов каждого
-        // канала, которыми пользуется только ребёнок — иначе именно родительская, никем не
-        // читаемая копия держит канал «открытым» с точки зрения ядра ПОСЛЕ смерти ребёнка, и
-        // ни `write()` в `stdin` никогда не даёт EPIPE (`test_sendAfterProcessDeath...`, приёмка
-        // PR #138: 50 записей подряд — ни одного отказа), ни EOF `stdout`/`stderr` никогда не
-        // наступает по-настоящему (правдоподобное объяснение и того самого 5с сторожа на
-        // Linux — «настоящего сигнала» не было в принципе, не только «сработал не вовремя»).
-        try? stdinPipe.fileHandleForReading.close()
-        try? stdoutPipe.fileHandleForWriting.close()
-        try? stderrPipe.fileHandleForWriting.close()
+        // канала, которыми пользуется только ребёнок — см. докстринг `closeParentSideOfPipes`.
+        Self.closeParentSideOfPipes(stdin: stdinPipe, stdout: stdoutPipe, stderr: stderrPipe)
+        Self.installReadabilityHandler(on: stdoutHandle, continuation: stdoutContinuationForHandler)
+        Self.installReadabilityHandler(on: stderrHandle, continuation: stderrContinuationForHandler)
 
-        // Оба обработчика не захватывают `self` вовсе (ни прямо, ни через `[weak self]`) —
-        // снимают сами себя на EOF (возврат РП, п. 2: раньше это делал только `close()`,
-        // и после EOF обработчик продолжал вызываться вхолостую) и синхронно передают кусок
-        // дальше через continuation своего потока; порядок и разбор — забота потребителя.
-        stdoutHandle.readabilityHandler = { handle in
-            let data = handle.availableData
-            if data.isEmpty { handle.readabilityHandler = nil }
-            stdoutContinuationForHandler.yield(data)
-        }
-        stderrHandle.readabilityHandler = { handle in
-            let data = handle.availableData
-            if data.isEmpty { handle.readabilityHandler = nil }
-            stderrContinuationForHandler.yield(data)
-        }
         process.terminationHandler = { [weak self] proc in
             Task { [weak self] in await self?.handleTermination(status: proc.terminationStatus) }
         }
@@ -155,6 +122,41 @@ public actor ProcessRPCTransport: RPCTransport {
                 await self.handleStderr(data, onLine: onStderrLine)
             }
         }
+    }
+
+    /// `let`, не `var` — «reference to captured var в конкурентно исполняющемся коде»: `var`
+    /// внутри нужен только чтобы выбраться из замыкания `AsyncStream.init`, наружу отдаётся
+    /// уже неизменяемое значение — единственное, что вправе захватывать
+    /// `installReadabilityHandler` ниже. `static`, не изолирован актором — вызывается из
+    /// `init`, где `await` невозможен вообще.
+    private static func makeByteStream() -> (AsyncStream<Data>, AsyncStream<Data>.Continuation) {
+        var captured: AsyncStream<Data>.Continuation!
+        let stream = AsyncStream<Data> { continuation in captured = continuation }
+        return (stream, captured)
+    }
+
+    /// Обработчик не захватывает `self` вовсе (ни прямо, ни через `[weak self]`) — снимает
+    /// сам себя на EOF (возврат РП, п. 2: раньше это делал только `close()`, и после EOF
+    /// обработчик продолжал вызываться вхолостую) и синхронно передаёт кусок дальше через
+    /// continuation своего потока; порядок и разбор — забота потребителя (`init`, единственный).
+    private static func installReadabilityHandler(on handle: FileHandle, continuation: AsyncStream<Data>.Continuation) {
+        handle.readabilityHandler = { h in
+            let data = h.availableData
+            if data.isEmpty { h.readabilityHandler = nil }
+            continuation.yield(data)
+        }
+    }
+
+    /// Родительская, никем не читаемая/не записываемая копия конца канала держит его
+    /// «открытым» с точки зрения ядра ПОСЛЕ смерти ребёнка, даже когда ребёнок закрыл свою
+    /// — иначе ни `write()` в `stdin` никогда не даёт EPIPE (`test_sendAfterProcessDeath...`,
+    /// приёмка PR #138), ни EOF `stdout`/`stderr` никогда не наступает по-настоящему
+    /// (правдоподобное объяснение и того самого 5с сторожа на Linux — «настоящего сигнала»
+    /// не было в принципе, не только «сработал не вовремя»).
+    private static func closeParentSideOfPipes(stdin: Pipe, stdout: Pipe, stderr: Pipe) {
+        try? stdin.fileHandleForReading.close()
+        try? stdout.fileHandleForWriting.close()
+        try? stderr.fileHandleForWriting.close()
     }
 
     /// Запуск из манифеста плагина (МЕЕ-417: «запуск процесса плагина из манифеста»).
@@ -220,14 +222,14 @@ public actor ProcessRPCTransport: RPCTransport {
     /// п. 4) — `Process` не даёт выбрать сигнал напрямую (`terminate()` — всегда SIGTERM),
     /// поэтому эскалация — сырой `kill(pid, SIGKILL)`. Возвращается, когда процесс вышел — по
     /// EOF `stdout` или по `terminationHandler`, какой из двух сработает первым, плюс
-    /// ограниченный сторож (`waitForExit`) на случай, если на конкретной платформе не
-    /// сработает ни один (возврат РП: Linux, приёмка PR #138 — `close()`/`roundTrip`/`manifest`
-    /// шли ровно по 5.00с, замеренному сторожем, а не настоящим сигналом: `terminationHandler`
-    /// swift-corelibs-foundation ненадёжен на Linux даже после этой правки; EOF `stdout` —
-    /// ядерный, не Foundation-специфичный сигнал, но и он там же не подоспевал вовремя после
-    /// `terminate()`. Сторож — конечная подстраховка, не политика тайм-аутов «Поведения» C-006
-    /// §5.2, которую и запрещает «не на стенных часах»; корректность не страдает — только
-    /// латентность на этой платформе).
+    /// ограниченный сторож (`waitForExit`) на случай, если на конкретной платформе не сработает
+    /// ни один. На Linux до `closeParentSideOfPipes` (см. `init`) наблюдался стабильный 5с
+    /// сторож вместо настоящего сигнала на `close()`/`roundTrip`/`manifest`-тестах — вероятная
+    /// причина найдена и исправлена (родительская копия конца канала держала его «открытым»
+    /// после смерти ребёнка), но заново не измерена на момент написания этой строки. Сторож
+    /// остаётся в любом случае — конечная подстраховка, не политика тайм-аутов «Поведения»
+    /// C-006 §5.2, которую и запрещает «не на стенных часах»; корректность не страдает от его
+    /// присутствия, сработай он хоть раз — только (возможная) латентность.
     /// Не часть `RPCTransport` (протокол не называет остановку процесса — Seams.swift, «форма
     /// — решение этой задачи»): вызывающая сторона зовёт его отдельно от
     /// `CalendarConnector.shutdown()` (тот шлёт JSON-RPC уведомление тем же транспортом,
