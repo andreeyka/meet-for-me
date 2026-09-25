@@ -118,54 +118,68 @@ final class RecordingCommandsTests: XCTestCase {
         )
     }
 
-    // MARK: - Приёмка РП 09:50 UTC: инв. 23 — CaptureError.{microphoneDenied,systemAudioDenied}
-    // несут конкретное permissionKind, остальные девять — nil (оба PromptTimedOut включены).
+    // MARK: - Приёмка РП 09:50 UTC (инв. 23) и 10:15 UTC (recoverySuggestion) на CaptureError
 
     private struct CaptureErrorRow {
         let error: CaptureError
         let expectedCode: String
         let expectedPermissionKind: PermissionKind?
+        /// §3.1: `recoverySuggestion` не устойчив и не предмет теста на равенство —
+        /// проверяется только его наличие/отсутствие, не точный текст.
+        let expectsRecoverySuggestion: Bool
     }
 
     private var captureErrorRows: [CaptureErrorRow] {
         [
             CaptureErrorRow(
-                error: .alreadyRunning, expectedCode: "capture.alreadyRunning", expectedPermissionKind: nil
+                error: .alreadyRunning, expectedCode: "capture.alreadyRunning",
+                expectedPermissionKind: nil, expectsRecoverySuggestion: false
             ),
-            CaptureErrorRow(error: .notRunning, expectedCode: "capture.notRunning", expectedPermissionKind: nil),
             CaptureErrorRow(
-                error: .nothingToCapture, expectedCode: "capture.nothingToCapture", expectedPermissionKind: nil
+                error: .notRunning, expectedCode: "capture.notRunning",
+                expectedPermissionKind: nil, expectsRecoverySuggestion: false
+            ),
+            CaptureErrorRow(
+                error: .nothingToCapture, expectedCode: "capture.nothingToCapture",
+                expectedPermissionKind: nil, expectsRecoverySuggestion: false
             ),
             CaptureErrorRow(
                 error: .systemAudioDenied, expectedCode: "capture.systemAudioDenied",
-                expectedPermissionKind: .systemAudioRecording
+                expectedPermissionKind: .systemAudioRecording, expectsRecoverySuggestion: false
             ),
             CaptureErrorRow(
                 error: .systemAudioPromptTimedOut(waitedSeconds: 45),
-                expectedCode: "capture.systemAudioPromptTimedOut", expectedPermissionKind: nil
+                expectedCode: "capture.systemAudioPromptTimedOut",
+                expectedPermissionKind: nil, expectsRecoverySuggestion: true
             ),
             CaptureErrorRow(
-                error: .microphoneDenied, expectedCode: "capture.microphoneDenied", expectedPermissionKind: .microphone
+                error: .microphoneDenied, expectedCode: "capture.microphoneDenied",
+                expectedPermissionKind: .microphone, expectsRecoverySuggestion: false
             ),
             CaptureErrorRow(
                 error: .microphonePromptTimedOut(waitedSeconds: 45),
-                expectedCode: "capture.microphonePromptTimedOut", expectedPermissionKind: nil
+                expectedCode: "capture.microphonePromptTimedOut",
+                expectedPermissionKind: nil, expectsRecoverySuggestion: true
             ),
             CaptureErrorRow(
                 error: .inputDeviceUnavailable(uid: "built-in"),
-                expectedCode: "capture.inputDeviceUnavailable", expectedPermissionKind: nil
+                expectedCode: "capture.inputDeviceUnavailable",
+                expectedPermissionKind: nil, expectsRecoverySuggestion: false
             ),
             CaptureErrorRow(
                 error: .directoryUnusable(message: "нет места на диске"),
-                expectedCode: "capture.directoryUnusable", expectedPermissionKind: nil
+                expectedCode: "capture.directoryUnusable",
+                expectedPermissionKind: nil, expectsRecoverySuggestion: false
             ),
             CaptureErrorRow(
                 error: .systemUnavailable(message: "Core Audio недоступен"),
-                expectedCode: "capture.systemUnavailable", expectedPermissionKind: nil
+                expectedCode: "capture.systemUnavailable",
+                expectedPermissionKind: nil, expectsRecoverySuggestion: false
             ),
             CaptureErrorRow(
                 error: .recoveryFailed(directoryName: "rec-1", message: "манифест повреждён"),
-                expectedCode: "capture.recoveryFailed", expectedPermissionKind: nil
+                expectedCode: "capture.recoveryFailed",
+                expectedPermissionKind: nil, expectsRecoverySuggestion: false
             )
         ]
     }
@@ -181,6 +195,10 @@ final class RecordingCommandsTests: XCTestCase {
             } catch AppFacadeError.underlying(let view) {
                 XCTAssertEqual(view.code, row.expectedCode, "\(row.error)")
                 XCTAssertEqual(view.permissionKind, row.expectedPermissionKind, "\(row.error)")
+                XCTAssertEqual(
+                    view.recoverySuggestion != nil, row.expectsRecoverySuggestion,
+                    "\(row.error): §3.1 — recoverySuggestion обязан говорить вместо permissionKind у PromptTimedOut"
+                )
             }
         }
     }

@@ -82,23 +82,36 @@ extension AppFacadeImpl {
     ///
     /// Инв. 23, §3.1: `permissionKind` заполнен, только когда отказ вызван недостающим
     /// правом, — `.microphoneDenied` и `.systemAudioDenied` — иначе интерфейс теряет кнопку
-    /// выдачи права. Оба `PromptTimedOut` — это истечение ожидания системного промпта, а не
-    /// отказ права (право уже могло быть предоставлено позже пользователем), поэтому `nil`,
-    /// как и у остальных восьми кейсов.
+    /// выдачи права. Оба `PromptTimedOut` под этот признак не подпадают буквально по тексту
+    /// §3.1: причина отказа у них — не состояние права (оно то же, что было до отказа), а
+    /// отсутствие ответа пользователя на системный запрос за отведённое время; признак,
+    /// накрывший бы и их, обещал бы интерфейсу кнопку, которая ничего не меняет. §3.1 прямо
+    /// называет, чьё поле обязано сказать это вместо `permissionKind`: «сказать это обязан
+    /// `recoverySuggestion`». Текст поля не устойчив и не предмет теста на равенство (§3.1:
+    /// «Тестам на равенство они не подлежат, и критерии на них не пишутся») — только его
+    /// наличие для этих двух кейсов.
     func wrap(_ error: CaptureError) -> AppFacadeError {
         let description = String(describing: error)
         let name = description.split(separator: "(", maxSplits: 1).first.map(String.init) ?? description
         let permissionKind: PermissionKind?
+        let recoverySuggestion: String?
         switch error {
         case .microphoneDenied:
             permissionKind = .microphone
+            recoverySuggestion = nil
         case .systemAudioDenied:
             permissionKind = .systemAudioRecording
+            recoverySuggestion = nil
+        case .systemAudioPromptTimedOut, .microphonePromptTimedOut:
+            permissionKind = nil
+            recoverySuggestion = "Начните запись заново и ответьте на системный запрос вовремя"
         default:
             permissionKind = nil
+            recoverySuggestion = nil
         }
         return .underlying(AppErrorView(
-            code: "capture.\(name)", message: description, recoverySuggestion: nil, permissionKind: permissionKind
+            code: "capture.\(name)", message: description,
+            recoverySuggestion: recoverySuggestion, permissionKind: permissionKind
         ))
     }
 }
