@@ -99,19 +99,29 @@ final class ProcessRPCTransportTests: XCTestCase {
     /// убивает ХОСТ (этот тест-процесс) целиком — если бы `signal(SIGPIPE, SIG_IGN)` не
     /// сработал, весь `swift test` погиб бы молча, не показав ни `XCTFail`, ни зелёного
     /// прогона; сам факт завершения этого теста — часть доказательства.
+    ///
+    /// Возврат РП (повторная приёмка PR #138): версия с 50 попытками записи подряд без
+    /// ожидания была гонкой с выходом процесса, а не детерминированной проверкой — на macOS
+    /// все 50 писали успешно, ни разу не поймав ни EPIPE, ни собственный быстрый путь
+    /// `send()` (`if let terminated`). Правильный порядок — дождаться, что `receive()` САМ
+    /// обнаружил смерть процесса (через EOF/`terminationHandler`, что бы ни сработало первым),
+    /// и только потом звать `send()`: тогда `terminated` уже точно выставлен, и `send()`
+    /// обязан отказать немедленно быстрым путём, без гонки с самим фактом выхода процесса.
     func test_sendAfterProcessDeathThrowsTransportErrorNotCrashingHost() async throws {
         try await withHangGuard {
             let transport = try ProcessRPCTransport(executablePath: "/usr/bin/env", arguments: ["sh", "-c", "exit 0"])
-            var sawError = false
-            for _ in 0..<50 {
-                do {
-                    try await transport.send("ping")
-                } catch {
-                    sawError = true
-                    break
-                }
+            do {
+                _ = try await transport.receive()
+                XCTFail("процесс должен был выйти раньше, чем receive() успел бы получить значение")
+            } catch {
+                // ожидаемо — смерть процесса обнаружена (EOF stdout или terminationHandler).
             }
-            XCTAssertTrue(sawError, "ожидалась ошибка отправки в мёртвый процесс, не тишина без конца")
+            do {
+                try await transport.send("ping")
+                XCTFail("ожидалась ошибка отправки в уже известный мёртвым процесс")
+            } catch is ProcessRPCTransportError {
+                // ожидаемо
+            }
         }
     }
 
