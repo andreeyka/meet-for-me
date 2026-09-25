@@ -43,6 +43,7 @@ final class AppFacadeImplReadModelsTests: XCTestCase {
             calendar: FakeCalendarPort(),
             sessionCoordinator: NoOpSessionCoordinator(),
             attribution: FakeAttributionPort(),
+            settings: repositories.settings,
             clock: clock
         )
         return Fixture(facade: facade, repositories: repositories, permissions: permissions)

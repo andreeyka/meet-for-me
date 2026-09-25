@@ -23,30 +23,27 @@ final class SpeakerAssignmentTests: XCTestCase {
         let clusterBSegmentIds: [Int64]
     }
 
-    /// Три сегмента системного канала: два в кластере 0 (К51 требует минимум два в кластере
-    /// вызова), один в кластере 1 — `.system` с непустым текстом требует `speakerCluster !=
-    /// nil` (инв. 6); `.mic`, напротив, требует `nil` (инв. 5), поэтому кластерам годится
-    /// только системный канал.
+    /// По одному слову на сегмент, в его собственных границах — К15/К16 ссылаются на
+    /// `wordIndex` 0 через `TextCorrection`, а `applyTextCorrections` проверяет его в
+    /// границах `words` самого сегмента. Канал всегда `.system` — только он допускает
+    /// непустой `speakerCluster` при непустом тексте (инв. 6); `.mic`, напротив, требует
+    /// `nil` (инв. 5).
+    private func makeSegment(startMs: Int, endMs: Int, cluster: Int, text: String) throws -> Transcript.Segment {
+        let word = try Transcript.Word(startMs: startMs, endMs: endMs, text: "слово", confidence: nil, original: nil)
+        return try Transcript.Segment(
+            startMs: startMs, endMs: endMs, channel: .system, speakerCluster: cluster,
+            text: text, textOriginal: nil, textConfidence: nil, words: [word]
+        )
+    }
+
+    /// Три сегмента: два в кластере 0 (К51 требует минимум два в кластере вызова), один в
+    /// кластере 1.
     func makeFixture() async throws -> Fixture {
         let repositories = InMemoryRepositories()
         let recordingId = RecordingManifestFixtures.hourlyTwoChannels.recordingId
-        // По одному слову на сегмент — К15/К16 ссылаются на wordIndex 0 через TextCorrection,
-        // а applyTextCorrections проверяет его в границах words самого сегмента.
-        func word(_ startMs: Int, _ endMs: Int) throws -> Transcript.Word {
-            try Transcript.Word(startMs: startMs, endMs: endMs, text: "слово", confidence: nil, original: nil)
-        }
-        let segmentA1 = try Transcript.Segment(
-            startMs: 0, endMs: 800, channel: .system, speakerCluster: 0,
-            text: "слова кластера А1", textOriginal: nil, textConfidence: nil, words: [try word(0, 800)]
-        )
-        let segmentA2 = try Transcript.Segment(
-            startMs: 800, endMs: 1600, channel: .system, speakerCluster: 0,
-            text: "слова кластера А2", textOriginal: nil, textConfidence: nil, words: [try word(800, 1600)]
-        )
-        let segmentB1 = try Transcript.Segment(
-            startMs: 1600, endMs: 2400, channel: .system, speakerCluster: 1,
-            text: "слова кластера Б1", textOriginal: nil, textConfidence: nil, words: [try word(1600, 2400)]
-        )
+        let segmentA1 = try makeSegment(startMs: 0, endMs: 800, cluster: 0, text: "слова кластера А1")
+        let segmentA2 = try makeSegment(startMs: 800, endMs: 1600, cluster: 0, text: "слова кластера А2")
+        let segmentB1 = try makeSegment(startMs: 1600, endMs: 2400, cluster: 1, text: "слова кластера Б1")
         // Инв. 9: каждый speakerCluster сегмента обязан присутствовать среди speakers.
         // embeddingModelVersion непуст хотя бы у одного — иначе AttributionSupport.buildInput
         // считает вход испорченным (§7 «embeddingModelVersion»); инв. 10 требует embedding
@@ -78,6 +75,7 @@ final class SpeakerAssignmentTests: XCTestCase {
             calendar: FakeCalendarPort(),
             sessionCoordinator: NoOpSessionCoordinator(),
             attribution: attribution,
+            settings: repositories.settings,
             clock: { Date() }
         )
         return Fixture(

@@ -43,6 +43,7 @@ final class RecordingCommandsTests: XCTestCase {
             calendar: FakeCalendarPort(),
             sessionCoordinator: sessionCoordinator,
             attribution: FakeAttributionPort(),
+            settings: repositories.settings,
             clock: { clock.now() }
         )
         return Fixture(facade: facade, repositories: repositories, sessionCoordinator: sessionCoordinator)

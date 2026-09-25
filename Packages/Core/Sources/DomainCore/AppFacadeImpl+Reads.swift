@@ -247,8 +247,4 @@ extension AppFacadeImpl {
     public func jobs(status: JobStatus) async throws -> [Job] {
         throw notImplemented("jobs(status:)", group: "Н (команды обработки)")
     }
-
-    public func settings() async throws -> AppSettings {
-        throw notImplemented("settings()", group: "Ж (настройки — ждёт AppSettings.slice1Defaults)")
-    }
 }

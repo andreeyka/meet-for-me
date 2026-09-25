@@ -1,11 +1,12 @@
 //  AppFacadeImpl — команды, не реализованные этим срезом MEE-420 части 5. См. заголовок
 //  `AppFacadeImpl.swift`: каждая ждёт своего PR по группе плана MEE-410, названной в
 //  сообщении отказа. Разведено в отдельный файл, чтобы группа, чья реализация появится
-//  следующей, меняла один метод в одном файле, не трогая остальные ~17. Группа В (К10-К12,
+//  следующей, меняла один метод в одном файле, не трогая остальные. Группа В (К10-К12,
 //  startRecording/stopRecording) реализована — см. `AppFacadeImpl+Recording.swift`. Группа Г
 //  (К13-К14, editSegmentText) реализована — см. `AppFacadeImpl.swift`. Группы Д и Е
 //  (assignSpeaker/clearSpeaker/createPersonAndAssign/forgetVoiceProfile, К15-К20, К50-К52)
-//  реализованы — см. `AppFacadeImpl+Attribution.swift`.
+//  реализованы — см. `AppFacadeImpl+Attribution.swift`. Группа Ж (settings()/updateSettings())
+//  реализована параллельно, отдельным PR — см. `AppFacadeImpl+Settings.swift` (MEE-425).
 //
 //  Модуль: domain-core · Владелец: DEV-2 · Слой: домен
 
@@ -95,11 +96,5 @@ extension AppFacadeImpl {
 
     public func export(meetingId: UUID, format: ExportFormat, to directory: URL) async throws -> URL {
         throw notImplemented("export(meetingId:format:to:)", group: "П (хранение и экспорт)")
-    }
-
-    // MARK: - Настройки (группа Ж — своя очередь по роадмапу РП, не блокер архитектора; см. AppSettings.swift)
-
-    public func updateSettings(_ settings: AppSettings) async throws {
-        throw notImplemented("updateSettings(_:)", group: "Ж (настройки)")
     }
 }
