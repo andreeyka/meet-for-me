@@ -23,9 +23,19 @@ import XCTest
 
 final class ProcessRPCTransportTests: XCTestCase {
 
+    /// `sh -c "exec cat"`, не голый `["cat"]` через `/usr/bin/env` (возврат РП, диагностика
+    /// 06:50 UTC — доказано тестом `test_debugTempLinuxSignalMaskDiagnostic`): на Linux
+    /// `env cat` даёт ребёнка, который SIGTERM НЕ убивает вовсе (убивает только SIGKILL) — а
+    /// `sh -c "exec cat"` (и любой другой `sh -c "…"` в этом файле) убивается SIGTERM за
+    /// миллисекунды, доказано теми же логами. Причина — в конкретном пути запуска `cat`
+    /// coreutils `env` на этом образе, не в транспорте (`terminationHandler`/EOF срабатывают
+    /// мгновенно на настоящий сигнал что там, что там) — это свойство ТЕСТОВОГО ребёнка,
+    /// проверяется здесь, не «чинится» в `ProcessRPCTransport.swift`.
+    private static let catViaShellExec = ["sh", "-c", "exec cat"]
+
     func test_roundTripFrameThroughRealEchoProcess() async throws {
         try await withHangGuard {
-            let transport = try ProcessRPCTransport(executablePath: "/usr/bin/env", arguments: ["cat"])
+            let transport = try ProcessRPCTransport(executablePath: "/usr/bin/env", arguments: Self.catViaShellExec)
             let frame = #"{"schemaVersion":1,"id":1,"result":{}}"#
             try await transport.send(frame)
             let received = try await transport.receive()
@@ -46,7 +56,7 @@ final class ProcessRPCTransportTests: XCTestCase {
     /// оставалось неподтверждённым тестом.
     func test_frameLargerThan8MiBRoundTripsIntact() async throws {
         try await withHangGuard {
-            let transport = try ProcessRPCTransport(executablePath: "/usr/bin/env", arguments: ["cat"])
+            let transport = try ProcessRPCTransport(executablePath: "/usr/bin/env", arguments: Self.catViaShellExec)
             let huge = makeNonRepeatingFrame(totalBytes: 9 * 1024 * 1024)
             try await transport.send(huge)
             let received = try await transport.receive()
@@ -82,7 +92,7 @@ final class ProcessRPCTransportTests: XCTestCase {
     /// последующий `receive()` обязан отказать, не зависнуть.
     func test_closeTerminatesProcessThenReceiveFailsInsteadOfHanging() async throws {
         try await withHangGuard {
-            let transport = try ProcessRPCTransport(executablePath: "/usr/bin/env", arguments: ["cat"])
+            let transport = try ProcessRPCTransport(executablePath: "/usr/bin/env", arguments: Self.catViaShellExec)
             await transport.close()
 
             do {
@@ -137,7 +147,7 @@ final class ProcessRPCTransportTests: XCTestCase {
     /// вызывающий терял бы своё продолжение навсегда, ничего не узнав об этом.
     func test_secondConcurrentReceiveIsRejectedNotSilentlyOverwritingFirst() async throws {
         try await withHangGuard {
-            let transport = try ProcessRPCTransport(executablePath: "/usr/bin/env", arguments: ["cat"])
+            let transport = try ProcessRPCTransport(executablePath: "/usr/bin/env", arguments: Self.catViaShellExec)
             async let first = transport.receive()
             // Даёт первому вызову время реально встать в `pendingReceive` до второго —
             // `cat` без входа ничего не пришлёт, первый вызов гарантированно подвиснет там.
@@ -188,7 +198,7 @@ final class ProcessRPCTransportTests: XCTestCase {
         try await withHangGuard {
             let manifestJSON = Data(#"""
             {"schemaVersion":1,"id":"echo","name":"Echo","version":"1.0","protocolVersion":"1.0",
-             "executable":"/usr/bin/env","args":["cat"],"networkHosts":[],"hostServices":[]}
+             "executable":"/usr/bin/env","args":["sh","-c","exec cat"],"networkHosts":[],"hostServices":[]}
             """#.utf8)
             let manifest = try PluginManifestLoader.parse(manifestJSON)
             let transport = try ProcessRPCTransport(manifest: manifest)
