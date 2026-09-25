@@ -140,9 +140,9 @@ public actor ProcessRPCTransport: RPCTransport {
     /// обработчик продолжал вызываться вхолостую) и синхронно передаёт кусок дальше через
     /// continuation своего потока; порядок и разбор — забота потребителя (`init`, единственный).
     private static func installReadabilityHandler(on handle: FileHandle, continuation: AsyncStream<Data>.Continuation) {
-        handle.readabilityHandler = { h in
-            let data = h.availableData
-            if data.isEmpty { h.readabilityHandler = nil }
+        handle.readabilityHandler = { fh in
+            let data = fh.availableData
+            if data.isEmpty { fh.readabilityHandler = nil }
             continuation.yield(data)
         }
     }
