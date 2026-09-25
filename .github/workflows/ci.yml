@@ -34,6 +34,29 @@ jobs:
     timeout-minutes: 12
     steps:
       - uses: actions/checkout@v5
+
+      # К58/К59 перечня MEE-347 (module-map.md, «МОДУЛЬ: calendar-hub», «Запрещено»):
+      # раньше проверялись только ручным grep'ом на приёмке, механизма CI не было вовсе
+      # (возврат РП, приёмка #129, п. 1). Стоит здесь, до сборки — чистый разбор текста
+      # исходников, ни толчейн, ни граф ему не нужны; тот же довод, что ставит SwiftLint
+      # первым шагом работы `macos` ниже (дешёвый барьер раньше дорогих).
+      - name: Изоляция calendar-hub (К58/К59)
+        shell: bash
+        env:
+          PYTHONIOENCODING: utf-8
+        run: |
+          set -o pipefail
+          log="$RUNNER_TEMP/calendarhub-isolation.log"
+          status=0
+          ( set -eux
+            command -v python3
+            python3 --version
+            python3 .github/scripts/calendarhub-isolation.py --self-test
+            python3 .github/scripts/calendarhub-isolation.py --job "Core (Linux)"
+          ) 2>&1 | tee "$log" || status=$?
+          bash .github/scripts/annotate.sh "Изоляция calendar-hub · Core (Linux)" "$status" "$log" || true
+          exit $status
+
       - run: swift --version
       # MEE-321, условие Г — решено прогоном CI и ложно (разбор в
       # Packages/Core/Package.swift, у объявления `includeStorage`): GRDB на
