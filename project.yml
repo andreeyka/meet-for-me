@@ -25,6 +25,12 @@ options:
   bundleIdPrefix: com.andreeyka.meetforme
   deploymentTarget:
     macOS: "14.4"
+  # Явно, не значение XcodeGen по умолчанию (`xcode16_0`, ProjectSpec.md): CI job «Core + Mac»
+  # на macos-14 запускает Xcode 15.4 (лог первого прогона PR #163 сам её и назвал), а
+  # `xcode16_0` — формат проекта 77, который она читать не умеет («cannot be opened because
+  # it is in a future Xcode project file format»). `xcode15_3` — последний формат по списку
+  # ProjectSpec.md не новее самой 15.4.
+  projectFormat: xcode15_3
 
 packages:
   Core:
