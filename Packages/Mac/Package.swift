@@ -24,6 +24,12 @@ let package = Package(
     ],
     dependencies: [
         .package(path: "../Core"),
+        // Спайк R12 (MEE-426): официальный SwiftPM-пакет k2-fsa/sherpa-onnx — C API рантайма
+        // ONNX Runtime для GigaAM v3 e2e_ctc (решение Q10 architecture.md: путь через
+        // CPU-этап на sherpa-onnx). Версия зафиксирована точно, не диапазоном: спайк — не
+        // место для сюрприза от подхваченного новее бинарника без предупреждения; запись —
+        // GigaAMSpikeHarness, docs/module-map.md («Спайки не принадлежат модулям»).
+        .package(url: "https://github.com/k2-fsa/sherpa-onnx", exact: "1.13.8"),
     ],
     targets: [
         .target(name: "Capture", dependencies: [.product(name: "DomainCore", package: "Core")]),
@@ -50,6 +56,18 @@ let package = Package(
         .executableTarget(
             name: "CalendarEventKitManualHarness",
             dependencies: [.product(name: "DomainCore", package: "Core")]
+        ),
+        // Спайк R12 (MEE-426, docs/architecture.md): измеряет реальную скорость (RTF), пик
+        // памяти и время загрузки GigaAM v3 `e2e_ctc` на Apple Silicon через sherpa-onnx.
+        // Код спайка, не модуль (docs/module-map.md — «Спайки не принадлежат модулям»):
+        // в этом пакете, а не в spikes/, только потому что spikes/ не собирает CI, а
+        // готовность MEE-426 требует зелёной сборки на macos-14. Ни модель, ни тестовый WAV
+        // в репозиторий не входят — записка MEE-426 называет источник модели, скрипт
+        // `scripts/download-model.sh` только печатает URL и размер без флага `--yes`.
+        .executableTarget(
+            name: "GigaAMSpikeHarness",
+            dependencies: [.product(name: "sherpa-onnx", package: "sherpa-onnx")],
+            exclude: ["scripts"]
         ),
         .target(
             name: "EngineXPCClient",
