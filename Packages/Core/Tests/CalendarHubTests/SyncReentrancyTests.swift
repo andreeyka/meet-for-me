@@ -63,6 +63,13 @@ final class SyncReentrancyTests: XCTestCase {
         await pollUntil { harness.connector("src-2").callCount(.fetchEvents) > 0 }
         let pushed = Task { await harness.hub.syncOne(source: source2, trigger: .push) }
         await pollUntil { await harness.hub.syncWaiters[source2]?.count == 2 }
+        // Возврат РП (приёмка #129, п. 5): независимость №1/№3 доказывает не только
+        // финальный `scheduledResults` (тот неизбежно ждёт release — `sync()` не вернётся,
+        // пока группа не закроется целиком), а то, что они реально ЗАВЕРШИЛИСЬ ДО release
+        // №2 — доказательство настоящего параллелизма (Р7), не последовательного прохода,
+        // который выглядел бы так же после полного ожидания.
+        await pollUntil { harness.connector("src-1").callCount(.fetchEvents) > 0 }
+        await pollUntil { harness.connector("src-3").callCount(.fetchEvents) > 0 }
         harness.connector("src-2").release(.fetchEvents)
 
         let scheduledResults = await scheduled.value
