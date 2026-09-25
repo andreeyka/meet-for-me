@@ -2,6 +2,7 @@
 //  трёх методов порта.
 
 import DomainCore
+import Foundation
 
 extension SpeakerAttribution {
     /// Инв. 2: `segmentIds.count == transcript.segments.count`. Инв. 3: все `profiles` несут
