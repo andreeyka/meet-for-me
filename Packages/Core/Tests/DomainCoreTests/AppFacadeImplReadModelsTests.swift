@@ -115,6 +115,11 @@ final class AppFacadeImplReadModelsTests: XCTestCase {
 
     // MARK: - К6 (инв. 5): segments по startMs, speakers по убыванию totalMs
 
+    /// `Transcript.init` сам требует `segments` уже по неубыванию `startMs` (инв. 3) —
+    /// подать их в обратном порядке, чтобы отдельно проверить пересортировку фасада,
+    /// поэтому нельзя; наблюдаемое здесь — что `view.segments` приходит по возрастанию
+    /// `startMs`, а `view.speakers` — по убыванию `totalMs`, при их обратном порядке
+    /// в исходном массиве спикеров (тот массив инвариант не упорядочивает).
     func test_k06_transcriptViewSortsSegmentsAscendingAndSpeakersDescending() async throws {
         let fixture = makeFacade()
         let facade = fixture.facade
@@ -125,8 +130,8 @@ final class AppFacadeImplReadModelsTests: XCTestCase {
             Transcript.Speaker(cluster: 1, embedding: nil, embeddingModelVersion: nil, totalMs: 5_000)
         ]
         let segments = try [
-            segment(startMs: 2_000, endMs: 3_000, cluster: 1, text: "второй по времени"),
-            segment(startMs: 0, endMs: 1_000, cluster: 0, text: "первый по времени")
+            segment(startMs: 0, endMs: 1_000, cluster: 0, text: "первый по времени"),
+            segment(startMs: 2_000, endMs: 3_000, cluster: 1, text: "второй по времени")
         ]
         let header = try await repositories.transcripts.save(
             try Transcript(
@@ -203,7 +208,8 @@ final class AppFacadeImplReadModelsTests: XCTestCase {
         let segments = try [
             Transcript.Segment(
                 startMs: 0, endMs: 200, channel: .system, speakerCluster: 0,
-                text: "тихо громко", textOriginal: nil, textConfidence: 0.5, words: [lowWord, highWord]
+                text: "тихо громко", textOriginal: nil,
+                textConfidence: thresholds.textConfidenceMax - 0.01, words: [lowWord, highWord]
             )
         ]
         let header = try await repositories.transcripts.save(
@@ -283,7 +289,7 @@ final class AppFacadeImplReadModelsTests: XCTestCase {
             startedAt: epoch, endedAt: epoch.addingTimeInterval(600),
             tracks: [
                 try RecordingManifest.Track(
-                    channel: .mic, fileName: "audio-mic.caf", sampleRate: 16_000, channelCount: 1, format: "pcm-caf"
+                    channel: .mic, fileName: "audio-mic.m4a", sampleRate: 16_000, channelCount: 1, format: "aac-m4a"
                 )
             ],
             markers: [], capturedProcesses: [], captureGroupKey: nil,
