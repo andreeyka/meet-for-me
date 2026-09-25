@@ -11,7 +11,7 @@ import Foundation
 import XCTest
 import DomainCore
 import DomainTestKit
-import CalendarHub
+@testable import CalendarHub
 
 final class HostServicesTests: XCTestCase {
 
@@ -145,6 +145,19 @@ final class HostServicesTests: XCTestCase {
     /// ИМЕННО этого источника, немедленно и напрямую — различающий вектор против публичного
     /// `sync(trigger:)` (у которого нет параметра источника): второй, не уведомленный
     /// источник остаётся нетронутым.
+    /// Возврат РП (приёмка #129, п. 2): прежняя версия проверяла `src-2 == 0` СРАЗУ после
+    /// `pollUntil { src-1.fetchEvents > 0 }` — публичный `sync` обходит источники
+    /// параллельно, так что этот момент не доказывает, что push-синхронизация вообще
+    /// успела завершиться, только что она НАЧАЛАСЬ; ложноположительный проход возможен,
+    /// если баг всё-таки трогает src-2 чуть ПОЗЖЕ этой проверки. Фикс — не полагаться на
+    /// момент, а присоединиться к уже идущей задаче СВОИМ `syncOne(source:trigger: .push)`
+    /// (тот же приём, что К35) и дождаться `joined.value`: это гарантированно наступает
+    /// только ПОСЛЕ того, как исходная задача полностью завершилась (`finishInFlightSync`
+    /// рассылает результат всем ожидающим разом) — src-2 проверяется уже после этого
+    /// момента, не раньше. Заодно `result.trigger` — различающий вектор: если бы
+    /// `handleNotify` дёрнул `syncOne` с другим триггером (не `.push`), общий результат
+    /// нёс бы ЕГО, не `.push` (мой собственный параметр `.push` тут не решает — я
+    /// ПРИСОЕДИНЯЮСЬ к чужой уже стартовавшей задаче, не завожу свою).
     func test_k61_changesAvailableTriggersDirectSyncOneNotPublicSync() async throws {
         let harness = Harness(sourceIds: ["src-1", "src-2"])
         harness.connectorRepository.seed([Harness.record(id: "src-1"), Harness.record(id: "src-2")])
@@ -154,17 +167,24 @@ final class HostServicesTests: XCTestCase {
             ))
             harness.connector(id).setFetchEvents([])
         }
-        _ = try await harness.hub.listCalendars(source: CalendarSourceId(rawValue: "src-1"))
+        let source1 = CalendarSourceId(rawValue: "src-1")
+        _ = try await harness.hub.listCalendars(source: source1)
         _ = try await harness.hub.listCalendars(source: CalendarSourceId(rawValue: "src-2"))
         guard let host1 = harness.connector("src-1").lastHost else {
             XCTFail("initialize не захватил host")
             return
         }
+        harness.connector("src-1").hang(.fetchEvents)
 
         host1.notify(.changesAvailable, detail: nil)
         await pollUntil { harness.connector("src-1").callCount(.fetchEvents) > 0 }
+        let joined = Task { await harness.hub.syncOne(source: source1, trigger: .push) }
+        await pollUntil { await harness.hub.syncWaiters[source1]?.count == 2 }
+        harness.connector("src-1").release(.fetchEvents)
+        let result = await joined.value
 
-        XCTAssertEqual(harness.connector("src-1").callCount(.fetchEvents), 1)
+        XCTAssertEqual(result.trigger, .push, "notify(.changesAvailable) дёргает syncOne именно с .push")
+        XCTAssertEqual(harness.connector("src-1").callCount(.fetchEvents), 1, "join не завёл вторую синхронизацию")
         XCTAssertEqual(
             harness.connector("src-2").callCount(.fetchEvents), 0,
             "не публичный sync(trigger:) — тот обошёл бы ВСЕ источники, syncOne трогает только src-1"
