@@ -98,10 +98,18 @@ final class ProcessRPCTransportTests: XCTestCase {
     /// `extractLine()` использует падающий `String(bytes:encoding:)`, не лениво-заменяющий
     /// `String(decoding:as:)` (возврат РП, SwiftLint `optional_data_string_conversion`) —
     /// невалидный UTF-8 обязан выйти ошибкой транспорта, не тихой заменой байт на U+FFFD.
+    /// `python3 -c` вместо `sh -c "printf '\xff\xfe'"` — возврат РП (приёмка PR #138, Linux):
+    /// `/bin/sh` в контейнере `swift:5.10-jammy` — `dash`, его `printf` не так надёжно
+    /// поддерживает `\xHH`, как `bash` на macOS (тот же `sh`, но другой бинарник) — байты,
+    /// скорее всего, доходили как ЛИТЕРАЛЬНЫЙ текст `\xff\xfe` (валидный UTF-8), не как байты
+    /// 0xFF/0xFE, и тест падал не на транспорте, а на собственной непортируемой обвязке.
+    /// Байтовый литерал Python — одинаков на обеих платформах CI (python3 гарантирован
+    /// ci.yml).
     func test_invalidUTF8LineSurfacesAsTransportErrorNotSilentCorruption() async throws {
         try await withHangGuard {
             let transport = try ProcessRPCTransport(
-                executablePath: "/usr/bin/env", arguments: ["sh", "-c", "printf '\\xff\\xfe\\n'"]
+                executablePath: "/usr/bin/env",
+                arguments: ["python3", "-c", "import sys; sys.stdout.buffer.write(b'\\xff\\xfe\\n')"]
             )
             do {
                 _ = try await transport.receive()
