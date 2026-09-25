@@ -80,6 +80,22 @@ extension StdioProtocolTests {
         XCTAssertNil(results.first?.failure, "инв. 19 — протухший курсор не выходит наружу")
         XCTAssertNil(connectorRepository.storedRecords.first?.cursor, "курсор забыт")
         XCTAssertEqual(transport.sent.count, 3, "initialize, fetchChanges, fetchEvents (полное окно) — по одному разу")
+
+        // Возврат РП (приёмка #135, п. 3), хвост: следующая синхронизация начинается с
+        // `fetchChanges(cursor: nil)` — не запоминает полное окно как новый режим работы.
+        // `initialize` не повторяется (capabilities уже в кэше источника), поэтому четвёртый
+        // исходящий кадр — сразу `fetchChanges` этого второго цикла.
+        transport.enqueue(#"{"schemaVersion":1,"id":4,"result":{"events":[],"deletedExternalIds":[],"cursor":"c2"}}"#)
+        let secondResults = await hub.sync(trigger: .manual)
+
+        XCTAssertNil(secondResults.first?.failure)
+        XCTAssertEqual(transport.sent.count, 4)
+        XCTAssertTrue(transport.sent[3].contains(#""method":"fetchChanges""#))
+        // `nil` при записи опускается (C-006 §2/C-001 §0.4) — ключа "cursor" в кадре нет
+        // вовсе, не `"cursor":null`; отсутствие ключа здесь и есть доказательство «начал с nil».
+        XCTAssertFalse(
+            transport.sent[3].contains(#""cursor":"#), "второй цикл начинается с cursor: nil (ключ опущен)"
+        )
     }
 
     func test_k55_repeatedCursorInvalidOnRecoveryFetchEventsSurfacesAsFailure() async throws {

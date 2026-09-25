@@ -122,5 +122,9 @@ final class StdioProtocolTests: XCTestCase {
         let notified = await hub.recordedNotifications(for: StdioHarness.source)
         XCTAssertEqual(logged.map(\.message), ["hi"])
         XCTAssertEqual(notified.map(\.kind), [.authExpired])
+        // Возврат РП (приёмка #135, п. 3): `notification` не получает ответа (инв. 4) — хост
+        // не отправил ничего сверх своих двух исходящих запросов (`initialize`, `listCalendars`),
+        // хотя прочитал два входящих `notification`-кадра между ними.
+        XCTAssertEqual(transport.sent.count, 2, "на notification ответ не отправляется")
     }
 }

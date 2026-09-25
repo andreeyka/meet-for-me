@@ -63,6 +63,21 @@ extension StdioProtocolTests {
         Self.assertFailureIsProtocolViolation(results.first?.failure, "не-канонической дате")
     }
 
+    /// Возврат РП (приёмка #135, п. 3): вторая половина входа Г — целочисленное поле вне
+    /// представимости §0.2 п. 9 (±(2^53-1)). `id` ответа вне этого диапазона проваливает
+    /// строгое чтение `decodeBounded` внутри `RPCFramePeek` (`try?` глушит его в `nil`), и
+    /// кадр без распознанного `id` уходит тем же путём, что кадр вовсе без него (К46/К47:
+    /// нет `method` — тоже отказ, не тихая трактовка как notification).
+    func test_k48_inputD_integerFieldOutsideRepresentableRangeIsProtocolViolation() async throws {
+        let bundle = StdioHarness.make()
+        let hub = bundle.hub
+        let transport = bundle.transport
+        transport.enqueue(StdioHarness.initializeFrame(id: 1))
+        transport.enqueue(#"{"schemaVersion":1,"id":99999999999999999999,"result":{"calendars":[]}}"#)
+
+        await assertListCalendarsFails(hub)
+    }
+
     func assertListCalendarsFails(_ hub: CalendarPortImpl, file: StaticString = #filePath, line: UInt = #line) async {
         do {
             _ = try await hub.listCalendars(source: StdioHarness.source)
@@ -71,6 +86,10 @@ extension StdioProtocolTests {
             guard case .protocolViolation = error else {
                 return XCTFail("ожидался .protocolViolation, получено \(error)", file: file, line: line)
             }
+            // Возврат РП (приёмка #135, п. 3): строки §5.1 «кода нет» (кадр >8МиБ, битое
+            // кадрирование, дублирующийся ключ, schemaVersion не тот) тоже несут sourceId —
+            // проверено здесь одним местом, а не только у кодовых строк К54.
+            XCTAssertEqual(error.sourceIdForTesting, StdioHarness.source, file: file, line: line)
         } catch {
             XCTFail("неожиданный тип ошибки: \(error)", file: file, line: line)
         }
@@ -129,6 +148,9 @@ extension StdioProtocolTests {
                 file: file, line: line
             )
         }
+        // Возврат РП (приёмка #135, п. 3): те же «строки без кода» §5.1, тем же местом —
+        // fetchEvents-путь (К49/К50/К48 вход Г), не только listCalendars-путь выше.
+        XCTAssertEqual(failure?.sourceIdForTesting, StdioHarness.source, file: file, line: line)
     }
 
     static func fetchEventsResultFrame(id: Int, events: [String]) -> String {

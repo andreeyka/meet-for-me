@@ -18,7 +18,17 @@ extension StdioProtocolTests {
          "protocolVersion":"1.0","executable":"./p","args":[],"networkHosts":[],"hostServices":[]}
         """#.utf8)
 
-        XCTAssertThrowsError(try PluginManifestLoader.parse(bytes))
+        // Мелочь (возврат РП, приёмка #135): «тем же механизмом, что кадры» — не просто
+        // «что-то бросило», а конкретно `DecodingError.dataCorrupted`, тот же тип, что и К48
+        // вход В (`DomainJSON.decode` отвергает повторяющийся ключ этим типом на любом уровне).
+        XCTAssertThrowsError(try PluginManifestLoader.parse(bytes)) { error in
+            guard let decodingError = error as? DecodingError else {
+                return XCTFail("ожидался DecodingError, получено \(error)")
+            }
+            guard case .dataCorrupted = decodingError else {
+                return XCTFail("ожидался .dataCorrupted, получено \(decodingError)")
+            }
+        }
     }
 
     // MARK: - К53 (§7 — schemaVersion/protocolVersion манифеста)

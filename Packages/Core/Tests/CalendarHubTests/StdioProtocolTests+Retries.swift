@@ -23,20 +23,26 @@ extension StdioProtocolTests {
     }
 
     /// Отпускает `retries` ожидаемых задержек §5.2 по одной, пока сам вызов идёт параллельно
-    /// своим `Task`: обычный плоский `try await` завис бы навсегда — задержка повтора НЕ
-    /// гонится ни с чем внутри `callConnector` (в отличие от 10/120/30с таймаута
-    /// `raceTimeout`, которому ЕСТЬ с кем «выиграть» — операция всегда обгоняет никогда не
-    /// отпускаемый ворота-таймаут сама), а висит в `FakeWaitSeam` до явного `resolveNext()`
-    /// (её докстринг, TestSupport.swift, «режим ворот»). `pollUntil { resolveNext() }` и
-    /// ждёт появления нужного ожидания, и отпускает его — одним выражением, без риска отпустить
-    /// раньше времени чужое (в любой момент здесь висит не больше одного вызова `sleep`: гонка
-    /// таймаута снята к этому моменту предыдущим `raceTimeout`, следующая — стартует только
-    /// после того, как этот отпущен).
+    /// своим `Task`: обычный плоский `try await` завис бы навсегда — задержка повтора висит в
+    /// `FakeWaitSeam` до явного `resolveNext()` (её докстринг, TestSupport.swift, «режим
+    /// ворот»).
+    ///
+    /// Возврат РП (приёмка #135, п. 1): голый `pollUntil { resolveNext() }` без предварительной
+    /// проверки `durations` — тот же приём, за который уже возвращали #128 (п. 4,
+    /// `SyncErrorSurfaceAndScheduleTests.swift:84-93`) — `resolveNext()` берёт первую попавшуюся
+    /// запись словаря `pending`, без разбора по длительности; ею мог бы оказаться ещё не
+    /// снятый ворота-таймаут `raceTimeout` (10/30с), а не задержка повтора. Здесь сперва ждём,
+    /// что счётчик `retryDelays` РЕАЛЬНО вырос до ожидаемого шага (задержка уже в `durations`,
+    /// см. `FakeWaitSeam.sleep` — пишет ДО ожидания результата), и только потом отпускаем.
     static func callThroughRetries<Value: Sendable>(
         _ waitSeam: FakeWaitSeam, retries: Int, _ operation: @escaping @Sendable () async throws -> Value
     ) async throws -> Value {
         let task = Task { try await operation() }
-        for _ in 0 ..< retries {
+        var resolvedSoFar = 0
+        while resolvedSoFar < retries {
+            resolvedSoFar += 1
+            let expected = resolvedSoFar
+            await pollUntil { retryDelays(waitSeam).count >= expected }
             await pollUntil { waitSeam.resolveNext() }
         }
         return try await task.value
@@ -200,5 +206,24 @@ extension StdioProtocolTests {
         }
 
         XCTAssertEqual(Self.retryDelays(waitSeam), [.seconds(1)])
+    }
+
+    /// Возврат РП (приёмка #135, п. 3): «shutdown никогда не повторяется» (§5.2) не была
+    /// покрыта отдельным входом. `StdioCalendarConnector.shutdown()` вообще не читает ответ
+    /// (некому было бы отвечать `-32003`) — доказательство «не повторяется» здесь именно в
+    /// этом: `stop()` не виснет и кадр `shutdown` уходит РОВНО один раз, хотя сценарий не
+    /// содержит для него вообще никакого ответа.
+    func test_k56_shutdownNeverRetriesSinceItNeverAwaitsAResponse() async throws {
+        let bundle = StdioHarness.make()
+        let hub = bundle.hub
+        let transport = bundle.transport
+        transport.enqueue(StdioHarness.initializeFrame(id: 1))
+        transport.enqueue(#"{"schemaVersion":1,"id":2,"result":{"calendars":[]}}"#)
+        _ = try await hub.listCalendars(source: StdioHarness.source)
+
+        await hub.stop()
+
+        XCTAssertEqual(transport.sent.count, 3, "initialize, listCalendars, shutdown — по одному разу каждый")
+        XCTAssertTrue(transport.sent[2].contains(#""method":"shutdown""#), "третий кадр — shutdown")
     }
 }
