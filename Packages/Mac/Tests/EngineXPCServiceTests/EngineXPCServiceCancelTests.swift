@@ -128,13 +128,14 @@ final class EngineXPCServiceCancelTests: XCTestCase {
             let (proxy, connection) = fixture.rawServiceProxy()
             defer { connection.invalidate() }
 
-            var requests: [(jobId: EngineJobId, data: Data)] = []
-            for _ in 0..<3 {
-                guard let (jobId, request) = try? Self.makeTranscribeRequest(),
-                      let data = try? EngineWire.encode(request)
-                else { return XCTFail("не удалось построить запрос") }
-                requests.append((jobId, data))
-            }
+            // `let`, не `var`: три `async let` ниже читают `requests` из конкурентно
+            // исполняющегося кода — Swift 6 отмечает даже безобидное чтение по индексу
+            // изменяемой переменной как «mutation of captured var in concurrently-executing
+            // code» (нашёл CI), неизменяемый массив этого не боится.
+            guard let requests: [(jobId: EngineJobId, data: Data)] = try? (0..<3).map({ _ in
+                let (jobId, request) = try Self.makeTranscribeRequest()
+                return (jobId, try EngineWire.encode(request))
+            }) else { return XCTFail("не удалось построить запрос") }
 
             async let reply0 = send(proxy, requests[0].data)
             async let reply1 = send(proxy, requests[1].data)
