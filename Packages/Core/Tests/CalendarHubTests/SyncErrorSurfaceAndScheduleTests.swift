@@ -42,14 +42,14 @@ final class SyncErrorSurfaceAndScheduleTests: XCTestCase {
     /// начинает его с шага 1, `fetchAndApply`, `CalendarPortImplSync.swift`), лишь требует
     /// самого факта, что `fetchEvents` тоже вызывается.
     ///
-    /// СТРОКА (возврат РП, приёмка #128, п. 2): буквальный текст К43 («следующая
-    /// синхронизация вызывает fetchEvents, НЕ fetchChanges») и развилка Р9 расходятся —
-    /// Р9 при `record.cursor == nil` (что и получается здесь после сброса) начинает
-    /// СНАЧАЛА с шага 1 `fetchChanges(nil)`, только потом полное окно `fetchEvents`; тест
-    /// сознательно не проверяет «fetchChanges НЕ вызван», иначе он падал бы на каждом
-    /// прогоне против штатной, намеренной работы Р9 — это ослабление разногласия, не
-    /// незамеченный дефект, и решение здесь не моё: расхождение передано в MEE-386 на
-    /// аналитика/архитектора, не решено этим тестом.
+    /// Буквальный текст К43 («следующая синхронизация вызывает fetchEvents, НЕ fetchChanges»)
+    /// и развилка Р9 расходятся текстуально — Р9 при `record.cursor == nil` (что и получается
+    /// здесь после сброса) начинает СНАЧАЛА с шага 1 `fetchChanges(nil)`, только потом полное
+    /// окно `fetchEvents`. Решено (MEE-347/MEE-402): это штатная, намеренная работа Р9, не
+    /// дефект — подтверждено К55 (`StdioProtocolTests+ErrorTableAndCursor.swift`) и уже
+    /// принятым тестом `CursorOrderingTests.swift`'s
+    /// `test_firstDeltaStepCursorInvalidTreatedAsEmptyBatchThenStepTwoFullWindowRuns`. Тест
+    /// поэтому сознательно не проверяет «fetchChanges НЕ вызван».
     func test_k43_resetRequiredMakesNextSyncCallFetchEventsRegardlessOfCursorValidity() async throws {
         let harness = Harness.mergeReady(sourceIds: ["src-1"], deltaSync: true, cursor: "cursor-0")
         let connector = harness.connector("src-1")
