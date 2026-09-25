@@ -72,16 +72,27 @@ final class CallSlotWaiter: @unchecked Sendable {
     }
 
     /// Вызывается `onCancel`, вне изоляции актора — только через замок, никогда напрямую
-    /// `callSlotWaiters`.
+    /// `callSlotWaiters`. Переводит в `.cancelled` ТОЛЬКО из `.waiting`/`.registered` — возврат
+    /// РП (комментарий 10:25): раньше `state = .cancelled` стоял безусловно (`defer`), в том
+    /// числе поверх уже состоявшегося `.granted`. На акторе такой порядок («выдача — раньше
+    /// отмены — раньше регистрации») сегодня недостижим (тот же аргумент, что уже закрыл
+    /// основную гонку этого типа), но докстринг типа обещает устойчивость к ЛЮБОМУ порядку —
+    /// значит и этот случай не должен полагаться на недостижимость. `.granted`/`.cancelled` —
+    /// уже финальные состояния, трогать их незачем.
     func cancel() {
         let toResume: CheckedContinuation<Void, Error>? = {
             lock.lock()
             defer { lock.unlock() }
-            defer { state = .cancelled }
-            if case .registered(let continuation) = state {
+            switch state {
+            case .waiting:
+                state = .cancelled
+                return nil
+            case .registered(let continuation):
+                state = .cancelled
                 return continuation
+            case .granted, .cancelled:
+                return nil
             }
-            return nil
         }()
         toResume?.resume(throwing: CancellationError())
     }
