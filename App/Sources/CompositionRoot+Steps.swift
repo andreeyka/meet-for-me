@@ -153,7 +153,8 @@ extension CompositionRoot {
             calendar: partial.calendarPort,
             sessionCoordinator: sessionMachine,
             attribution: partial.attribution,
-            settings: storage.settingsRepository()
+            settings: storage.settingsRepository(),
+            connectors: storage.connectorRepository()
         )
     }
 

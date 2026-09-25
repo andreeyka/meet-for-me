@@ -76,6 +76,7 @@ final class SpeakerAssignmentTests: XCTestCase {
             sessionCoordinator: NoOpSessionCoordinator(),
             attribution: attribution,
             settings: repositories.settings,
+            connectors: repositories.connectors,
             clock: { Date() }
         )
         return Fixture(

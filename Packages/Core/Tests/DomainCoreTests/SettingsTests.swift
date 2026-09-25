@@ -32,6 +32,7 @@ final class SettingsTests: XCTestCase {
             sessionCoordinator: NoOpSessionCoordinator(),
             attribution: FakeAttributionPort(),
             settings: repositories.settings,
+            connectors: repositories.connectors,
             clock: { Date() }
         )
         return Fixture(facade: facade, repositories: repositories)
@@ -126,6 +127,7 @@ final class SettingsTests: XCTestCase {
             sessionCoordinator: NoOpSessionCoordinator(),
             attribution: FakeAttributionPort(),
             settings: FailingSettingsRepository(),
+            connectors: repositories.connectors,
             clock: { Date() }
         )
 

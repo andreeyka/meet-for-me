@@ -67,6 +67,7 @@ final class ErrorDictionaryTests: XCTestCase {
             sessionCoordinator: NoOpSessionCoordinator(),
             attribution: FakeAttributionPort(),
             settings: repositories.settings,
+            connectors: repositories.connectors,
             clock: { Date() }
         )
         return Fixture(facade: facade, repositories: repositories, permissions: permissions)

@@ -2,49 +2,24 @@
 //  `AppFacadeImpl.swift`: каждая ждёт своего PR по группе плана MEE-410, названной в
 //  сообщении отказа. Разведено в отдельный файл, чтобы группа, чья реализация появится
 //  следующей, меняла один метод в одном файле, не трогая остальные. Группа В (К10-К12,
-//  startRecording/stopRecording) реализована — см. `AppFacadeImpl+Recording.swift`. Группа Г
-//  (К13-К14, editSegmentText) реализована — см. `AppFacadeImpl.swift`. Группы Д и Е
-//  (assignSpeaker/clearSpeaker/createPersonAndAssign/forgetVoiceProfile, К15-К20, К50-К52)
-//  реализованы — см. `AppFacadeImpl+Attribution.swift`. Группа Ж (settings()/updateSettings())
-//  реализована параллельно, отдельным PR — см. `AppFacadeImpl+Settings.swift` (MEE-425).
+//  startRecording/stopRecording) реализована — см. `AppFacadeImpl+Recording.swift` (там же —
+//  `skipMeeting`, группа Х, MEE-441). Группа Г (К13-К14, editSegmentText) реализована — см.
+//  `AppFacadeImpl.swift`. Группы Д и Е (assignSpeaker/clearSpeaker/createPersonAndAssign/
+//  forgetVoiceProfile, К15-К20, К50-К52) реализованы — см. `AppFacadeImpl+Attribution.swift`.
+//  Группа Ж (settings()/updateSettings()) реализована параллельно, отдельным PR — см.
+//  `AppFacadeImpl+Settings.swift` (MEE-425). Группа О (К39-К40, календарь и коннекторы) —
+//  `AppFacadeImpl+Calendar.swift` (MEE-441). Группа П (К41, хранение и экспорт) —
+//  `AppFacadeImpl+StorageExport.swift` (MEE-441). Группа Ф (К46, renamePerson) —
+//  `AppFacadeImpl+RenamePerson.swift` (MEE-441).
+//
+//  Остаются группы М (модели и профили) и Н (команды обработки) — «группы М-Х не трогать»
+//  (РП, MEE-441) не относится к их уже сделанным соседям выше, только к этим двум.
 //
 //  Модуль: domain-core · Владелец: DEV-2 · Слой: домен
 
 import Foundation
 
 extension AppFacadeImpl {
-
-    // MARK: - Команды записи (группа Х плана — skipMeeting, соседи startRecording/stopRecording уже реализованы)
-
-    public func skipMeeting(meetingId: UUID) async throws {
-        throw notImplemented("skipMeeting(meetingId:)", group: "Х (skipMeeting и соседи)")
-    }
-
-    // MARK: - Команды календаря и коннекторов (группа О)
-
-    public func setConnectorEnabled(_ enabled: Bool, sourceId: CalendarSourceId) async throws {
-        throw notImplemented("setConnectorEnabled(_:sourceId:)", group: "О (календарь и коннекторы)")
-    }
-
-    public func beginConnectorAuth(sourceId: CalendarSourceId) async throws -> AuthChallenge {
-        throw notImplemented("beginConnectorAuth(sourceId:)", group: "О (календарь и коннекторы)")
-    }
-
-    public func completeConnectorAuth(sourceId: CalendarSourceId, callbackUrl: URL) async throws -> String? {
-        throw notImplemented("completeConnectorAuth(sourceId:callbackUrl:)", group: "О (календарь и коннекторы)")
-    }
-
-    public func connectorSettingsSchema(sourceId: CalendarSourceId) async throws -> Data {
-        throw notImplemented("connectorSettingsSchema(sourceId:)", group: "О (календарь и коннекторы)")
-    }
-
-    public func configureConnector(sourceId: CalendarSourceId, settings: Data) async throws {
-        throw notImplemented("configureConnector(sourceId:settings:)", group: "О (календарь и коннекторы)")
-    }
-
-    public func connectorHealth(sourceId: CalendarSourceId) async throws -> ConnectorHealthView {
-        throw notImplemented("connectorHealth(sourceId:)", group: "О (календарь и коннекторы)")
-    }
 
     // MARK: - Команды моделей и профилей (группа М)
 
@@ -76,25 +51,5 @@ extension AppFacadeImpl {
 
     public func retryJob(id: UUID) async throws -> UUID {
         throw notImplemented("retryJob(id:)", group: "Н (команды обработки)")
-    }
-
-    // MARK: - Команды правки транскрипта (группа Ф — Г/Д/Е реализованы, см. другие файлы)
-
-    public func renamePerson(personId: UUID, displayName: String) async throws {
-        throw notImplemented("renamePerson(personId:displayName:)", group: "Ф (renamePerson)")
-    }
-
-    // MARK: - Хранение и экспорт (группа П)
-
-    public func deleteRecording(recordingId: UUID, deleteFiles: Bool) async throws {
-        throw notImplemented("deleteRecording(recordingId:deleteFiles:)", group: "П (хранение и экспорт)")
-    }
-
-    public func deleteMeeting(meetingId: UUID) async throws {
-        throw notImplemented("deleteMeeting(meetingId:)", group: "П (хранение и экспорт)")
-    }
-
-    public func export(meetingId: UUID, format: ExportFormat, to directory: URL) async throws -> URL {
-        throw notImplemented("export(meetingId:format:to:)", group: "П (хранение и экспорт)")
     }
 }

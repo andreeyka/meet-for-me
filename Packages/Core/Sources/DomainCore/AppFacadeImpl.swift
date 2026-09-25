@@ -19,20 +19,25 @@
 //  у фейка/машины на этот случай.
 //
 //  ЧТО НЕ РЕАЛИЗОВАНО ЭТИМ PR, И ПОЧЕМУ ЭТО НЕ НЕДОДЕЛКА. Оставшиеся методы протокола
-//  (группы З-Ц плана, кроме уже названных сквозных обёрток и групп В/Г/Д/Е; группа Ж —
-//  `settings()`/`updateSettings()` — реализована отдельным PR, MEE-425, слитым в main
-//  параллельно с этим) бросают `notImplemented(_:)` — самоописывающийся отказ, а не
-//  молчаливая заглушка: вызвать их сегодня физически некому — `App/` (композиционный
-//  корень, единственное место, что создаёт `AppFacadeImpl`) не существует ни одним файлом
-//  (план MEE-410 §7, слой 3), и до его появления эти методы мертвы для продакшена, а не
-//  только для тестов. Реализация каждой группы — предмет своего PR, по прямому разрешению
-//  постановки МЕЕ-420 («можно разбить фасад на несколько PR по группам плана»).
-//  `skipMeeting` (группа Х, К47) остаётся стоп-заглушкой — РП назвал следующей работой
-//  календарь/настройки/события, не группу Х целиком.
+//  (группы М/Н плана, «группы М-Х не трогать» — РП, MEE-441) бросают `notImplemented(_:)` —
+//  самоописывающийся отказ, а не молчаливая заглушка: вызвать их сегодня физически некому —
+//  `App/` (композиционный корень, единственное место, что создаёт `AppFacadeImpl`) не
+//  существует ни одним файлом (план MEE-410 §7, слой 3), и до его появления эти методы
+//  мертвы для продакшена, а не только для тестов. Реализация каждой группы — предмет своего
+//  PR, по прямому разрешению постановки МЕЕ-420 («можно разбить фасад на несколько PR по
+//  группам плана»). Группа О (МЕЕ-441) — `AppFacadeImpl+Calendar.swift`; группа П —
+//  `AppFacadeImpl+StorageExport.swift`; группа Ф — `AppFacadeImpl+RenamePerson.swift`;
+//  `skipMeeting` (группа Х, К47) — `AppFacadeImpl+Recording.swift`, рядом со
+//  `startRecording`/`stopRecording` (то же «Команды записи» перечня).
 //
-//  `status()` — минимальная, честно неполная реализация: `activeSession`/`connectors`
-//  оставлены пустыми (группы Р/О ещё не реализованы), `upcoming`/счётчики задач — нули/пусто
-//  до групп Н/К. Ни одно поле не изобретает данных, которых порты не дали.
+//  `status()` — минимальная, честно неполная реализация: `activeSession` оставлено пустым
+//  (группа Р ещё не реализована), `upcoming`/счётчики задач — нули/пусто до групп Н/К.
+//  `connectors` тоже оставлено пустым, хотя группа О (МЕЕ-441) реализована: ни один критерий
+//  плана (К39-К41) не требует его наполнения, а `ConnectorHealthView.displayName`/
+//  `needsAuthorization` не из чего честно собрать за пределами одного источника — см.
+//  докстринг `connectorHealth(sourceId:)` в `AppFacadeImpl+Calendar.swift` за тем же разбором
+//  для одного источника. Наполнить это поле по всем источникам сразу — самостоятельная
+//  задача, не по недосмотру этой. Ни одно поле не изобретает данных, которых порты не дали.
 //  `permissionsReady` — вычисляется (МЕЕ-437, группа К, `AppFacadeImpl+PermissionsReadiness.
 //  swift`), больше не литерал `.notReady`.
 //
@@ -59,6 +64,7 @@ public actor AppFacadeImpl: AppFacade {
     let sessionCoordinator: SessionCoordinator
     let attribution: AttributionPort
     let settingsRepository: SettingsRepository
+    let connectors: ConnectorRepository
     let clock: @Sendable () -> Date
 
     nonisolated let broadcaster = AppEventBroadcaster()
@@ -81,6 +87,7 @@ public actor AppFacadeImpl: AppFacade {
         sessionCoordinator: SessionCoordinator,
         attribution: AttributionPort,
         settings: SettingsRepository,
+        connectors: ConnectorRepository,
         clock: @escaping @Sendable () -> Date = { Date() }
     ) {
         self.meetingRepository = meetings
@@ -94,6 +101,7 @@ public actor AppFacadeImpl: AppFacade {
         self.sessionCoordinator = sessionCoordinator
         self.attribution = attribution
         self.settingsRepository = settings
+        self.connectors = connectors
         self.clock = clock
         // Возврат РП (находка 4): подписка на смену прав живёт весь срок жизни фасада —
         // `permissions.changes()` вызван ЗДЕСЬ, синхронно, до возврата из `init` (`AsyncStream`
@@ -140,9 +148,7 @@ public actor AppFacadeImpl: AppFacade {
         await modelCatalog.profiles()
     }
 
-    /// К33 (МЕЕ-437, группа Л): единственный сегодня реализованный метод, чей естественный
-    /// повод для `.meetingsChanged` — группа Н (`downloadModel`/`setConnectorEnabled` и т.п.)
-    /// вне периметра этой задачи. Публикуется безусловно — сама синхронизация уже
+    /// К33 (МЕЕ-437, группа Л): публикуется безусловно — сама синхронизация уже
     /// безусловна (`CalendarPort.sync` не throws, каждый `CalendarSyncResult` несёт свой
     /// отказ по коннектору отдельно), а не только когда список встреч правда изменился:
     /// подписчик не платит за лишний пересчёт дороже одного чтения.

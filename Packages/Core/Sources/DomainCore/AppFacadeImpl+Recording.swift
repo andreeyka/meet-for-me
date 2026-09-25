@@ -60,6 +60,30 @@ extension AppFacadeImpl {
         }
     }
 
+    /// К47 (группа Х плана MEE-410, MEE-441): контракт не даёт об этом методе ни одного
+    /// предложения текста сверх сигнатуры протокола («Команды записи», рядом со
+    /// `startRecording`/`stopRecording` выше) — ни инварианта, ни строки в «Поведении».
+    /// Критерий покрывает буквально сигнатуру: метод существует, обращается к репозиторию
+    /// встреч (фейк — ФМР) ровно один раз на вызов. Фикстура критерия — ФМР, не ФСК: не
+    /// `sessionCoordinator.skip(meetingId:now:)` (C-018), а `MeetingRepository.setStatus(
+    /// .skipped, meetingId:)` — `MeetingStatus.skipped` (C-010, `Repositories.swift`) уже
+    /// несёт ровно этот смысл, второго места пометить встречу пропущенной в домене нет.
+    ///
+    /// Событие — инв. 15 (не К47: критерий его не называет, см. комментарий выше): пропуск
+    /// встречи меняет её статус, то же самое поле, из которого строится `AppStatus.upcoming` —
+    /// значит меняет и сам статус, тем же доводом, что `syncCalendars()`/К33 выше.
+    public func skipMeeting(meetingId: UUID) async throws {
+        do {
+            try await meetingRepository.setStatus(.skipped, meetingId: meetingId)
+            publish(.meetingsChanged)
+            publish(.statusChanged(await status()))
+        } catch let error as StorageError {
+            throw wrap(error)
+        } catch {
+            throw wrapUnexpected(error)
+        }
+    }
+
     func wrap(_ error: SessionError) -> AppFacadeError {
         switch error {
         case .noSuchMeeting(let meetingId):

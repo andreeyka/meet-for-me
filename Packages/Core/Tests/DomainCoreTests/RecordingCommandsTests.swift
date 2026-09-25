@@ -44,6 +44,7 @@ final class RecordingCommandsTests: XCTestCase {
             sessionCoordinator: sessionCoordinator,
             attribution: FakeAttributionPort(),
             settings: repositories.settings,
+            connectors: repositories.connectors,
             clock: { clock.now() }
         )
         return Fixture(facade: facade, repositories: repositories, sessionCoordinator: sessionCoordinator)
