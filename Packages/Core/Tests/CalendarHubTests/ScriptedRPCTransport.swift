@@ -3,6 +3,8 @@
 //  Форма (как задаётся сценарий) — решение этой задачи, не цитата контракта: очередь строк
 //  JSON Lines, `receive()` отдаёт их по порядку независимо от того, что послал хост — это
 //  и позволяет К46 буквально (сценарий отвечает «неверным» `id`, которого хост не посылал).
+//  `hangOnNextReceive()` (МЕЕ-386, К9 вход Б) — та же очередь, отдельный элемент: единственный
+//  способ смоделировать зависший вызов плагина на stdio-пути для `raceTimeout`.
 //
 //  Модуль: calendar-hub · Владелец: DEV-1 · Слой: домен (тестовая оснастка)
 
@@ -15,10 +17,17 @@ import Foundation
 /// (`StdioCalendarConnector.awaitResponse` отображает её в `ConnectorError.upstreamUnavailable`).
 struct ScriptedRPCTransportExhausted: Error {}
 
+/// Элемент очереди воспроизведения — обычный кадр-ответ или зависание (МЕЕ-386, К9 вход Б).
+private enum ScriptedResponse {
+    case frame(String)
+    case hang
+}
+
 final class ScriptedRPCTransport: RPCTransport, @unchecked Sendable {
     private let lock = NSLock()
-    private var responses: [String] = []
+    private var responses: [ScriptedResponse] = []
     private var sentFrames: [String] = []
+    private var pendingHang: CheckedContinuation<String, Error>?
 
     private func locked<Value>(_ body: () -> Value) -> Value {
         lock.lock()
@@ -30,7 +39,16 @@ final class ScriptedRPCTransport: RPCTransport, @unchecked Sendable {
 
     /// Добавляет кадры-ответы в очередь воспроизведения, в порядке вызова.
     func enqueue(_ frames: String...) {
-        locked { responses.append(contentsOf: frames) }
+        locked { responses.append(contentsOf: frames.map(ScriptedResponse.frame)) }
+    }
+
+    /// Ставит в ту же очередь, на своё место по порядку, зависание вместо кадра-ответа —
+    /// `receive()`, дойдя до него, не бросает и не отвечает, а виснет НАВСЕГДА, пока
+    /// вызывающая сторона (`raceTimeout`, проигравшая гонку с тайм-аутом) не отменит саму
+    /// задачу. Отвечает на отмену (`withTaskCancellationHandler`) — без этого повисший вызов
+    /// пережил бы сам тест, вместо того чтобы быть снятым `group.cancelAll()`.
+    func hangOnNextReceive() {
+        locked { responses.append(.hang) }
     }
 
     func send(_ frame: String) async throws {
@@ -38,9 +56,24 @@ final class ScriptedRPCTransport: RPCTransport, @unchecked Sendable {
     }
 
     func receive() async throws -> String {
-        guard let next = locked({ responses.isEmpty ? nil : responses.removeFirst() }) else {
+        let next = locked { responses.isEmpty ? nil : responses.removeFirst() }
+        switch next {
+        case .none:
             throw ScriptedRPCTransportExhausted()
+        case .frame(let frame):
+            return frame
+        case .hang:
+            return try await withTaskCancellationHandler {
+                try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<String, Error>) in
+                    locked { pendingHang = continuation }
+                }
+            } onCancel: {
+                let toResume = locked { () -> CheckedContinuation<String, Error>? in
+                    defer { pendingHang = nil }
+                    return pendingHang
+                }
+                toResume?.resume(throwing: CancellationError())
+            }
         }
-        return next
     }
 }

@@ -59,7 +59,9 @@ extension CalendarPortImpl {
         var lastDelay = 0
         while true {
             do {
-                return try await raceTimeout(source: source, timeout: timeout, operation: operation)
+                return try await raceTimeout(
+                    source: source, connector: connector, timeout: timeout, operation: operation
+                )
             } catch let error as ConnectorError {
                 if passthroughCursorInvalid, case .cursorInvalid = error {
                     throw error
@@ -92,7 +94,7 @@ extension CalendarPortImpl {
     }
 
     private func raceTimeout<Value: Sendable>(
-        source: CalendarSourceId, timeout: MethodTimeout,
+        source: CalendarSourceId, connector: CalendarConnector, timeout: MethodTimeout,
         operation: @escaping @Sendable () async throws -> Value
     ) async throws -> Value {
         let seam = waitSeam   // локальная копия — избегает пересечения изоляции актора
@@ -111,18 +113,20 @@ extension CalendarPortImpl {
             }
         } catch let error as CalendarError {
             if case .timeout = error {
-                // К9 вход Б (кадр shutdown на таймауте) — обязанность stdio-адаптера:
-                // `StdioCalendarConnector` (MEE-402 шаг 2) теперь умеет отправлять кадр
-                // `shutdown`, но вызов его ЗДЕСЬ, на таймауте, — ещё не сделан (следующая
-                // часть MEE-386); здесь пока только сбрасываем кэш `capabilities`, чтобы
-                // следующий вызов инициализировал заново (тот же принцип, что К10/Р10).
-                // СТРОКА: звать ли `connector.shutdown()` здесь же, для ЛЮБОГО коннектора
-                // (не только stdio) — контракт не решает для in-process пути. Не зову: у
-                // in-process коннектора зависшая Task не обязана значить «процесс мёртв»
-                // (процесса и нет), а К9 вход А не проверяет вызов shutdown — решение
-                // оставлено до К9 вход Б, чтобы не придумывать наблюдаемое поведение, о
-                // котором перечень MEE-347 не говорит ни здесь, ни там.
+                // Сбрасываем кэш `capabilities`, чтобы следующий вызов инициализировал
+                // заново (тот же принцип, что К10/Р10) — таймаут трактуется как «соединение
+                // больше не годно», симметрично `upstreamUnavailable` выше по файлу.
                 capabilities[source] = nil
+                // К9 вход Б (MEE-386): кадр `shutdown` отправляется ДО того, как `.timeout`
+                // возвращается наружу — критерий требует это как наблюдаемый факт (исходящий
+                // `request` в записи сценария), не гонку с тем, когда он физически уйдёт,
+                // поэтому `await`, не `Task.detached`. Безусловно для ЛЮБОГО `CalendarConnector`
+                // (не только stdio) — разрешает прежнюю СТРОКУ: оба существующих коннектора
+                // (`StdioCalendarConnector`/`FakeCalendarConnector`) не ждут ответа на
+                // `shutdown()` (§5.2 инв. 20 — «shutdown никогда не повторяется», «выстрелил и
+                // забыл»), так что этот `await` не рискует зависнуть на РЕАЛЬНОМ ожидании
+                // ответа ни у одного из них.
+                await connector.shutdown()
             }
             throw error
         }
