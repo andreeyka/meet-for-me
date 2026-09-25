@@ -338,9 +338,13 @@ jobs:
     # 7+7); и `brew install swiftlint` — сеть, а не CPU, и на холодном кеше
     # раннера ходит дольше секунд, которые он занимает на зелёном прогоне
     # сегодня (run 35919402086, 35919377429: вся работа целиком — 95–113 с).
-    # 20 минут — это 14 минут на оба возможных зависания подряд плюс запас
-    # почти на порядок сверх измеренного факта на всё остальное.
-    timeout-minutes: 20
+    # 20 минут было запасом почти на порядок сверх измеренного факта (95-113 с).
+    # MEE-430 добавил в конец работы шаг xcodegen+xcodebuild (см. его же комментарий
+    # ниже) — у него нет прогона, с которого можно взять факт, как у остальных шагов
+    # этого файла: это первая сборка целого Xcode-проекта из ~13 таргетов SPM разом,
+    # включая GRDB. +6 минут — оценка снизу, не измерение: первый зелёный прогон
+    # покажет факт, и тогда этот предел стоит пересчитать на него, как у прочих шагов.
+    timeout-minutes: 26
     steps:
       - uses: actions/checkout@v5
 
@@ -542,3 +546,45 @@ jobs:
         # Подстраховка снаружи скрипта — тот же довод, что у Core (Linux).
         timeout-minutes: 7
         run: *run-swift-test-with-timeout
+
+      # MEE-430: `project.yml` — единственный способ узнать, что каркас app-ui (App-таргет,
+      # XPC-сервис `TranscriptionEngine`) на самом деле собирается, а не только существует
+      # текстом. `swift build`/символьный граф выше его не видят — это отдельный граф
+      # зависимостей, который резолвит и собирает Xcode, а не SwiftPM напрямую (`xcodebuild`,
+      # не `swift build`). Барьер по нему — тот же приём, что у SwiftLint выше: раньше
+      # молчаливого «шага нет» отчёта не было ни одного, потому что не было и самого шага
+      # (MEE-91 про тот же класс дыры — вердикт, которого не существует, не может краснеть).
+      - name: Установка XcodeGen
+        run: |
+          set -euo pipefail
+          brew install xcodegen
+          xcodegen version
+
+      # Гейт — только `!cancelled()`, тот же приём, что у графа и тестов выше: падение
+      # SwiftLint/тестов/графа не должно уносить с собой вердикт по каркасу app-ui — это
+      # независимый вектор, а не следствие остальных. И наоборот: падение этого шага не
+      # проверяет ничего, что уже проверили другие, — генерация и сборка через `xcodebuild`
+      # идёт своим путём резолва пакетов, не общим с `swift build` выше.
+      #
+      # Подпись выключена явно (`CODE_SIGNING_ALLOWED=NO`): на раннере нет сертификата
+      # Developer ID, и это не мешает проверить компиляцию — CI собирает, чтобы поймать
+      # ошибку кода в `App/`/`Services/TranscriptionEngineXPC/`, а не чтобы произвести
+      # подписанный бандл (тот прогон — только на живом Mac DEV-1, project.yml сам называет
+      # это в комментарии к hardened runtime).
+      - name: Каркас app-ui (XcodeGen + xcodebuild)
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: |
+          set -o pipefail
+          log="$RUNNER_TEMP/app-scaffold.log"
+          status=0
+          ( set -eux
+            xcodegen generate --spec project.yml
+            xcodebuild build \
+              -project MeetForMe.xcodeproj \
+              -scheme MeetForMe \
+              -destination 'platform=macOS' \
+              CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO
+          ) 2>&1 | tee "$log" || status=$?
+          bash .github/scripts/annotate.sh "Каркас app-ui · XcodeGen + xcodebuild" "$status" "$log" || true
+          exit $status
