@@ -1,9 +1,11 @@
-//  AppFacadeImpl — команды, не реализованные этим срезом MEE-420 части 4. См. заголовок
+//  AppFacadeImpl — команды, не реализованные этим срезом MEE-420 части 5. См. заголовок
 //  `AppFacadeImpl.swift`: каждая ждёт своего PR по группе плана MEE-410, названной в
 //  сообщении отказа. Разведено в отдельный файл, чтобы группа, чья реализация появится
-//  следующей, меняла один метод в одном файле, не трогая остальные ~21. Группа В (К10-К12,
+//  следующей, меняла один метод в одном файле, не трогая остальные ~17. Группа В (К10-К12,
 //  startRecording/stopRecording) реализована — см. `AppFacadeImpl+Recording.swift`. Группа Г
-//  (К13-К14, editSegmentText) реализована — см. `AppFacadeImpl.swift`.
+//  (К13-К14, editSegmentText) реализована — см. `AppFacadeImpl.swift`. Группы Д и Е
+//  (assignSpeaker/clearSpeaker/createPersonAndAssign/forgetVoiceProfile, К15-К20, К50-К52)
+//  реализованы — см. `AppFacadeImpl+Attribution.swift`.
 //
 //  Модуль: domain-core · Владелец: DEV-2 · Слой: домен
 
@@ -75,30 +77,10 @@ extension AppFacadeImpl {
         throw notImplemented("retryJob(id:)", group: "Н (команды обработки)")
     }
 
-    // MARK: - Команды правки транскрипта (группы Д, Е, Ф — Г реализована, см. AppFacadeImpl.swift)
-
-    public func assignSpeaker(transcriptId: UUID, cluster: Int, personId: UUID) async throws {
-        throw notImplemented("assignSpeaker(transcriptId:cluster:personId:)", group: "Д (правка спикеров)")
-    }
-
-    public func createPersonAndAssign(
-        transcriptId: UUID, cluster: Int, displayName: String, email: String?
-    ) async throws -> UUID {
-        throw notImplemented(
-            "createPersonAndAssign(transcriptId:cluster:displayName:email:)", group: "Д (правка спикеров)"
-        )
-    }
-
-    public func clearSpeaker(transcriptId: UUID, cluster: Int) async throws {
-        throw notImplemented("clearSpeaker(transcriptId:cluster:)", group: "Д (правка спикеров)")
-    }
+    // MARK: - Команды правки транскрипта (группа Ф — Г/Д/Е реализованы, см. другие файлы)
 
     public func renamePerson(personId: UUID, displayName: String) async throws {
         throw notImplemented("renamePerson(personId:displayName:)", group: "Ф (renamePerson)")
-    }
-
-    public func forgetVoiceProfile(personId: UUID) async throws {
-        throw notImplemented("forgetVoiceProfile(personId:)", group: "Е (forgetVoiceProfile)")
     }
 
     // MARK: - Хранение и экспорт (группа П)
@@ -115,9 +97,9 @@ extension AppFacadeImpl {
         throw notImplemented("export(meetingId:format:to:)", group: "П (хранение и экспорт)")
     }
 
-    // MARK: - Настройки (группа Ж — ждёт AppSettings.slice1Defaults, см. заголовок AppFacadeImpl.swift)
+    // MARK: - Настройки (группа Ж — своя очередь по роадмапу РП, не блокер архитектора; см. AppSettings.swift)
 
     public func updateSettings(_ settings: AppSettings) async throws {
-        throw notImplemented("updateSettings(_:)", group: "Ж (настройки — ждёт AppSettings.slice1Defaults)")
+        throw notImplemented("updateSettings(_:)", group: "Ж (настройки)")
     }
 }

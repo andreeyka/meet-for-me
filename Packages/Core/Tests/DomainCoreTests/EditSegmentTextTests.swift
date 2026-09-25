@@ -44,10 +44,12 @@ final class EditSegmentTextTests: XCTestCase {
             recordings: repositories.recordings,
             transcripts: repositories.transcripts,
             persons: repositories.persons,
+            speakerProfiles: repositories.speakerProfiles,
             permissions: FakePermissionsPort(startingStatus: .granted, startingOutcome: .granted, checkedAt: Date()),
             modelCatalog: FakeModelCatalogPort(),
             calendar: FakeCalendarPort(),
             sessionCoordinator: NoOpSessionCoordinator(),
+            attribution: FakeAttributionPort(),
             clock: { Date() }
         )
         return Fixture(facade: facade, repositories: repositories, transcriptId: header.id, segmentId: segmentId)

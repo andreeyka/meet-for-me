@@ -1,10 +1,11 @@
 //  AppFacadeImpl — реализация `AppFacade` (C-016 v10, MEE-25) поверх настоящих портов и
-//  репозиториев. MEE-420 часть 4 (план MEE-410): группа Г — `editSegmentText` (К13-К14),
-//  поверх частей 1-3 (группы А, Б, В, Х-К48б, слитых #145/#151). Несколько мелких, дословно
-//  однозначных сквозных обёрток (§«Поведение»: «фасад — тонкий слой сборки… вызывает порты
-//  и репозитории») реализованы попутно, потому что риск ошибки в них тот же, что у уже
-//  проверенных методов, — их приёмка в этом PR не заявляется, тесты для них заводит
-//  соответствующая группа плана.
+//  репозиториев. MEE-420 часть 5 (план MEE-410): группы Д и Е — assignSpeaker/clearSpeaker/
+//  createPersonAndAssign/forgetVoiceProfile (К15-К20, К50-К52 дельты Щ перечня MEE-401),
+//  поверх частей 1-4 (группы А, Б, В, Г, Х-К48б, слитых #145/#151/#153). Несколько мелких,
+//  дословно однозначных сквозных обёрток (§«Поведение»: «фасад — тонкий слой сборки…
+//  вызывает порты и репозитории») реализованы попутно, потому что риск ошибки в них тот же,
+//  что у уже проверенных методов, — их приёмка в этом PR не заявляется, тесты для них
+//  заводит соответствующая группа плана.
 //
 //  Модуль: domain-core · Владелец: DEV-2 · Слой: домен
 //
@@ -17,16 +18,16 @@
 //  «активная сессия» проверяется явным чтением `sessions()`, не сведена в отдельный throw
 //  у фейка/машины на этот случай.
 //
-//  ЧТО НЕ РЕАЛИЗОВАНО ЭТИМ PR, И ПОЧЕМУ ЭТО НЕ НЕДОДЕЛКА. Оставшиеся ~22 метода
-//  протокола (группы Д-Ц плана, кроме уже названных сквозных обёрток и групп В/Г) бросают
-//  `notImplemented(_:)` — самоописывающийся отказ, а не молчаливая заглушка: вызвать их
-//  сегодня физически некому — `App/` (композиционный корень, единственное место, что
-//  создаёт `AppFacadeImpl`) не существует ни одним файлом (план MEE-410 §7, слой 3), и до
-//  его появления эти методы мертвы для продакшена, а не только для тестов. Реализация
-//  каждой группы — предмет своего PR, по прямому разрешению постановки МЕЕ-420
+//  ЧТО НЕ РЕАЛИЗОВАНО ЭТИМ PR, И ПОЧЕМУ ЭТО НЕ НЕДОДЕЛКА. Оставшиеся ~18 методов
+//  протокола (группы Ж-Ц плана, кроме уже названных сквозных обёрток и групп В/Г/Д/Е)
+//  бросают `notImplemented(_:)` — самоописывающийся отказ, а не молчаливая заглушка:
+//  вызвать их сегодня физически некому — `App/` (композиционный корень, единственное
+//  место, что создаёт `AppFacadeImpl`) не существует ни одним файлом (план MEE-410 §7,
+//  слой 3), и до его появления эти методы мертвы для продакшена, а не только для тестов.
+//  Реализация каждой группы — предмет своего PR, по прямому разрешению постановки МЕЕ-420
 //  («можно разбить фасад на несколько PR по группам плана»). `skipMeeting` (группа Х, К47)
-//  остаётся стоп-заглушкой — РП назвал следующей работой запись/обработку/атрибуцию/
-//  календарь/настройки/события, не группу Х целиком.
+//  остаётся стоп-заглушкой — РП назвал следующей работой календарь/настройки/события,
+//  не группу Х целиком.
 //
 //  `status()` — минимальная, честно неполная реализация: `activeSession`/`connectors`
 //  оставлены пустыми (группы Р/О ещё не реализованы), `permissionsReady` — консервативное
@@ -35,12 +36,17 @@
 //  не изобретает данных, которых порты не дали.
 //
 //  `settings()`/`updateSettings` НЕ реализованы вовсе (бросают `notImplemented`), а не
-//  частично: `AppSettings.slice1Defaults` не объявлен (находка MEE-289, сообщена
-//  архитектору в `AppSettings.swift`, актуальна и здесь) — семь из двенадцати полей не
-//  имеют значения по умолчанию, названного текстом контракта. `settings()` без строки в
-//  `SettingsRepository` обязан вернуть эти умолчания (§2.1); подставить их самостоятельно
-//  значило бы изобрести продуктовое решение, которого контракт не называет. Ждёт ответа
-//  архитектора, тем же приёмом, что и весь этот пробел с момента MEE-289.
+//  частично: `AppSettings.slice1Defaults` всё ещё не объявлен в `AppSettings.swift` —
+//  но находка MEE-289 у ЭТОГО файла устарела. C-016 v10 (основание версии 10, приёмка
+//  РП IR-105/MEE-291) разводит все двенадцать полей сама: семь названы контрактом
+//  дословно (`voiceProfilesEnabled = false` — Q6 architecture.md, среди них), пять
+//  (`recordingPolicy`, `defaultProfileId`, `processOnACPowerOnly`, `processWhileRecording`,
+//  `launchAtLogin`) — явное новое требование к DEV-2, не пробел, ждущий архитектора.
+//  Не сделано этим PR намеренно: реализация `slice1Defaults`/`settings()`/`updateSettings`
+//  — предмет своей группы плана (Ж), не группы Д/Е, которым этот файл занят; смешивать их
+//  значило бы решать чужую задачу попутно. Группа Д использует контрактный литерал
+//  `voiceProfilesEnabled = false` напрямую, в обход `settings()` — см.
+//  `AppFacadeImpl+Attribution.swift`.
 
 import Foundation
 
@@ -50,10 +56,12 @@ public actor AppFacadeImpl: AppFacade {
     let recordings: RecordingRepository
     let transcripts: TranscriptRepository
     let persons: PersonRepository
+    let speakerProfiles: SpeakerProfileRepository
     let permissionsPort: PermissionsPort
     let modelCatalog: ModelCatalogPort
     let calendar: CalendarPort
     let sessionCoordinator: SessionCoordinator
+    let attribution: AttributionPort
     let clock: @Sendable () -> Date
 
     nonisolated let broadcaster = AppEventBroadcaster()
@@ -63,20 +71,24 @@ public actor AppFacadeImpl: AppFacade {
         recordings: RecordingRepository,
         transcripts: TranscriptRepository,
         persons: PersonRepository,
+        speakerProfiles: SpeakerProfileRepository,
         permissions: PermissionsPort,
         modelCatalog: ModelCatalogPort,
         calendar: CalendarPort,
         sessionCoordinator: SessionCoordinator,
+        attribution: AttributionPort,
         clock: @escaping @Sendable () -> Date = { Date() }
     ) {
         self.meetingRepository = meetings
         self.recordings = recordings
         self.transcripts = transcripts
         self.persons = persons
+        self.speakerProfiles = speakerProfiles
         self.permissionsPort = permissions
         self.modelCatalog = modelCatalog
         self.calendar = calendar
         self.sessionCoordinator = sessionCoordinator
+        self.attribution = attribution
         self.clock = clock
     }
 
