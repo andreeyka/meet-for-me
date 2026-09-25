@@ -215,7 +215,10 @@ public enum AppFacadeFixtures {
             permissionsReady: .ready, connectors: [], updatedAt: epoch
         )
         let facade = FakeAppFacade(status: status, permissions: permissions, settings: baseSettings())
-        facade.forcedError = .settingsUnreadable(key: "recordingPolicy")
+        // Приёмка РП по PR #141 (`111b061b`, п.1): отдельная ошибка только на `settings()` —
+        // общий `forcedError` отказывал бы заодно и всем остальным методам фасада, которых
+        // эта фикстура не касается.
+        facade.settingsError = .settingsUnreadable(key: "recordingPolicy")
         return facade
     }
 

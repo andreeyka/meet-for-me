@@ -159,6 +159,57 @@ final class JobQueueEngineStopPersistenceTests: XCTestCase {
         await secondQueue.stop()
     }
 
+    /// К116 (перечень MEE-189, дельта `АВ` `2530363a`; план MEE-311, дельта `АГ`; попутно
+    /// MEE-420): `isRecordingInProgress` — поле экземпляра `JobQueueEngine`
+    /// (`JobQueueEngineLifecycle.swift`), не колонка таблицы `jobs` — новый экземпляр поверх
+    /// того же репозитория его не наследует, тем же доводом, что и К71 (состояние очереди
+    /// выводится из таблицы целиком, а этого поля в ней нет). Код не менялся — наблюдение
+    /// факта, уже верного по устройству класса.
+    func test_k116_recordingInProgressDoesNotSurviveJobQueueEngineRecreation() async throws {
+        let rig = JobQueueTestRig()
+        let firstHandler = FakeJobHandler(type: .transcode)
+        try await rig.queue.register(handler: firstHandler)
+        let stream = rig.queue.events()
+        var iterator = stream.makeAsyncIterator()
+
+        _ = try await rig.queue.submit(makeSubmission(forbidWhileRecording: true))
+        guard case .submitted = await iterator.next() else {
+            return XCTFail("ожидался submitted")
+        }
+
+        await rig.queue.recordingDidStart()   // без recordingDidStop()
+        await rig.queue.start()
+        guard case .blocked(_, _, let reason) = await iterator.next() else {
+            return XCTFail("ожидался blocked")
+        }
+        XCTAssertEqual(reason, .recordingInProgress, "первый экземпляр видит идущую запись")
+        XCTAssertEqual(firstHandler.runCallCount, 0, "заблокирована — обработчик первого экземпляра не звался")
+        await rig.queue.stop()
+
+        // Новый экземпляр поверх ТОГО ЖЕ репозитория, без своего recordingDidStart() —
+        // К71: состояние целиком выводится из таблицы jobs, задача восстанавливается pending
+        // (blocked вернул её строкой 137/142 JobQueueEngineReview.swift), а изолированное
+        // поле isRecordingInProgress начинается с false в новом экземпляре.
+        let secondQueue = JobQueueEngine(
+            repository: rig.repository, modelCatalog: rig.catalog, powerPort: rig.power,
+            clock: { rig.clock.now() }
+        )
+        let secondHandler = FakeJobHandler(type: .transcode)
+        try await secondQueue.register(handler: secondHandler)
+        await secondQueue.start()
+
+        var attemptsLeft = 10_000
+        while secondHandler.runCallCount == 0 {
+            attemptsLeft -= 1
+            guard attemptsLeft > 0 else {
+                return XCTFail("secondQueue не допустила задачу к исполнению")
+            }
+            await Task.yield()
+        }
+        XCTAssertEqual(secondHandler.runCallCount, 1, "новый экземпляр не унаследовал recordingInProgress")
+        await secondQueue.stop()
+    }
+
     /// Оснастка К71 — вынесена из тела теста, чтобы уложиться в `function_body_length`
     /// (50 строк, возврат РП по MEE-350): пять строк отличались только статусом и парой
     /// полей. `running` через неё не идёт — ей нужны настоящие `attemptStartedAt`/`leaseExpiresAt`,
