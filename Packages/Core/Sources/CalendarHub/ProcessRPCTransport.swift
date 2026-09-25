@@ -65,9 +65,16 @@ public actor ProcessRPCTransport: RPCTransport {
         stderrHandle = stderrPipe.fileHandleForReading
 
         try process.run()
+        installHandlers(onStderrLine: onStderrLine)
+    }
 
-        // Свободные функции/замыкания ниже не изолированы актором — только после этой
-        // точки `self` полностью инициализирован, и `[weak self]` в них законен.
+    /// Отдельный метод, не тело `init`: захват `[weak self]` в замыканиях, ЛЕКСИЧЕСКИ
+    /// стоящих внутри инициализатора актора, компилятор отвергает («reference to captured
+    /// var 'self' in concurrently-executing code») — до возврата из `init` `self` считается
+    /// ещё не полностью устоявшимся значением для анализа определённой инициализации, даже
+    /// когда все хранимые свойства к этой строке уже присвоены. Обычный метод, вызванный
+    /// последней строкой `init`, снимает это ограничение: здесь `self` — обычная ссылка.
+    private func installHandlers(onStderrLine: @escaping @Sendable (String) -> Void) {
         stderrHandle.readabilityHandler = { handle in
             let data = handle.availableData
             guard !data.isEmpty, let text = String(data: data, encoding: .utf8) else { return }
