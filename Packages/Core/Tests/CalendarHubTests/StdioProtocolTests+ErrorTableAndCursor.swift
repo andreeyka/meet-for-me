@@ -85,7 +85,10 @@ extension StdioProtocolTests {
         // `fetchChanges(cursor: nil)` — не запоминает полное окно как новый режим работы.
         // `initialize` не повторяется (capabilities уже в кэше источника), поэтому четвёртый
         // исходящий кадр — сразу `fetchChanges` этого второго цикла.
-        transport.enqueue(#"{"schemaVersion":1,"id":4,"result":{"events":[],"deletedExternalIds":[],"cursor":"c2"}}"#)
+        transport.enqueue(
+            #"{"schemaVersion":1,"id":4,"result":"#
+                + #"{"events":[],"deletedExternalIds":[],"cursor":"c2","resetRequired":false}}"#
+        )
         let secondResults = await hub.sync(trigger: .manual)
 
         XCTAssertNil(secondResults.first?.failure)
