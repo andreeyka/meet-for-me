@@ -97,42 +97,78 @@ final class EngineXPCClientTimingTests: XCTestCase {
 
     // MARK: - К40(ii): кадр прогресса, испорченный на проводе — молча отброшен
 
-    /// К40(ii): кадр прогресса, доля которого вне представимого диапазона (та же порча,
-    /// что `EngineWireMalformedFieldTests.test_k40i_corruptedProgressFrameFailsToDecode`
-    /// на Core (Linux) — `PlistSurgery`, реальный `EngineWire.decode` бросает на decode) —
-    /// на клиенте не крашит и не долетает никуда; последующая обычная работа не задета.
+    /// Возврат РП по MEE-431 (10:27 UTC): не только «клиент не падает и работает дальше» —
+    /// сборщик прогресса на самой ЖИВОЙ задаче, до которой испорченный/чужой кадр не должен
+    /// был дойти, и настоящий кадр ТОЙ ЖЕ задачи сразу следом, доказывающий, что порченый
+    /// кадр не сбил слежение за настоящей задачей.
+    ///
+    /// К40(ii): кадр прогресса, доля которого вне представимого диапазона (та же порча, что
+    /// `EngineWireMalformedFieldTests.test_k40i_corruptedProgressFrameFailsToDecode` на
+    /// Core (Linux) — `PlistSurgery`, реальный `EngineWire.decode` бросает на decode).
     func test_k40ii_progressFrameWithUnrepresentableFractionSilentlyDropped() async throws {
-        let fixture = XPCFixture()
+        let engine = FakeTranscriptionEngine()
+        engine.simulatedWorkNanoseconds = 2_000_000_000   // с запасом дольше, чем тест ждёт
+        let fixture = XPCFixture(service: TestEngineXPCService(transcription: engine))
         configureReadyProfile(fixture.modelCatalog)
-        _ = try await fixture.client.ping()   // поднимает соединение и progressTarget
+        let collector = ProgressCollector()
 
-        let message = EngineProgressMessage(
-            jobId: EngineJobId(rawValue: UUID()), progress: .advanced(stage: .asr, fraction: 0.5)
+        let task = Task { try await fixture.client.transcribe(self.makeSpec()) { collector.append($0) } }
+        try await Task.sleep(nanoseconds: 150_000_000)   // дать transcribe дойти до сервиса
+        let jobId = try XCTUnwrap(fixture.service.receivedJobIds.last)
+        // `FakeTranscriptionEngine` без `progressScript` сама шлёт `.started(.asr)` сразу —
+        // отсчёт «долетело/не долетело» ведётся ОТ ЭТОГО момента, а не от нуля.
+        let countBeforeBadFrame = collector.all.count
+
+        let corrupted = try PlistSurgery.data(
+            for: EngineProgressMessage(jobId: jobId, progress: .advanced(stage: .asr, fraction: 0.5)),
+            replacing: "<real>0.5</real>", with: "<real>1e400</real>"
         )
-        let corrupted = try PlistSurgery.data(for: message, replacing: "<real>0.5</real>", with: "<real>1e400</real>")
         fixture.service.pushRawProgressData(corrupted)
         try await Task.sleep(nanoseconds: 100_000_000)
+        XCTAssertEqual(
+            collector.all.count, countBeforeBadFrame, "испорченный кадр не должен был долететь до потребителя"
+        )
 
-        let transcript = try await fixture.client.transcribe(makeSpec()) { _ in }
-        XCTAssertEqual(transcript.engine, "fake-transcription", "испорченный кадр не должен был затронуть клиента")
+        fixture.service.pushRawProgress(jobId: jobId, progress: .advanced(stage: .asr, fraction: 0.3))
+        try await Task.sleep(nanoseconds: 100_000_000)
+        XCTAssertEqual(
+            collector.all.last?.fraction, 0.3, "настоящий прогресс той же задачи обязан дойти как обычно"
+        )
+        _ = try await task.value
     }
 
     // MARK: - К40(iii): кадр прогресса для чужого jobId — молча отброшен
 
     /// К40(iii), вторая половина: `jobId`, которого клиент не знает ВООБЩЕ (не «уже
     /// завершённый», как К23, а никогда не существовавший) — кадр отбрасывается тем же
-    /// путём (`guard let job else { return }`), задача (если жива) идёт своим ходом.
+    /// путём (`guard let job else { return }`); та же схема, что К40(ii) — живая задача,
+    /// чужой кадр не доходит, настоящий следом доходит как обычно.
     func test_k40iii_progressForNeverKnownForeignJobIdSilentlyDropped() async throws {
-        let fixture = XPCFixture()
+        let engine = FakeTranscriptionEngine()
+        engine.simulatedWorkNanoseconds = 2_000_000_000
+        let fixture = XPCFixture(service: TestEngineXPCService(transcription: engine))
         configureReadyProfile(fixture.modelCatalog)
-        _ = try await fixture.client.ping()
+        let collector = ProgressCollector()
+
+        let task = Task { try await fixture.client.transcribe(self.makeSpec()) { collector.append($0) } }
+        try await Task.sleep(nanoseconds: 150_000_000)
+        let jobId = try XCTUnwrap(fixture.service.receivedJobIds.last)
+        // Тот же учёт, что К40(ii): `FakeTranscriptionEngine` уже прислала своё `.started`.
+        let countBeforeForeignFrame = collector.all.count
 
         let foreignJobId = EngineJobId(rawValue: UUID())
-        fixture.service.pushRawProgress(jobId: foreignJobId, progress: .advanced(stage: .asr, fraction: 0.5))
+        fixture.service.pushRawProgress(jobId: foreignJobId, progress: .advanced(stage: .asr, fraction: 0.9))
         try await Task.sleep(nanoseconds: 100_000_000)
+        XCTAssertEqual(
+            collector.all.count, countBeforeForeignFrame, "чужой кадр не должен был долететь до потребителя"
+        )
 
-        let transcript = try await fixture.client.transcribe(makeSpec()) { _ in }
-        XCTAssertEqual(transcript.engine, "fake-transcription", "чужой кадр не должен был затронуть клиента")
+        fixture.service.pushRawProgress(jobId: jobId, progress: .advanced(stage: .asr, fraction: 0.4))
+        try await Task.sleep(nanoseconds: 100_000_000)
+        XCTAssertEqual(
+            collector.all.last?.fraction, 0.4, "настоящий прогресс живой задачи обязан дойти как обычно"
+        )
+        _ = try await task.value
     }
 
     // MARK: - К38: таймауты на инжектируемых часах

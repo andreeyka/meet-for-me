@@ -185,18 +185,19 @@ public final class EngineXPCClient: TranscriptionServicePort, @unchecked Sendabl
         }
     }
 
-    /// Возврат РП по MEE-431 (09:40 UTC), тотальность инв. 11: `TranscriptionRequest`/
-    /// `AudioSlice`/`EmbeddingRequest`/`AudioRef` — все throwing-конструкторы C-011, и
-    /// `DomainValidationError` из них раньше уходил наружу как есть, нарушая тотальность
-    /// порта (`TranscriptionServicePort` обязан бросать только `TranscriptionServiceError`).
-    /// Разобранный по значению отказ ДВИЖКА (`engineFailure`) — другое дело; здесь же запрос
-    /// не прошёл собственную проверку клиента ДО всякого обращения к транспорту, тот же
-    /// исход, что «сервис разобрал и не принял» (§3.2) — `invalidRequest`.
+    /// Тотальность инв. 11: `TranscriptionRequest`/`AudioSlice`/`EmbeddingRequest`/`AudioRef` —
+    /// все throwing-конструкторы C-011, и `DomainValidationError` из них раньше уходил наружу
+    /// как есть, нарушая тотальность порта (`TranscriptionServicePort` обязан бросать только
+    /// `TranscriptionServiceError`). Возврат РП по MEE-431 (10:27 UTC): НЕ `invalidRequest` —
+    /// по таблице §3.2 этот случай зарезервирован за отказами САМОГО СЕРВИСА (код 3 и код вне
+    /// 1…3), а не за тем, что реализация порта не прошла собственную проверку до всякого
+    /// обращения к транспорту. `serviceUnavailable` — тот же случай, что и отказ кодирования
+    /// запроса (`encode(_:)` в `EngineXPCClient+Transport.swift`) чуть ниже по стеку.
     private static func buildRequest<Value>(_ body: () throws -> Value) throws -> Value {
         do {
             return try body()
         } catch let validationError as DomainValidationError {
-            throw TranscriptionServiceError.invalidRequest(message: "\(validationError)")
+            throw TranscriptionServiceError.serviceUnavailable(message: "\(validationError)")
         }
     }
 
