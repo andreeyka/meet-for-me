@@ -28,6 +28,7 @@ extension ProcessRPCTransport {
 
     func handleStdout(_ data: Data) {
         guard !data.isEmpty else {
+            debugLog("stdout EOF observed") // DEBUG-TEMP
             markGone(ProcessRPCTransportError(description: "плагин закрыл stdout"))
             return
         }
@@ -77,6 +78,7 @@ extension ProcessRPCTransport {
     /// `handleStdout`, и сам ответ был бы молча потерян (`handleStdout` просто отбрасывает
     /// извлечённую строку, если `pendingReceive` уже `nil`).
     func handleTermination(status: Int32) {
+        debugLog("terminationHandler fired, status=\(status)") // DEBUG-TEMP
         recordTermination(ProcessRPCTransportError(description: "процесс плагина завершился, код \(status)"))
     }
 
@@ -91,6 +93,7 @@ extension ProcessRPCTransport {
     /// Идемпотентна: `markGone` тоже зовёт её первым делом, повторный вызов видит уже пустые
     /// `pendingExits`/уже выставленный `terminated`.
     func recordTermination(_ error: ProcessRPCTransportError) {
+        if !pendingExits.isEmpty { debugLog("recordTermination(): resolving pendingExits via real signal") } // DEBUG-TEMP
         if terminated == nil { terminated = error }
         for continuation in pendingExits { continuation.resume() }
         pendingExits.removeAll()
@@ -120,7 +123,10 @@ extension ProcessRPCTransport {
     /// «Поведения», см. докстринг `close()`): без него `close()` рисковал бы зависнуть
     /// навсегда, если оба сигнала почему-то молчат.
     func waitForExit() async {
-        if !process.isRunning { return }
+        if !process.isRunning {
+            debugLog("waitForExit(): already not running, returning immediately") // DEBUG-TEMP
+            return
+        }
         let watchdog = Task { [weak self] in
             try? await Task.sleep(for: .seconds(5))
             await self?.forceResolveExits()
@@ -132,6 +138,7 @@ extension ProcessRPCTransport {
     }
 
     func forceResolveExits() {
+        debugLog("forceResolveExits(): 5s watchdog fired, no real signal arrived in time") // DEBUG-TEMP
         for continuation in pendingExits { continuation.resume() }
         pendingExits.removeAll()
     }

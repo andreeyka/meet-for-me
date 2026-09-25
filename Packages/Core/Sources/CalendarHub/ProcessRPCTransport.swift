@@ -66,6 +66,10 @@ public actor ProcessRPCTransport: RPCTransport {
     var pendingExits: [CheckedContinuation<Void, Never>] = []
     var terminated: ProcessRPCTransportError?
     let stdoutContinuation: AsyncStream<Data>.Continuation
+    // DEBUG-TEMP (диагностика возврата РП 06:10 UTC, п.2 — снятие раннего nil'а обработчиков
+    // НЕ изменило тайминг на Linux вовсе, гипотеза требует проверки живым CI-прогоном, локального
+    // тулчейна нет): убрать вместе со всеми debugLog() ниже после того, как причина найдена.
+    let createdAt = Date()
 
     /// Один раз на процесс хоста, а не на транспорт: `signal()` — глобальная настройка, не
     /// свойство одного дескриптора (переносимого `F_SETNOSIGPIPE`, доступного только на
@@ -241,12 +245,17 @@ public actor ProcessRPCTransport: RPCTransport {
     /// `CalendarConnector.shutdown()` (тот шлёт JSON-RPC уведомление тем же транспортом,
     /// этот метод сам процесс не трогает).
     public func close() async {
+        debugLog("close() begin, isRunning=\(process.isRunning)")
         if process.isRunning {
             process.terminate()
+            debugLog("terminate() (SIGTERM) sent")
             await waitForExit()
+            debugLog("first waitForExit() returned, isRunning=\(process.isRunning)")
             if process.isRunning {
                 kill(process.processIdentifier, SIGKILL)
+                debugLog("SIGKILL sent")
                 await waitForExit()
+                debugLog("second waitForExit() returned, isRunning=\(process.isRunning)")
             }
         }
         // ПОСЛЕ ожидания выхода, не до (возврат РП, повторная приёмка PR #138, п. 2): сняв
@@ -262,6 +271,12 @@ public actor ProcessRPCTransport: RPCTransport {
         try? stdinHandle.close()
         try? stdoutHandle.close()
         try? stderrHandle.close()
+    }
+
+    // DEBUG-TEMP — см. комментарий у `createdAt`.
+    func debugLog(_ message: String) {
+        let elapsed = String(format: "%.3f", Date().timeIntervalSince(createdAt))
+        FileHandle.standardError.write(Data("[PRT-DEBUG-TEMP \(elapsed)s pid=\(process.processIdentifier)] \(message)\n".utf8))
     }
 
     /// Лучшее усилие на уничтожении: `close()` не вызван — `deinit` актора выполняется вне
