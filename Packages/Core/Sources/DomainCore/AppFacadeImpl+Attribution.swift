@@ -9,15 +9,12 @@
 //  (Е, К20) в одиночку потребовал бы завести `AttributionPort` только ради проверки
 //  «счётчик 0», хотя реально им пользуются только Д-методы.
 //
-//  `voiceProfilesEnabled` ВЗЯТ ЛИТЕРАЛОМ `false`, НЕ ЧЕРЕЗ `self.settings()`. Контракт
-//  C-016 v10 §2 называет это значение сам («false — architecture.md, Q6, функция требует
-//  явного согласия пользователя») — не изобретённое DEV-2 значение. Через `settings()` его
-//  не взять: этот метод по-прежнему бросает `notImplemented` (см. заголовок
-//  `AppFacadeImpl.swift`) — `AppSettings.slice1Defaults` ждёт реализации группы Ж
-//  (5 полей — явное требование к DEV-2 по тому же изданию контракта), отдельного PR по
-//  роадмапу РП. Смешивать эту работу с группой Д значило бы решать чужую задачу попутно.
-//  Как только группа Ж заведёт `settings()`, этот литерал заменяется на
-//  `try await settings().voiceProfilesEnabled` — строка на будущее, не молчаливый долг.
+//  `voiceProfilesEnabled` ЧИТАЕТСЯ ЧЕРЕЗ `self.settings()` (приёмка РП 07:30 UTC, после
+//  того как MEE-425/группа Ж слилась в `main`, пока этот PR был на возврате) — БЫЛ литерал
+//  `false` до этого слияния, потому что `settings()` до группы Ж бросал `notImplemented`.
+//  `settings()` уже сам сводит отказы репозитория настроек к `AppFacadeError`
+//  (`AppFacadeImpl+Settings.swift`) — эта ошибка пробрасывается наружу как есть, не
+//  заворачивается повторно в `app.internalError`.
 //
 //  МЕСТО meetingId: у `assignSpeaker`/`clearSpeaker`/`createPersonAndAssign` нет параметра
 //  `meetingId` (контракт не называет его для этих методов) — берётся тем же путём, что
@@ -53,12 +50,15 @@ extension AppFacadeImpl {
     public func clearSpeaker(transcriptId: UUID, cluster: Int) async throws {
         do {
             let meetingId = try await recordingMeetingId(transcriptId: transcriptId)
+            let voiceProfilesEnabled = try await settings().voiceProfilesEnabled
             let input = try await AttributionSupport.buildInput(
                 transcriptId: transcriptId, meetingId: meetingId, excludingClusterFromUserEdited: cluster,
-                repositories: attributionRepositories(), voiceProfilesEnabled: Self.voiceProfilesEnabledDefault
+                repositories: attributionRepositories(), voiceProfilesEnabled: voiceProfilesEnabled
             )
             let result = try await attribution.reject(transcriptId: transcriptId, cluster: cluster, input: input)
             try await applyResultAndMarkCluster(result, transcriptId: transcriptId, cluster: cluster)
+        } catch let error as AppFacadeError {
+            throw error
         } catch let error as AttributionError {
             throw wrap(error)
         } catch let failure as AttributionSupport.InputBuildFailure {
@@ -109,14 +109,17 @@ extension AppFacadeImpl {
     private func confirmAndApply(transcriptId: UUID, cluster: Int, personId: UUID) async throws {
         do {
             let meetingId = try await recordingMeetingId(transcriptId: transcriptId)
+            let voiceProfilesEnabled = try await settings().voiceProfilesEnabled
             let input = try await AttributionSupport.buildInput(
                 transcriptId: transcriptId, meetingId: meetingId, excludingClusterFromUserEdited: cluster,
-                repositories: attributionRepositories(), voiceProfilesEnabled: Self.voiceProfilesEnabledDefault
+                repositories: attributionRepositories(), voiceProfilesEnabled: voiceProfilesEnabled
             )
             let result = try await attribution.confirm(
                 transcriptId: transcriptId, cluster: cluster, personId: personId, input: input
             )
             try await applyResultAndMarkCluster(result, transcriptId: transcriptId, cluster: cluster)
+        } catch let error as AppFacadeError {
+            throw error
         } catch let error as AttributionError {
             throw wrap(error)
         } catch let failure as AttributionSupport.InputBuildFailure {
@@ -152,9 +155,6 @@ extension AppFacadeImpl {
             transcripts: transcripts, meetings: meetingRepository, persons: persons, speakerProfiles: speakerProfiles
         )
     }
-
-    /// См. заголовок файла — литерал контракта, не изобретённое значение.
-    private static let voiceProfilesEnabledDefault = false
 
     private func recordingMeetingId(transcriptId: UUID) async throws -> UUID? {
         guard let transcript = try await transcripts.transcript(id: transcriptId) else {

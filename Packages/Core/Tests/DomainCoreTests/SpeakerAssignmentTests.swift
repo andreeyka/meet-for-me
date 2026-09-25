@@ -273,4 +273,36 @@ final class SpeakerAssignmentTests: XCTestCase {
         XCTAssertEqual(fixture.attribution.rejectCallCount, 0)
     }
 
+    // MARK: - Приёмка РП 07:30 UTC: voiceProfilesEnabled читается из settings(), не литералом
+
+    /// До слияния MEE-425 (группа Ж) `settings()` бросал `notImplemented`, и `voiceProfilesEnabled`
+    /// был литералом `false`. Теперь `settings()` реализован (`AppFacadeImpl+Settings.swift`) —
+    /// значение обязано отражать то, что лежит в `SettingsRepository`, а не подставленный литерал.
+    func test_voiceProfilesEnabledIsReadFromSettingsNotHardcoded() async throws {
+        let fixture = try await makeFixture()
+        try await fixture.repositories.settings.setValue(
+            try DomainJSON.encode(true), forKey: "voiceProfilesEnabled"
+        )
+        fixture.attribution.forcedResult = emptyResult(transcriptId: fixture.transcriptId)
+
+        try await fixture.facade.assignSpeaker(transcriptId: fixture.transcriptId, cluster: 0, personId: UUID())
+
+        let input = try XCTUnwrap(fixture.attribution.lastConfirmedInput)
+        XCTAssertTrue(input.voiceProfilesEnabled, "ожидалось значение из SettingsRepository, не false-литерал")
+    }
+
+    /// Отказ `settings()` (инв. 28: строка есть, но не читается) пробрасывается наружу как
+    /// есть — не заворачивается повторно в `app.internalError`.
+    func test_settingsFailurePropagatesWithoutDoubleWrapping() async throws {
+        let fixture = try await makeFixture()
+        try await fixture.repositories.settings.setValue(Data("не JSON".utf8), forKey: "voiceProfilesEnabled")
+
+        do {
+            try await fixture.facade.assignSpeaker(transcriptId: fixture.transcriptId, cluster: 0, personId: UUID())
+            XCTFail("ожидался AppFacadeError.settingsUnreadable")
+        } catch AppFacadeError.settingsUnreadable(let key) {
+            XCTAssertEqual(key, "voiceProfilesEnabled")
+        }
+    }
+
 }
