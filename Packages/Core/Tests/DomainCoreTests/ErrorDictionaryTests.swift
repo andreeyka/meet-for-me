@@ -12,14 +12,17 @@
 //     не дублируется здесь.
 //   • AttributionError — `assignSpeaker`/`clearSpeaker`, уже покрыт `SpeakerAssignmentTests.
 //     test_k18_...` (группы Д/Е, MEE-420 часть 5) — не дублируется здесь.
-//  ЧЕТЫРЕ ИЗ ВОСЬМИ — ВНЕ ДОСЯГАЕМОСТИ: CalendarError, TranscriptionServiceError,
-//  ModelCatalogError, JobQueueError — ни у одной нет `wrap(_:)` НИГДЕ в `AppFacadeImpl*`, и
-//  ни один уже реализованный (в зоне этой задачи) метод фасада не обращается к
-//  `CalendarPort`/`TranscriptionServicePort`/`ModelCatalogPort`/`JobQueue` таким образом,
-//  чтобы их отказ вообще мог дойти до фасада — естественные потребители (группы М/Н/О плана)
-//  вне периметра МЕЕ-437 («группы М–Х — DEV-2, не трогать»). Заводить `wrap(_:)` без единого
+//  ТРИ ИЗ ВОСЬМИ — ВНЕ ДОСЯГАЕМОСТИ: TranscriptionServiceError, ModelCatalogError,
+//  JobQueueError — ни у одной нет `wrap(_:)` НИГДЕ в `AppFacadeImpl*`, и ни один уже
+//  реализованный (в зоне этой задачи) метод фасада не обращается к
+//  `TranscriptionServicePort`/`ModelCatalogPort`/`JobQueue` таким образом, чтобы их отказ
+//  вообще мог дойти до фасада — естественные потребители (группы М/Н плана) вне периметра
+//  МЕЕ-437/МЕЕ-441 («группы М–Х — DEV-2, не трогать»). Заводить `wrap(_:)` без единого
 //  вызывающего метода значило бы мёртвый код — тот же довод, что заголовок
 //  `AppFacadeImpl.swift` уже даёт для `notImplemented`-заглушек.
+//  CalendarError (четвёртая из восьми) достигнута МЕЕ-441 (группа О) — `wrap(_:CalendarError)`
+//  и его табличный тест по всем шести случаям живут в `CalendarCommandsTests.swift`, не
+//  дублируются здесь: К26/К27 остаются про StorageError/PermissionsError, названные ниже.
 //
 //  К27 (табличный тест словаря): полные таблицы StorageError (6 случаев) и PermissionsError
 //  (2 случая) — ниже, обе с колонкой `permissionKind` (возврат РП, приёмка 10:15 UTC,

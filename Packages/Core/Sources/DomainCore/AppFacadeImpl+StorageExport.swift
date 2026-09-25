@@ -79,23 +79,29 @@ extension AppFacadeImpl {
     /// записи (`TranscriptRepository.latest(recordingId:)`), сегменты — по `startMs` (тот же
     /// порядок, что К6 у моделей чтения). Без записи транскрипции у записи — просто нет строк
     /// от неё, не отказ.
+    ///
+    /// Подпись говорящего — тот же приём, что `AppFacadeImpl+Reads.swift.speakerView(for:…)`
+    /// (инв. 6, возврат РП, приёмка 12:00 UTC, «мелочи»): `personId` задан — имя человека
+    /// (`PersonRepository.persons(ids:)`); иначе — «Спикер N», N = `cluster + 1` (1-индексная
+    /// нумерация, не голый номер кластера).
     private func exportLines(meetingId: UUID) async throws -> [ExportLine] {
         let meetingRecordings = try await recordings.recordings(meetingId: meetingId)
-        var lines: [ExportLine] = []
+        var rows: [SegmentRow] = []
         for recording in meetingRecordings {
             guard let header = try await transcripts.latest(recordingId: recording.manifest.recordingId) else {
                 continue
             }
-            let segments = try await transcripts.segments(transcriptId: header.id)
-            for row in segments.sorted(by: { $0.segment.startMs < $1.segment.startMs }) {
-                let label = row.segment.speakerCluster.map { "Спикер \($0)" } ?? "Спикер"
-                lines.append(ExportLine(
-                    speakerLabel: label, startMs: row.segment.startMs, endMs: row.segment.endMs,
-                    text: row.segment.text
-                ))
-            }
+            rows += try await transcripts.segments(transcriptId: header.id)
         }
-        return lines
+        let personIds = Array(Set(rows.compactMap(\.personId)))
+        let personById = Dictionary(uniqueKeysWithValues: try await persons.persons(ids: personIds).map { ($0.id, $0) })
+        return rows.sorted(by: { $0.segment.startMs < $1.segment.startMs }).map { row in
+            let label = row.personId.flatMap { personById[$0]?.displayName }
+                ?? row.segment.speakerCluster.map { "Спикер \($0 + 1)" } ?? "Спикер"
+            return ExportLine(
+                speakerLabel: label, startMs: row.segment.startMs, endMs: row.segment.endMs, text: row.segment.text
+            )
+        }
     }
 
     private func write(title: String, lines: [ExportLine], format: ExportFormat, to directory: URL) throws -> URL {

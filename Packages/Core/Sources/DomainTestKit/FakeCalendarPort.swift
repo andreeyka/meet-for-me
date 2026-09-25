@@ -33,8 +33,10 @@
 //  умолчания НЕТ НАМЕРЕННО, тот же довод, что у `FakePowerPort(snapshot:)` («умолчания нет
 //  намеренно» — пустого значения не существует, и тест обязан задать его сам): вызов на
 //  источнике без заданного канонического значения — `preconditionFailure`, а не тихая
-//  подделка. `completeAuth` в этот список не входит — контракт не даёт тесту канонического
-//  значения на его ответ, только отказ, и фейк отвечает `nil`, пока не отказывает. Отказ
+//  подделка. `completeAuth` в этот список не входит своим умолчанием — контракт не даёт
+//  тесту канонического значения на его ответ, только отказ, и без входа фейк отвечает `nil`
+//  (не падает) — но `setCompleteAuthResult(_:for:)` (МЕЕ-441) задаёт непустую строку тесту,
+//  которому нужен сквозной проброс, а не сам умолчательный `nil`. Отказ
 //  любого из пяти бросающих методов (`beginAuth`, `completeAuth`, `settingsSchema`,
 //  `configure`, `healthCheck`) — заданной `CalendarError`, на ВЫБРАННОМ источнике или на
 //  всяком (`source: nil`), тем же приёмом, что `failSync(with:for:)`. `stop()` — только
@@ -77,6 +79,7 @@ public final class FakeCalendarPort: CalendarPort, @unchecked Sendable {
     private var connectorHealthBySource: [String: ConnectorHealth] = [:]
     private var settingsSchemaBySource: [String: Data] = [:]
     private var configuredSettingsBySource: [String: Data] = [:]
+    private var completeAuthResultsBySource: [String: String] = [:]
     private var throwFailures: [CalendarPortThrowingMethod: (source: String?, error: CalendarError)] = [:]
     private var stopCalls = 0
 
@@ -185,6 +188,16 @@ public final class FakeCalendarPort: CalendarPort, @unchecked Sendable {
     /// тот же довод, что у `setAuthChallenge(_:for:)`.
     public func setSettingsSchema(_ schema: Data, for source: CalendarSourceId) {
         locked { settingsSchemaBySource[source.rawValue] = schema }
+    }
+
+    /// Непустой ответ `completeAuth(source:callbackUrl:)` для этого источника (МЕЕ-441,
+    /// возврат РП, приёмка 12:00 UTC, «мелочи»): контракт не даёт канонического значения —
+    /// нет обязательного умолчания, — но тест, проверяющий сквозной проброс НЕПУСТОЙ строки
+    /// (не только `nil` по умолчанию), не может обойтись без входа. Не задан — метод
+    /// по-прежнему отвечает `nil`, тем же приёмом, что уже описан докстрингом
+    /// `completeAuth(source:callbackUrl:)` ниже.
+    public func setCompleteAuthResult(_ result: String, for source: CalendarSourceId) {
+        locked { completeAuthResultsBySource[source.rawValue] = result }
     }
 
     /// Что в последний раз пришло в `configure(source:settings:)` — та же наблюдаемость,
@@ -310,9 +323,10 @@ public final class FakeCalendarPort: CalendarPort, @unchecked Sendable {
             throw error
         }
         // Контракт не даёт тесту канонического значения на этот ответ (в отличие от
-        // beginAuth/healthCheck/settingsSchema) — только отказ. `nil` — единственный
-        // ответ, не требующий входа теста.
-        return nil
+        // beginAuth/healthCheck/settingsSchema) — только отказ. `nil` — умолчание, не
+        // требующее входа теста; `setCompleteAuthResult(_:for:)` задаёт непустую строку,
+        // когда тесту нужен сквозной проброс, а не только умолчание.
+        return locked { completeAuthResultsBySource[source.rawValue] }
     }
 
     public func settingsSchema(source: CalendarSourceId) async throws -> Data {

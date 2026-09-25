@@ -60,24 +60,24 @@ extension AppFacadeImpl {
         }
     }
 
-    /// К47 (группа Х плана MEE-410, MEE-441): контракт не даёт об этом методе ни одного
-    /// предложения текста сверх сигнатуры протокола («Команды записи», рядом со
-    /// `startRecording`/`stopRecording` выше) — ни инварианта, ни строки в «Поведении».
-    /// Критерий покрывает буквально сигнатуру: метод существует, обращается к репозиторию
-    /// встреч (фейк — ФМР) ровно один раз на вызов. Фикстура критерия — ФМР, не ФСК: не
-    /// `sessionCoordinator.skip(meetingId:now:)` (C-018), а `MeetingRepository.setStatus(
-    /// .skipped, meetingId:)` — `MeetingStatus.skipped` (C-010, `Repositories.swift`) уже
-    /// несёт ровно этот смысл, второго места пометить встречу пропущенной в домене нет.
+    /// К47 (группа Х плана MEE-410, MEE-441; возврат РП, приёмка 12:00 UTC, находка 1):
+    /// `SessionCoordinator.swift` называет `startRecording`/`stopRecording`/`skip` прямо —
+    /// «Команды; их зовёт фасад C-016 §4» (§3.1) — тем же классом вызовов, что уже даёт
+    /// `startRecording`/`stopRecording` выше. Первая редакция писала статус напрямую через
+    /// `MeetingRepository.setStatus(.skipped, meetingId:)`, в обход машины сессий, — машина
+    /// не узнавала о пропуске и продолжала бы взводить/записывать встречу. Симметрично
+    /// `startRecording`/`stopRecording`: вызов `sessionCoordinator.skip`, отказ —
+    /// `wrap(_:SessionError)`.
     ///
-    /// Событие — инв. 15 (не К47: критерий его не называет, см. комментарий выше): пропуск
-    /// встречи меняет её статус, то же самое поле, из которого строится `AppStatus.upcoming` —
-    /// значит меняет и сам статус, тем же доводом, что `syncCalendars()`/К33 выше.
+    /// Событие — инв. 15 (не К47: критерий его не называет). `.meetingsChanged` — пропуск
+    /// меняет статус встречи, `.statusChanged` — то же поле участвует в `AppStatus.upcoming`,
+    /// тем же доводом, что `syncCalendars()`/К33 выше.
     public func skipMeeting(meetingId: UUID) async throws {
         do {
-            try await meetingRepository.setStatus(.skipped, meetingId: meetingId)
+            try await sessionCoordinator.skip(meetingId: meetingId, now: clock())
             publish(.meetingsChanged)
             publish(.statusChanged(await status()))
-        } catch let error as StorageError {
+        } catch let error as SessionError {
             throw wrap(error)
         } catch {
             throw wrapUnexpected(error)

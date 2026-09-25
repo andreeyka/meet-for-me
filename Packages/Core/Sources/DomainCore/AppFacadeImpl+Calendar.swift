@@ -49,8 +49,14 @@ extension AppFacadeImpl {
                 throw CalendarError.notConfigured(sourceId: sourceId)
             }
             try await connectors.upsert(Self.withEnabled(record, isEnabled: enabled))
+            // Возврат РП (приёмка 12:00 UTC, находка 2): инв. 15 — команда, изменившая
+            // данные, публикует событие до возврата. `isEnabled` — часть того, что
+            // `connectorHealth`/будущий `status().connectors` отдают, — то же поле,
+            // что уже даёт `.statusChanged` симметричным `completeConnectorAuth`/
+            // `configureConnector` ниже.
+            publish(.statusChanged(await status()))
         } catch let error as CalendarError {
-            throw wrap(error)
+            throw await wrap(error)
         } catch let error as StorageError {
             throw wrap(error)
         } catch {
@@ -64,7 +70,7 @@ extension AppFacadeImpl {
         do {
             return try await calendar.beginAuth(source: sourceId)
         } catch let error as CalendarError {
-            throw wrap(error)
+            throw await wrap(error)
         } catch {
             throw wrapUnexpected(error)
         }
@@ -79,7 +85,7 @@ extension AppFacadeImpl {
             publish(.statusChanged(await status()))
             return result
         } catch let error as CalendarError {
-            throw wrap(error)
+            throw await wrap(error)
         } catch {
             throw wrapUnexpected(error)
         }
@@ -92,7 +98,7 @@ extension AppFacadeImpl {
         do {
             return try await calendar.settingsSchema(source: sourceId)
         } catch let error as CalendarError {
-            throw wrap(error)
+            throw await wrap(error)
         } catch {
             throw wrapUnexpected(error)
         }
@@ -107,7 +113,7 @@ extension AppFacadeImpl {
             try await calendar.configure(source: sourceId, settings: settings)
             publish(.statusChanged(await status()))
         } catch let error as CalendarError {
-            throw wrap(error)
+            throw await wrap(error)
         } catch {
             throw wrapUnexpected(error)
         }
@@ -129,7 +135,7 @@ extension AppFacadeImpl {
                 needsAuthorization: false
             )
         } catch let error as CalendarError {
-            throw wrap(error)
+            throw await wrap(error)
         } catch {
             throw wrapUnexpected(error)
         }
@@ -151,18 +157,26 @@ extension AppFacadeImpl {
     /// (`AppFacadeImpl+Recording.swift`): шесть случаев `CalendarError`, явный `switch`
     /// избыточен там, где не нужен `permissionKind`.
     ///
-    /// `permissionKind` — только `.authorizationRequired`, и только когда `sourceId` —
-    /// `"eventkit"`: К30 (группа И, МЕЕ-437) называет ровно эту пару векторов («четыре
+    /// `permissionKind` — только `.authorizationRequired`, и только когда коннектор ЭТОГО
+    /// источника (`ConnectorRecord.type`, не `sourceId.rawValue`) — `"eventkit"` (возврат РП,
+    /// приёмка 12:00 UTC, находка 3): §3.1 смотрит на тип коннектора, не на имя источника —
+    /// у `sourceId` нет обязательства называться как тип (`CalendarSourceId.rawValue`
+    /// документирован примерами `"eventkit"`/`"graph:work"` — имя может быть любым для
+    /// одного и того же типа). К30 (группа И, МЕЕ-437) называет пару векторов («четыре
     /// вектора дают право; `calendar.authorizationRequired` при `.stdio` — `nil`») —
-    /// `eventkit` — единственный встроенный коннектор, использующий системное право
+    /// `eventkit` — единственный встроенный тип коннектора, использующий системное право
     /// `.calendars` (`PermissionsPort.swift`); внешние (`stdio`, плагин-процесс) его не
-    /// используют вовсе, поэтому отказ авторизации у них не про системное право.
-    func wrap(_ error: CalendarError) -> AppFacadeError {
+    /// используют вовсе. Неизвестный источник (нет записи в `ConnectorRepository`) —
+    /// `permissionKind == nil`: тип определить не из чего.
+    func wrap(_ error: CalendarError) async -> AppFacadeError {
         let description = String(describing: error)
         let name = description.split(separator: "(", maxSplits: 1).first.map(String.init) ?? description
         var permissionKind: PermissionKind?
-        if case .authorizationRequired(let sourceId) = error, sourceId.rawValue == "eventkit" {
-            permissionKind = .calendars
+        if case .authorizationRequired(let sourceId) = error {
+            let record = try? await connectorRecord(for: sourceId)
+            if record?.type == "eventkit" {
+                permissionKind = .calendars
+            }
         }
         return .underlying(AppErrorView(
             code: "calendar.\(name)", message: description, recoverySuggestion: nil, permissionKind: permissionKind
