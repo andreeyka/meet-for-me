@@ -99,8 +99,10 @@ final class StdioProtocolTests: XCTestCase {
         let calendars = try await hub.listCalendars(source: StdioHarness.source)
 
         XCTAssertEqual(calendars, [], "уведомления не мешают дойти до настоящего ответа")
-        XCTAssertEqual(hub.loggedEntries(for: StdioHarness.source).map(\.message), ["hi"])
-        XCTAssertEqual(hub.recordedNotifications(for: StdioHarness.source).map(\.kind), [.authExpired])
+        let logged = await hub.loggedEntries(for: StdioHarness.source)
+        let notified = await hub.recordedNotifications(for: StdioHarness.source)
+        XCTAssertEqual(logged.map(\.message), ["hi"])
+        XCTAssertEqual(notified.map(\.kind), [.authExpired])
     }
 
     // MARK: - К48 (§2, §5 — кадрирование)
@@ -166,7 +168,7 @@ final class StdioProtocolTests: XCTestCase {
         // Первое событие валидно, второе — без обязательного `sourceConnectorId`.
         transport.enqueue(Self.fetchEventsResultFrame(id: 2, events: [
             Self.eventJSON(externalId: "e1"),
-            Self.eventJSON(externalId: "e2", includeSourceConnectorId: false)
+            Self.eventJSON(includeSourceConnectorId: false, externalId: "e2")
         ]))
 
         let results = await hub.sync(trigger: .manual)
