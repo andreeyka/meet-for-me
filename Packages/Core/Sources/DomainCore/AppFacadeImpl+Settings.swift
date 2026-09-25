@@ -101,8 +101,15 @@ extension AppFacadeImpl {
     /// decode` и, на не тронутом отказом ключе, даёт равное значение — тот же путь кодирования
     /// с обеих сторон.
     public func updateSettings(_ settings: AppSettings) async throws {
+        // К32(г)/К33 шестой вектор (МЕЕ-437, группа К/Л, инв. 26): снимок прав ОДИН и тот же
+        // для «было»/«стало» — меняются только настройки, не права. Читается ДО записи;
+        // отказ здесь (строка настроек повреждена) — тот же класс отказа, что и внутри
+        // самой записи, поэтому уходит тем же путём (catch ниже), не отдельным throw.
+        let permissionSnapshot = await permissionsPort.snapshot()
         var written: [(key: String, previous: Data?)] = []
+        var previousReadiness: PermissionsReadiness = .notReady
         do {
+            previousReadiness = permissionsReady(snapshot: permissionSnapshot, settings: try await self.settings())
             for (key, data) in try Self.settingsEntries(for: settings) {
                 let previous: Data?
                 do {
@@ -129,6 +136,14 @@ extension AppFacadeImpl {
             throw wrapUnexpected(error)
         }
         publish(.settingsChanged(settings))
+        // К32(г)/К33 шестой вектор: те же двенадцать полей могут менять состав ОБЯЗАТЕЛЬНЫХ
+        // прав (`recordingPolicy` → `notifications`, К31) — снимок прав тот же, что читался
+        // выше, меняется только `settings`, поэтому сравнение честно показывает вклад именно
+        // этого вызова, а не гонку с параллельным изменением самих прав.
+        let newReadiness = permissionsReady(snapshot: permissionSnapshot, settings: settings)
+        if newReadiness != previousReadiness {
+            publish(.statusChanged(await status()))
+        }
     }
 
     /// Двенадцать пар ключ/байты, порядком `AppSettings.init` (см. докстринг файла). Кодирует

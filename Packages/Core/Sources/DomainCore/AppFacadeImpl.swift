@@ -31,10 +31,10 @@
 //  календарь/настройки/события, не группу Х целиком.
 //
 //  `status()` — минимальная, честно неполная реализация: `activeSession`/`connectors`
-//  оставлены пустыми (группы Р/О ещё не реализованы), `permissionsReady` — консервативное
-//  `.notReady` (инв. 26 — вычисление из снимка прав и действующих настроек — предмет
-//  своей, ещё не сделанной группы К плана MEE-410, не этой), `upcoming`/счётчики задач —
-//  нули/пусто до групп Н/К. Ни одно поле не изобретает данных, которых порты не дали.
+//  оставлены пустыми (группы Р/О ещё не реализованы), `upcoming`/счётчики задач — нули/пусто
+//  до групп Н/К. Ни одно поле не изобретает данных, которых порты не дали.
+//  `permissionsReady` — вычисляется (МЕЕ-437, группа К, `AppFacadeImpl+PermissionsReadiness.
+//  swift`), больше не литерал `.notReady`.
 //
 //  `settings()`/`updateSettings()` (группа Ж) реализованы отдельным файлом,
 //  `AppFacadeImpl+Settings.swift` (MEE-425, слито в main после этого PR) —
@@ -114,8 +114,16 @@ public actor AppFacadeImpl: AppFacade {
         await modelCatalog.profiles()
     }
 
+    /// К33 (МЕЕ-437, группа Л): единственный сегодня реализованный метод, чей естественный
+    /// повод для `.meetingsChanged` — группа Н (`downloadModel`/`setConnectorEnabled` и т.п.)
+    /// вне периметра этой задачи. Публикуется безусловно — сама синхронизация уже
+    /// безусловна (`CalendarPort.sync` не throws, каждый `CalendarSyncResult` несёт свой
+    /// отказ по коннектору отдельно), а не только когда список встреч правда изменился:
+    /// подписчик не платит за лишний пересчёт дороже одного чтения.
     public func syncCalendars() async -> [CalendarSyncResult] {
-        await calendar.sync(trigger: .manual)
+        let results = await calendar.sync(trigger: .manual)
+        publish(.meetingsChanged)
+        return results
     }
 
     public func requestPermission(_ kind: PermissionKind) async -> PermissionRequestOutcome {
@@ -182,13 +190,18 @@ public actor AppFacadeImpl: AppFacade {
 
     public func status() async -> AppStatus {
         let upcomingItems = (try? await meetingListItems(from: clock(), to: .distantFuture)) ?? []
+        let snapshot = await permissionsPort.snapshot()
+        // Битая строка настроек не должна ронять status() (он не throws, §2 контракта) —
+        // slice1Defaults на этот один расчёт то же умолчание, что settingsRepository() ещё
+        // не читало ни разу (§2.1: «строки нет — берётся значение из slice1Defaults»).
+        let currentSettings = (try? await settings()) ?? AppSettings.slice1Defaults
         return AppStatus(
             activeSession: nil,
             upcoming: upcomingItems,
             runningJobs: [],
             pendingJobCount: 0,
             failedJobCount: 0,
-            permissionsReady: .notReady,
+            permissionsReady: permissionsReady(snapshot: snapshot, settings: currentSettings),
             connectors: [],
             updatedAt: clock()
         )
