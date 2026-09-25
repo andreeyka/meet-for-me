@@ -187,7 +187,9 @@ final class TestEngineXPCService: NSObject, EngineXPCServiceProtocol, @unchecked
 }
 
 /// Слушатель + сервис + настоящий клиент, все в одном процессе (`NSXPCListener.anonymous()`).
-final class XPCFixture {
+/// Приём соединений — через `NSXPCListenerDelegate`, а не замыкание: у `NSXPCListener` нет
+/// свойства `newConnectionHandler`, только делегат.
+final class XPCFixture: NSObject {
     let service: TestEngineXPCService
     let modelCatalog = FakeModelCatalogPort()
     let client: EngineXPCClient
@@ -203,21 +205,13 @@ final class XPCFixture {
         self.service = service
         let listener = NSXPCListener.anonymous()
         self.listener = listener
-        listener.newConnectionHandler = { [weak self] connection in
-            guard let self else { return false }
-            connection.exportedInterface = NSXPCInterface(with: EngineXPCServiceProtocol.self)
-            connection.exportedObject = self.service
-            connection.remoteObjectInterface = NSXPCInterface(with: EngineXPCClientProtocol.self)
-            connection.resume()
-            self.service.progressTarget = connection.remoteObjectProxy as? EngineXPCClientProtocol
-            self.lock.lock(); self.acceptedConnections.append(connection); self.lock.unlock()
-            return true
-        }
-        listener.resume()
-        client = EngineXPCClient(
+        self.client = EngineXPCClient(
             makeConnection: { NSXPCConnection(listenerEndpoint: listener.endpoint) },
             modelCatalog: modelCatalog, clock: clock
         )
+        super.init()
+        listener.delegate = self
+        listener.resume()
     }
 
     /// К29/К52(i): «сервис упал» с точки зрения клиента — обрыв ПРИНЯТОГО (серверного)
@@ -225,6 +219,18 @@ final class XPCFixture {
     func simulateServiceCrash() {
         lock.lock(); let connection = acceptedConnections.last; lock.unlock()
         connection?.invalidate()
+    }
+}
+
+extension XPCFixture: NSXPCListenerDelegate {
+    func listener(_ listener: NSXPCListener, shouldAcceptNewConnection newConnection: NSXPCConnection) -> Bool {
+        newConnection.exportedInterface = NSXPCInterface(with: EngineXPCServiceProtocol.self)
+        newConnection.exportedObject = service
+        newConnection.remoteObjectInterface = NSXPCInterface(with: EngineXPCClientProtocol.self)
+        newConnection.resume()
+        service.progressTarget = newConnection.remoteObjectProxy as? EngineXPCClientProtocol
+        lock.lock(); acceptedConnections.append(newConnection); lock.unlock()
+        return true
     }
 }
 

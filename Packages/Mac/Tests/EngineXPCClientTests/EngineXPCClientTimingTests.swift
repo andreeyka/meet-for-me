@@ -2,6 +2,7 @@
 //  запрос), К23 (запоздалый прогресс после финального ответа не публикуется), К38
 //  (таймауты 120с/10с на инжектируемых часах, сброс прогрессом).
 
+import Foundation
 import XCTest
 import DomainCore
 import DomainTestKit
@@ -33,21 +34,30 @@ final class EngineXPCClientTimingTests: XCTestCase {
 
     // MARK: - К23: запоздалый прогресс после финального ответа не публикуется
 
+    /// Счётчик, защищённый блокировкой — замыкание прогресса `@Sendable`, обычный `var` тест
+    /// мутировать из него не может.
+    private final class Counter: @unchecked Sendable {
+        private let lock = NSLock()
+        private var value = 0
+        func increment() { lock.lock(); value += 1; lock.unlock() }
+        var current: Int { lock.lock(); defer { lock.unlock() }; return value }
+    }
+
     func test_k23_lateProgressAfterFinalReplyNotPublished() async throws {
         let fixture = XPCFixture()
         configureReadyProfile(fixture.modelCatalog)
-        var receivedCount = 0
+        let receivedCount = Counter()
 
-        _ = try await fixture.client.transcribe(makeSpec()) { _ in receivedCount += 1 }
+        _ = try await fixture.client.transcribe(makeSpec()) { _ in receivedCount.increment() }
         let jobId = try XCTUnwrap(fixture.service.receivedJobIds.last)
-        let countAfterCompletion = receivedCount
+        let countAfterCompletion = receivedCount.current
 
         // Ответ на этот jobId уже ушёл — кадр прогресса теперь заведомо запоздалый.
         fixture.service.pushRawProgress(jobId: jobId, progress: .advanced(stage: .asr, fraction: 0.5))
         try await Task.sleep(nanoseconds: 100_000_000)
 
         XCTAssertEqual(
-            receivedCount, countAfterCompletion, "запоздалый прогресс не должен был дойти до вызывающей стороны"
+            receivedCount.current, countAfterCompletion, "запоздалый прогресс не должен был дойти до вызывающей стороны"
         )
     }
 
