@@ -160,6 +160,11 @@ public enum AttributionFixtures {
     /// `userEditedSegmentIds` этого же входа — проверяет инвариант 8 и часть (в)
     /// инварианта 21. До появления `userEditedSegmentIds` (v4) эта фикстура была
     /// невыполнима: пометка живёт в строке базы, а вход строит только значения.
+    ///
+    /// Правка приёмки РП по PR #127: добавлены два микрофонных сегмента — id 2 (правленый,
+    /// тоже в `userEditedSegmentIds`) и id 3 (неправленый) — часть (в) инв. 21 говорит об
+    /// исключении по каналу безотносительно, а до этой правки фикстура проверяла его только
+    /// на системном канале.
     public static let segmentAlreadyUserEdited: AttributionInput = {
         let transcript = try! Transcript(
             recordingId: MeetingEventFixtures.uuid("00000000-0000-0000-0000-0000000000D5"),
@@ -169,6 +174,16 @@ public enum AttributionFixtures {
                     startMs: 0, endMs: 1_500, channel: .system, speakerCluster: 0,
                     text: "Правка человека, автоматика не трогает.", textOriginal: nil,
                     textConfidence: 0.3, words: []
+                ),
+                try! Transcript.Segment(
+                    startMs: 1_500, endMs: 2_500, channel: .mic, speakerCluster: nil,
+                    text: "Микрофонная правка человека.", textOriginal: nil,
+                    textConfidence: nil, words: []
+                ),
+                try! Transcript.Segment(
+                    startMs: 2_500, endMs: 3_500, channel: .mic, speakerCluster: nil,
+                    text: "Микрофон без правки.", textOriginal: nil,
+                    textConfidence: nil, words: []
                 )
             ],
             speakers: [
@@ -180,7 +195,7 @@ public enum AttributionFixtures {
         return AttributionInput(
             transcriptId: MeetingEventFixtures.uuid("00000000-0000-0000-0000-0000000000B5"),
             transcript: transcript,
-            segmentIds: [1],
+            segmentIds: [1, 2, 3],
             meetingId: MeetingEventFixtures.uuid("00000000-0000-0000-0000-0000000000C5"),
             attendees: [me],
             me: me,
@@ -188,7 +203,7 @@ public enum AttributionFixtures {
             profiles: [],
             voiceProfilesEnabled: true,
             embeddingModelVersion: "emb-v1",
-            userEditedSegmentIds: [1]
+            userEditedSegmentIds: [1, 2]
         )
     }()
 

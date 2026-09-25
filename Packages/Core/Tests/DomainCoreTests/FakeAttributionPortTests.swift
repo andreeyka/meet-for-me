@@ -134,11 +134,20 @@ final class FakeAttributionPortTests: XCTestCase {
         XCTAssertTrue(word.text.contains("Ивам"), "правдоподобная ошибка ASR рядом с именем «Иван»")
     }
 
+    /// Правка приёмки РП по PR #127: часть (в) инв. 21 говорит об исключении правленых строк
+    /// по каналу безотносительно — фикстура несёт правленый и неправленый `.mic`-сегмент,
+    /// не только системный, и тест сверяет канал каждого.
     func test_fixtureSegmentAlreadyUserEditedListsItsOwnSegmentId() throws {
         let input = AttributionFixtures.segmentAlreadyUserEdited
 
-        XCTAssertEqual(input.segmentIds, [1])
-        XCTAssertEqual(input.userEditedSegmentIds, [1])
+        XCTAssertEqual(input.segmentIds, [1, 2, 3])
+        XCTAssertEqual(input.userEditedSegmentIds, [1, 2])
+
+        let segments = input.transcript.segments
+        XCTAssertEqual(segments[0].channel, .system, "id 1 — правленый системный")
+        XCTAssertEqual(segments[1].channel, .mic, "id 2 — правленый микрофонный")
+        XCTAssertEqual(segments[2].channel, .mic, "id 3 — неправленый микрофонный")
+        XCTAssertFalse(input.userEditedSegmentIds.contains(3), "id 3 не правлен — единственный, кто должен уехать")
     }
 
     func test_fixtureSystemSegmentWhitespaceOnlyHasNilClusterAndBlankText() throws {

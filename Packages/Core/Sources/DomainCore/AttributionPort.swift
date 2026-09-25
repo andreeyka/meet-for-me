@@ -164,8 +164,9 @@ public protocol AttributionPort: Sendable {
     func attribute(_ input: AttributionInput,
                    thresholds: AttributionThresholds) async throws -> AttributionResult
 
-    /// Пользователь назвал кластер. Обновление голосового профиля — только если
-    /// `voiceProfilesEnabled == true` (иначе `profileUpdates` пуст, инвариант 10).
+    /// Пользователь назвал кластер. Возвращает изменения, которые нужно записать;
+    /// обновление голосового профиля — только если `voiceProfilesEnabled == true`
+    /// (иначе `profileUpdates` пуст, инвариант 10).
     func confirm(transcriptId: UUID,
                  cluster: Int,
                  personId: UUID,
