@@ -41,6 +41,7 @@ final class RecordingCommandsTests: XCTestCase {
             modelCatalog: FakeModelCatalogPort(),
             calendar: FakeCalendarPort(),
             sessionCoordinator: sessionCoordinator,
+            settings: repositories.settings,
             clock: { clock.now() }
         )
         return Fixture(facade: facade, repositories: repositories, sessionCoordinator: sessionCoordinator)
