@@ -157,9 +157,12 @@ final class EngineXPCClientTests: XCTestCase {
 
     // MARK: - Тотальность (инв. 11): DomainValidationError сборки запроса не уходит наружу как есть
 
-    /// Возврат РП по MEE-431 (09:40 UTC): `DomainValidationError` из `TranscriptionRequest`/
-    /// `AudioSlice`/`EmbeddingRequest`/`AudioRef` обязан заворачиваться в `TranscriptionServiceError`
-    /// (`EngineXPCClient.buildRequest`), не уходить наружу как есть.
+    /// Возврат РП по MEE-431 (09:40 UTC, уточнено 10:27 UTC): `DomainValidationError` из
+    /// `TranscriptionRequest`/`AudioSlice`/`EmbeddingRequest`/`AudioRef` обязан заворачиваться
+    /// в `TranscriptionServiceError` (`EngineXPCClient.buildRequest`), не уходить наружу как
+    /// есть — но НЕ в `invalidRequest`: по таблице §3.2 тот зарезервирован за отказами САМОГО
+    /// СЕРВИСА (код 3, код вне 1…3), а собственная проверка клиента до всякого обращения к
+    /// транспорту — тот же случай, что отказ кодирования, `serviceUnavailable`.
     ///
     /// Раскрытие отклонения от предложенного РП входа: буквальное «embed с endMs < startMs»
     /// сегодня НЕ бросает ничего — `AudioSlice.validate()` (C-011, через `EngineOwner.requireInt`)
@@ -169,7 +172,7 @@ final class EngineXPCClientTests: XCTestCase {
     /// изобретается номер инварианта без чтения контрактного текста. Тест ниже доказывает ТУ ЖЕ
     /// обёртку входом, который действительно ломает `requireInt` сегодня: `endMs` вне
     /// представимого диапазона.
-    func test_inv11_embedRequestValidationErrorWrappedAsInvalidRequestNotRawDomainError() async throws {
+    func test_inv11_embedRequestValidationErrorWrappedAsServiceUnavailableNotRawDomainError() async throws {
         let fixture = XPCFixture()
         configureReadyProfile(fixture.modelCatalog, embeddingModelId: "emb-1")
 
@@ -177,8 +180,8 @@ final class EngineXPCClientTests: XCTestCase {
             _ = try await fixture.client.embed(
                 recordingId: UUID(), startMs: 0, endMs: 9_007_199_254_740_992, profileId: "p1"
             )
-            XCTFail("ожидался invalidRequest")
-        } catch TranscriptionServiceError.invalidRequest(let message) {
+            XCTFail("ожидался serviceUnavailable")
+        } catch TranscriptionServiceError.serviceUnavailable(let message) {
             XCTAssertTrue(message.contains("endMs"), message)
         } catch {
             XCTFail("DomainValidationError не должен был уйти наружу как есть, а ушёл: \(error)")

@@ -174,6 +174,20 @@ extension EngineXPCClient {
             },
             onCancel: { [weak self] in
                 guard let self else { return }
+                // Возврат РП по MEE-431 (10:27 UTC): узкая гонка, оставленная задокументированной,
+                // а не исправленной в этом же PR (риск второй такой правки — уже нашла регрессия
+                // выше по этому же файлу, handshakeVerified). Если Task отменяется РОВНО между
+                // проверкой `:167` (уже прошла, `Task.isCancelled == false`) и настоящей отправкой
+                // в `dispatch(requestData, jobId:)` чуть ниже, `onCancel` вправе выполниться и
+                // отправить `.cancel(jobId)` РАНЬШЕ, чем сам `dispatch` успеет вызвать `proxy.send`
+                // для исходного рабочего кадра — на сервисе `.cancel` для ещё не увиденного jobId
+                // придёт первым (no-op по К26: неизвестный jobId), а рабочий кадр следом уйдёт как
+                // обычно и выполнится ДО КОНЦА без настоящей отмены на стороне сервиса, хотя клиент
+                // уже вернул вызывающей стороне `.cancelled`. Наблюдаемо только на стороне
+                // СЕРВИСА (лишняя работа впустую) — на стороне клиента исход тот же, что и без
+                // гонки (`.cancelled`, без ожидания ответа, К27/К28 не нарушены). Фикс потребовал
+                // бы сериализовать «регистрация → диспетч» и «cancel» одним замком поверх ОБОИХ
+                // путей — за пределами того, что можно сделать надёжно без реального стенда здесь.
                 self.sendCancelFrame(for: jobId)
                 let job: PendingJob? = self.locked { self.jobs.removeValue(forKey: jobId) }
                 job?.resolve(.failure(TranscriptionServiceError.cancelled))
@@ -181,12 +195,16 @@ extension EngineXPCClient {
         )
     }
 
+    /// Возврат РП по MEE-431 (10:27 UTC): `serviceUnavailable`, не `invalidRequest` — по
+    /// таблице §3.2 `invalidRequest` зарезервирован за отказами САМОГО СЕРВИСА (код 3, код
+    /// вне 1…3), кодирование же — отказ клиента до всякого обращения к транспорту, тот же
+    /// случай, что `buildRequest` в `EngineXPCClient.swift`.
     private func encode(_ request: EngineRequest) throws -> Data {
         let data: Data
         do {
             data = try EngineWire.encode(request)
         } catch {
-            throw TranscriptionServiceError.invalidRequest(message: "encoding: \(error)")
+            throw TranscriptionServiceError.serviceUnavailable(message: "encoding: \(error)")
         }
         guard data.count <= EngineWire.maxMessageBytes else {
             throw TranscriptionServiceError.messageTooLarge(bytes: data.count)
@@ -228,8 +246,14 @@ extension EngineXPCClient {
         }
         do {
             let reply = try EngineWire.decode(EngineReply.self, from: replyData)
-            markHandshakeVerifiedIfMatchingPong(reply)
-            finish(jobId: jobId, with: .success(reply))
+            // Возврат РП по MEE-431 (10:27 UTC): помечать рукопожатие только если ЭТОТ
+            // вызов действительно снял `jobId` из `jobs` — иначе запоздалый `.pong` СТАРОГО
+            // (уже умершего и резолвленного через `connectionDied`) соединения, добежавший
+            // сюда после того, как `self.connection` уже успело смениться на НОВОЕ, пометил
+            // бы верным НОВОЕ соединение, которое своё рукопожатие ещё не проходило.
+            if finish(jobId: jobId, with: .success(reply)) {
+                markHandshakeVerifiedIfMatchingPong(reply)
+            }
         } catch let validationError as DomainValidationError {
             // §3.2: байты дошли целыми, форма кадра разобрана — невалиден РАЗОБРАННЫЙ
             // домен-объект внутри него (например `Transcript` с нарушенным инвариантом).
@@ -247,9 +271,14 @@ extension EngineXPCClient {
         }
     }
 
-    private func finish(jobId: EngineJobId, with result: Result<EngineReply, Error>) {
+    /// Возвращает, действительно ли ЭТОТ вызов снял `jobId` из `jobs` — `false` означает
+    /// запоздалый/повторный кадр на уже резолвленную задачу (например, снятую раньше
+    /// `connectionDied`), а не первое и единственное разрешение.
+    @discardableResult
+    private func finish(jobId: EngineJobId, with result: Result<EngineReply, Error>) -> Bool {
         let job: PendingJob? = locked { jobs.removeValue(forKey: jobId) }
         job?.resolve(result)
+        return job != nil
     }
 
     /// Возврат РП по MEE-431 (09:40 UTC): не через `serviceProxy`/`currentConnection()` —

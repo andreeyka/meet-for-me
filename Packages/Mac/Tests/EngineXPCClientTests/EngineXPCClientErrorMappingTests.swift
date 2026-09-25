@@ -3,9 +3,9 @@
 //  К33 (нераспознанный код транспорта), К35 (malformed reply — оба пусты/оба заданы/чужой
 //  jobId/не тот род), К36 (испорченные байты ответа vs. `.failed(invalidResult)` в
 //  разобранном ответе), К37 (код `engineFailure` — имя случая дословно; незапрошенная
-//  отмена), К39 (разобранный кадр, не подходящий ни одной строке §3.2), К50 (единственные
-//  два пути к `invalidRequest`, не третий через `NSCocoaErrorDomain`), К51 (четыре вектора
-//  `NSCocoaErrorDomain` настоящего `NSXPCConnection`).
+//  отмена), К39 (разобранный кадр, не подходящий ни одной строке §3.2). К50/К51 (пути к
+//  `invalidRequest`, векторы `NSCocoaErrorDomain`) — в `+Cocoa.swift` того же класса, ради
+//  предела `type_body_length`.
 
 import Foundation
 import XCTest
@@ -15,14 +15,16 @@ import EngineKit
 
 final class EngineXPCClientErrorMappingTests: XCTestCase {
 
-    private func makeSpec() -> TranscriptionJobSpec {
+    // Не `private` — читаются из `EngineXPCClientErrorMappingTests+Cocoa.swift`; `private`
+    // в Swift ограничен ФАЙЛОМ объявления, не типом (тот же приём, что у `AppFacadeImpl`).
+    func makeSpec() -> TranscriptionJobSpec {
         TranscriptionJobSpec(
             recordingId: UUID(), profileId: "p1", language: nil,
             wantWordTimestamps: true, diarizeSystemChannel: true
         )
     }
 
-    private func readyFixture(embeddingModelId: String? = nil) async throws -> XPCFixture {
+    func readyFixture(embeddingModelId: String? = nil) async throws -> XPCFixture {
         let fixture = XPCFixture()
         configureReadyProfile(fixture.modelCatalog, embeddingModelId: embeddingModelId)
         _ = try await fixture.client.ping()   // рукопожатие отдельно от проверяемого вызова
@@ -280,94 +282,4 @@ final class EngineXPCClientErrorMappingTests: XCTestCase {
         }
     }
 
-    // MARK: - К50: единственные два пути к invalidRequest — не третий через NSCocoaErrorDomain
-
-    /// К50: `invalidRequest` образуется только кодом транспорта `3` (К32) и нераспознанным
-    /// кодом `4` (К33) — третьего пути нет. Здесь — прямое доказательство: ЛЮБОЙ код домена
-    /// `NSCocoaErrorDomain` (даже не входящий в четыре вектора К51) уходит в `mapCocoaConnectionError`,
-    /// который `invalidRequest` не возвращает никогда, только `serviceCrashed`/`serviceUnavailable`.
-    func test_k50_arbitraryCocoaDomainCodeNeverMapsToInvalidRequest() async throws {
-        let fixture = try await readyFixture()
-        fixture.service.forcedRawResponse = (
-            data: nil, error: NSError(domain: NSCocoaErrorDomain, code: 999_999)
-        )
-
-        do {
-            _ = try await fixture.client.transcribe(makeSpec()) { _ in }
-            XCTFail("ожидался serviceUnavailable, не invalidRequest")
-        } catch TranscriptionServiceError.serviceUnavailable {
-            // ожидаемо — К51(iv): любой не названный явно код домена уходит сюда, не в invalidRequest
-        }
-    }
-
-    // MARK: - К51: четыре вектора NSCocoaErrorDomain настоящего NSXPCConnection
-
-    /// К51(i): `NSXPCConnectionInterrupted` (реальный код, каким его несёт настоящий
-    /// `NSXPCConnection.remoteObjectProxyWithErrorHandler`) → `serviceCrashed`, тем же путём,
-    /// что интерпретирует `connectionDied(crashed: true)` на уровне соединения (К29), но
-    /// здесь — на уровне ОДНОГО отказавшего вызова (`map(nsError:)`), не всего соединения.
-    func test_k51_cocoaConnectionInterruptedMapsToServiceCrashed() async throws {
-        let fixture = try await readyFixture()
-        fixture.service.forcedRawResponse = (
-            data: nil, error: NSError(domain: NSCocoaErrorDomain, code: NSXPCConnectionInterrupted)
-        )
-
-        do {
-            _ = try await fixture.client.transcribe(makeSpec()) { _ in }
-            XCTFail("ожидался serviceCrashed")
-        } catch TranscriptionServiceError.serviceCrashed {
-            // ожидаемо
-        }
-    }
-
-    /// К51(ii): `NSXPCConnectionInvalid` → `serviceUnavailable`.
-    func test_k51_cocoaConnectionInvalidMapsToServiceUnavailable() async throws {
-        let fixture = try await readyFixture()
-        fixture.service.forcedRawResponse = (
-            data: nil, error: NSError(domain: NSCocoaErrorDomain, code: NSXPCConnectionInvalid)
-        )
-
-        do {
-            _ = try await fixture.client.transcribe(makeSpec()) { _ in }
-            XCTFail("ожидался serviceUnavailable")
-        } catch TranscriptionServiceError.serviceUnavailable {
-            // ожидаемо
-        }
-    }
-
-    /// К51(iii): `NSXPCConnectionReplyInvalid` → тот же `serviceUnavailable`.
-    func test_k51_cocoaConnectionReplyInvalidMapsToServiceUnavailable() async throws {
-        let fixture = try await readyFixture()
-        fixture.service.forcedRawResponse = (
-            data: nil, error: NSError(domain: NSCocoaErrorDomain, code: NSXPCConnectionReplyInvalid)
-        )
-
-        do {
-            _ = try await fixture.client.transcribe(makeSpec()) { _ in }
-            XCTFail("ожидался serviceUnavailable")
-        } catch TranscriptionServiceError.serviceUnavailable {
-            // ожидаемо
-        }
-    }
-
-    /// К51(iv): любой другой код `NSCocoaErrorDomain` → `serviceUnavailable(message: "<домен>
-    /// <код>: <описание>")`, тем же форматом, что общий постор-случай (`describe(_:)`); этот
-    /// же вектор закрывает бывший К50(iii) — третьего пути к `invalidRequest` из этого домена нет.
-    func test_k51_otherCocoaDomainCodeMapsToServiceUnavailableWithDomainCodeDescription() async throws {
-        let fixture = try await readyFixture()
-        // Код заведомо вне кластера NSXPCConnection* (4097/4099/4101) — этот вектор
-        // проверяет фолбэк на «постороннее», не один из трёх названных кодов.
-        let arbitraryCode = 5_000_000
-        let error = NSError(
-            domain: NSCocoaErrorDomain, code: arbitraryCode, userInfo: [NSLocalizedDescriptionKey: "нечто постороннее"]
-        )
-        fixture.service.forcedRawResponse = (data: nil, error: error)
-
-        do {
-            _ = try await fixture.client.transcribe(makeSpec()) { _ in }
-            XCTFail("ожидался serviceUnavailable")
-        } catch TranscriptionServiceError.serviceUnavailable(let message) {
-            XCTAssertEqual(message, "\(NSCocoaErrorDomain) \(arbitraryCode): нечто постороннее")
-        }
-    }
 }
