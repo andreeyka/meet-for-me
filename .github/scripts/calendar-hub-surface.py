@@ -37,20 +37,37 @@ import tempfile
 ALLOWED_IMPORTS = {"Foundation", "DomainCore"}
 
 # Допускает необязательные атрибуты (`@preconcurrency`, `@testable`,
-# `@_exported`, `@_spi(SomeModule)`, ...) перед `import`, необязательное
-# ключевое слово вида импорта (`import struct EventKit.EKEvent` и т.п.),
-# хвостовой `;`, хвостовой комментарий строчный (`// ...`) или блочный
-# (`/* ... */`) — находка РП по PR #133 (MEE-412): исходная
-# `^\s*import\s+(\S+)\s*$` не прощала ни одной из этих форм; атрибут с
-# аргументом в скобках (`@_spi(...)`) и хвостовой `;`/`/* */` добавлены
-# отдельным возвратом РП по тому же PR.
+# `@_exported`, `@_spi(SomeModule)`, ...) перед `import`, необязательный
+# модификатор доступа Swift 6 (`public`/`package`/`internal`/`fileprivate`/
+# `private import ...`), необязательное ключевое слово вида импорта
+# (`import struct EventKit.EKEvent` и т.п.), хвостовой `;`, произвольное
+# число хвостовых блочных комментариев (`/* a */`, в т.ч. без пробела и по
+# два подряд) и хвостовой строчный комментарий (`// ...`) после них —
+# находки РП по PR #133/#150 (MEE-412): исходная `^\s*import\s+(\S+)\s*$`
+# не прощала ни одной из первых трёх форм; хвостовые `;`/`/* */` — правкой
+# после того; атрибут БЕЗ пробела перед `import` (`@_spi(A)import ...` —
+# legal, скобка сама служит границей токена) и модификатор доступа —
+# возвратом РП после #150.
+#
+# Атрибут без аргумента (`@testable`) требует пробела перед `import` —
+# без него имя атрибута и `import` слились бы в один идентификатор что в
+# реальном Swift и не компилируется; атрибут С аргументом в скобках
+# (`@_spi(A)`) пробела не требует — скобка сама разделяет токены.
+_ATTR = r"(?:@\w+\([^)]*\)\s*|@\w+\s+)*"
+_ACCESS = r"(?:(?:public|package|internal|fileprivate|private)\s+)?"
+_KIND = r"(?:(?:struct|class|enum|protocol|func|var|let|typealias)\s+)?"
+_TAIL = r"\s*;?\s*(?:/\*.*?\*/\s*)*(?://.*)?$"
 IMPORT_RE = re.compile(
-    r"^\s*(?:@\w+(?:\([^)]*\))?\s+)*"
-    r"import\s+"
-    r"(?:(?:struct|class|enum|protocol|func|var|let|typealias)\s+)?"
-    r"([A-Za-z0-9_.]+)"
-    r"\s*;?\s*(?:(?://.*)|(?:/\*.*?\*/\s*))?$"
+    r"^\s*" + _ATTR + _ACCESS + r"import\s+" + _KIND + r"([A-Za-z0-9_.]+)" + _TAIL
 )
+
+# Проверка строгая по умолчанию (возврат РП после #150): строка, ПОХОЖАЯ на
+# начало импорта — с той же необязательной шапкой атрибутов/модификатора
+# доступа, — но не разобранная `IMPORT_RE` целиком (два импорта в одной
+# строке, незакрытый `/*`, любая другая форма, которую не предвидели), это
+# сама по себе находка: код, который наш разборщик не понял, а не молчаливый
+# пропуск. Раньше `check_imports` такую строку просто пропускала мимо.
+LOOSE_IMPORT_RE = re.compile(r"^\s*" + _ATTR + _ACCESS + r"import\b")
 
 # Литералы имени коннектора — точное совпадение "eventkit"/"graph", либо
 # префикс "graph:" (module-map называет реальный rawValue `"graph:work"`).
@@ -84,6 +101,10 @@ def check_imports(path, lines):
     for lineno, line in enumerate(lines, start=1):
         m = IMPORT_RE.match(line)
         if not m:
+            if LOOSE_IMPORT_RE.match(line):
+                violations.append(
+                    (path, lineno, "строка похожа на import, но не разобрана целиком: %s" % line.strip())
+                )
             continue
         module_path = m.group(1)
         # `import Foundation.NSDate` / `import struct Foundation.Date` — тот
@@ -188,6 +209,22 @@ def self_test():
         ("import EventKit; // комментарий\n", ["import EventKit"]),  # `;` и `//` вместе
         ("import EventKit /* комментарий */\n", ["import EventKit"]),  # РП: хвостовой `/* */`
         ("import EventKit; /* комментарий */\n", ["import EventKit"]),  # `;` и `/* */` вместе
+        ("internal import EventKit\n", ["import EventKit"]),  # РП, возврат после #150: модификатор доступа Swift 6
+        ("public import EventKit\n", ["import EventKit"]),  # РП, возврат после #150
+        ("internal import Foundation\n", []),  # модификатор доступа + разрешённый модуль
+        ("import EventKit /* a */ // b\n", ["import EventKit"]),  # РП: блочный и строчный комментарий вместе
+        ("import Foundation /* x */\n", []),  # РП: разрешённая форма из примера
+        ("@_spi(A)import EventKit\n", ["import EventKit"]),  # РП: без пробела перед import — скобка сама граница
+        ("@_spi(X) import Foundation;\n", []),  # РП: разрешённая форма из примера
+        ("import EventKit /* a *//* b */\n", ["import EventKit"]),  # РП: два блочных комментария подряд
+        (
+            "import EventKit /* unclosed\n",
+            ["строка похожа на import, но не разобрана целиком: import EventKit /* unclosed"],
+        ),  # РП: незакрытый /* — строгая проверка ловит, а не молчит
+        (
+            "import EventKit; import Foundation\n",
+            ["строка похожа на import, но не разобрана целиком: import EventKit; import Foundation"],
+        ),  # РП: два импорта в одной строке
     ]
     failures = 0
     for line, expected_modules in import_cases:
