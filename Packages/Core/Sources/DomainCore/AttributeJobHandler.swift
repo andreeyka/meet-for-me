@@ -11,18 +11,15 @@
 //  этого файла: `struct`, а не `class`, одна зависимость на порт плюс репозитории,
 //  `guard case` на payload первой строкой `run(_:progress:)`.
 //
-//  СТРОКА (временно, до ответа РП на блокер MEE-415, Linear-комментарий 01:48 UTC):
-//  §7 называет единственный источник `voiceProfilesEnabled` — `AppFacade.settings()`
-//  (C-016). `AppFacade`/`AppFacadeError`/`AppErrorView` не объявлены в дереве ни строкой
-//  (проверено `grep` по всему `*.swift`; тот же блокер уже назвал МЕЕ-396 §0.4/§8
-//  независимо, днём раньше). Объявление типов чужого контракта — решение архитектора,
-//  не этой задачи, поэтому источник здесь — простое замыкание, а не тип с именем
-//  `AppFacade`, чтобы не столкнуться с будущим объявлением. К33 (сама передача флага и
-//  гейт `profiles`) построен и проверен; К49 (`AppFacadeError` → `JobOutcome` по случаю,
-//  `settingsUnreadable`/`underlying`) НЕ реализован — любая ошибка замыкания сегодня
-//  уходит через общий `catch` ниже как `.permanentFailure`, что вернее контракта не
-//  проверяет: замену на настоящий `AppFacade.settings()` и точную проверку К49 — отдельным
-//  коммитом после решения РП.
+//  СТРОКА, ПОСТОЯННАЯ (решение РП, приёмка PR #136, 03:15 UTC, вариант «б» вопроса из
+//  Linear-комментария 01:48 UTC): §7 называет единственный источник `voiceProfilesEnabled` —
+//  `AppFacade.settings()` (C-016), но сам `AppFacade` в этой задаче не объявляется — заведена
+//  отдельная задача на его реализацию. Источник здесь — простое замыкание, а не тип с
+//  именем `AppFacade`, чтобы не столкнуться с будущим объявлением. К33 (сама передача флага
+//  и гейт `profiles`) построен и проверен этим замыканием; К49 (`AppFacadeError` →
+//  `JobOutcome` по случаю `settingsUnreadable`/`underlying`) сюда не входит — любая ошибка
+//  замыкания сегодня уходит через общий `catch` ниже как `.permanentFailure`. Замену на
+//  настоящий `AppFacade.settings()` и проверку К49 несёт задача на реализацию `AppFacade`.
 //
 //  ПОРЯДОК ПОСТРОЕНИЯ ВХОДА здесь не совпадает построчно с порядком перечисления полей
 //  в §7: `embeddingModelVersion` вычислен раньше `profiles` (а не позже, как в тексте),
@@ -197,13 +194,17 @@ public struct AttributeJobHandler: JobHandler {
     /// сегмента непусты — не один вызов на весь результат. `text` строит обработчик,
     /// заменяя слова по `wordIndex`; способ склейки слов в строку — не предмет контракта
     /// и не проверяется инвариантом 32 (C-010): решение реализации — соединение пробелом.
+    ///
+    /// Сегмент из `textCorrections`, которого нет среди строк транскрипта (правка приёмки
+    /// РП, PR #136, 03:15 UTC) — пропускается молча: применить правку неоткуда взять слова
+    /// сегмента, а `text = ""` стёр бы содержимое строки, которой правка не касалась.
     private func applyTextCorrections(_ corrections: [TextCorrection], transcriptId: UUID) async throws {
         guard !corrections.isEmpty else { return }
         let bySegment = Dictionary(grouping: corrections, by: \.segmentId)
         let rows = try await transcripts.segments(transcriptId: transcriptId)
         let wordsBySegment = Dictionary(uniqueKeysWithValues: rows.map { ($0.id, $0.segment.words) })
         for (segmentId, segmentCorrections) in bySegment {
-            let words = wordsBySegment[segmentId] ?? []
+            guard let words = wordsBySegment[segmentId] else { continue }
             let text = Self.correctedText(words: words, corrections: segmentCorrections)
             try await transcripts.applyTextCorrections(
                 segmentId: segmentId, text: text, corrections: segmentCorrections
@@ -211,8 +212,15 @@ public struct AttributeJobHandler: JobHandler {
         }
     }
 
+    /// Правило при двух правках одного `wordIndex` (C-015 не гарантирует его уникальность
+    /// в `textCorrections`) — правка приёмки РП, PR #136, 03:15 UTC: побеждает последняя
+    /// по порядку в массиве. `run` по C-013 не должен ронять процесс — `uniqueKeysWithValues`
+    /// на неуникальном ключе именно это и делал.
     private static func correctedText(words: [Transcript.Word], corrections: [TextCorrection]) -> String {
-        let replacementByIndex = Dictionary(uniqueKeysWithValues: corrections.map { ($0.wordIndex, $0.replacement) })
+        let replacementByIndex = Dictionary(
+            corrections.map { ($0.wordIndex, $0.replacement) },
+            uniquingKeysWith: { _, latest in latest }
+        )
         return words.enumerated()
             .map { index, word in replacementByIndex[index] ?? word.text }
             .joined(separator: " ")

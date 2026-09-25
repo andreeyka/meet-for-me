@@ -72,9 +72,14 @@ enum AttributeFixture {
     }
 
     static func job(transcriptId: UUID, meetingId: UUID?) -> Job {
+        job(payload: .attribute(transcriptId: transcriptId, meetingId: meetingId))
+    }
+
+    /// Полный вид, с произвольным `payload` — нужен тестам ветки «чужой payload» (правка
+    /// приёмки РП, PR #136, 03:15 UTC), где `job.type == .attribute`, а `payload` — нет.
+    static func job(payload: JobPayload) -> Job {
         Job(
-            id: UUID(), type: .attribute,
-            payload: .attribute(transcriptId: transcriptId, meetingId: meetingId),
+            id: UUID(), type: .attribute, payload: payload,
             status: .running, priority: 0, attempts: 0, maxAttempts: 3,
             runAfter: epoch,
             conditions: JobConditions(

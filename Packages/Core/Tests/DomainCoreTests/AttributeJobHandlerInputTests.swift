@@ -116,11 +116,15 @@ final class AttributeJobHandlerInputTests: XCTestCase {
         let harness = AttributeHarness()
         let alice = AttributeFixture.person(name: "Alice", email: "alice@example.com")
         let bob = AttributeFixture.person(name: "Bob", email: "bob@example.com")
+        // Dave — правка приёмки РП (PR #136, 03:15 UTC): адрес есть, но `person(email:)`
+        // не находит карточку (не заведён в `harness.persons`) — тот же исход, что у Carol.
+        let dave = AttributeFixture.person(name: "Dave", email: "dave@example.com")
         harness.persons.seed([alice, bob])
         let attendees = try [
             AttributeFixture.attendee(person: alice),
             AttributeFixture.attendee(person: bob),
-            AttributeFixture.attendeeWithoutEmail(name: "Carol")
+            AttributeFixture.attendeeWithoutEmail(name: "Carol"),
+            AttributeFixture.attendee(person: dave)
         ]
         let meetingEvent = try AttributeFixture.meetingEvent(id: UUID(), attendees: attendees)
         try await harness.meetings.save(MeetingRecord(
@@ -265,5 +269,25 @@ final class AttributeJobHandlerInputTests: XCTestCase {
         )
         XCTAssertEqual(micOutcome, .success)
         XCTAssertEqual(emptySpeakersHarness.port.lastAttributedInput?.embeddingModelVersion, "")
+    }
+
+    // MARK: - Необязательные пункты приёмки РП (PR #136, 03:15 UTC)
+
+    func test_handlerTypeIsAttribute() {
+        let harness = AttributeHarness()
+        XCTAssertEqual(harness.handler().type, .attribute)
+    }
+
+    /// `job.type == .attribute`, а `job.payload` — нет: `run` не строит вход и не зовёт порт.
+    func test_wrongPayloadIsPermanentFailureWithoutPortCall() async throws {
+        let harness = AttributeHarness()
+        let wrongJob = AttributeFixture.job(
+            payload: .transcribe(recordingId: UUID(), profileId: "p1", language: nil)
+        )
+
+        let outcome = await harness.run(wrongJob)
+
+        assertPermanentFailure(outcome)
+        XCTAssertEqual(harness.port.attributeCallCount, 0)
     }
 }
