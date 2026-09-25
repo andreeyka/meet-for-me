@@ -288,7 +288,9 @@ extension CalendarPortImpl {
         source: CalendarSourceId, connector: CalendarConnector, cursor: String?, calendarIds: [String]
     ) async throws -> SyncOutcome {
         do {
-            let batch = try await callConnector(source: source, connector: connector, timeout: .fetchWindow) {
+            let batch = try await callConnector(
+                source: source, connector: connector, timeout: .fetchWindow, passthroughCursorInvalid: true
+            ) {
                 try await connector.fetchChanges(cursor: cursor, calendarIds: calendarIds)
             }
             var outcome = SyncOutcome()
@@ -315,6 +317,17 @@ extension CalendarPortImpl {
             guard case .cursorInvalid = error else { throw Self.mapConnectorError(error, source: source) }
             // Инв. 19: протухший курсор — забыть, fetchEvents на полном окне, результат
             // источника = результат этого вызова, -32004 наружу не идёт никогда.
+            //
+            // СТРОКА (найдено вместе с дефектом `passthroughCursorInvalid` выше — не
+            // исправлено здесь, вне текущей порции, К55 не в списке): `applyFullWindow`
+            // ниже зовёт СВОЙ `callConnector` на `fetchEvents` без `passthroughCursorInvalid`
+            // — повторный `.cursorInvalid` на этом шаге пройдёт ОБЫЧНЫМ отображением
+            // (`CalendarError.protocolViolation(message: "cursorInvalid вне fetchChanges")`),
+            // не долетит до `catch let inner as ConnectorError` ниже тем же способом, каким
+            // не долетал и вход А до этого возврата. Сообщение всё равно `protocolViolation`
+            // в обоих случаях — набор наблюдаемых полей (`CalendarSyncResult.failure` кейс)
+            // совпадает случайно, но текст `message` и код-путь — разные; К55 (свой критерий,
+            // не К64) эту ветку не тестирует, тест почему-то никогда не заводился.
             try await connectorRepository.setCursor(nil, connectorId: source.rawValue)
             do {
                 return try await applyFullWindow(source: source, connector: connector, calendarIds: calendarIds)
@@ -340,7 +353,9 @@ extension CalendarPortImpl {
         source: CalendarSourceId, connector: CalendarConnector, calendarIds: [String]
     ) async throws -> (outcome: SyncOutcome, pendingCursor: String?) {
         do {
-            let batch = try await callConnector(source: source, connector: connector, timeout: .fetchWindow) {
+            let batch = try await callConnector(
+                source: source, connector: connector, timeout: .fetchWindow, passthroughCursorInvalid: true
+            ) {
                 try await connector.fetchChanges(cursor: nil, calendarIds: calendarIds)
             }
             var outcome = SyncOutcome()

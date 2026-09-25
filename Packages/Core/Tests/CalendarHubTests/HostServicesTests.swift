@@ -1,14 +1,11 @@
 //  Группа Б (К11-К14, К61) плана MEE-361: сервисы хоста коннектору — секреты, лог,
-//  уведомление.
+//  уведомление. К61 (часть 3и, MEE-386) — уведомление → внутренняя syncOne (развилка Р6).
 //
 //  ЧТО ЭТА ПРАВКА НЕ ПОКРЫВАЕТ ЗДЕСЬ, ЧЕСТНО:
 //  * К12 — целиком: сформулирован для stdio-пути («не более одного запроса в очереди» —
 //    свойство кадров `request`/`response` C-006 §2, у in-process вызова их попросту нет).
 //    Шов Ш2 (`RPCTransport`/`ScriptedRPCTransport`) — «ждёт кода calendar-hub» (план MEE-361,
 //    §1) — группа Ж, ещё не написана. Тестировать не на чем до неё.
-//  * К61 — вне постановки этой правки (МЕЕ-362 ч.2 называет К3, К8, К11-К14, К40-К41,
-//    К62-К63, К66-К69, К71-К75 явно, К61 в списке нет) — остаётся следующей части, тот же
-//    файл по плану MEE-361 группирует его с К11-К14, но сама постановка его не просила.
 
 import Foundation
 import XCTest
@@ -139,5 +136,62 @@ final class HostServicesTests: XCTestCase {
             "log(_:_:) обязана оставаться синхронной, без throws — иначе «не блокирует вызывающего» " +
             "перестаёт быть гарантией компилятора"
         )
+    }
+
+    // MARK: - К61 (уведомление → внутренняя syncOne, развилка Р6)
+
+    /// Вход: источник с `capabilities.push == true` вызывает `notify(.changesAvailable,
+    /// detail: nil)`. Ответ: хост вызывает внутреннюю `syncOne(source:trigger: .push)` для
+    /// ИМЕННО этого источника, немедленно и напрямую — различающий вектор против публичного
+    /// `sync(trigger:)` (у которого нет параметра источника): второй, не уведомленный
+    /// источник остаётся нетронутым.
+    func test_k61_changesAvailableTriggersDirectSyncOneNotPublicSync() async throws {
+        let harness = Harness(sourceIds: ["src-1", "src-2"])
+        harness.connectorRepository.seed([Harness.record(id: "src-1"), Harness.record(id: "src-2")])
+        for id in ["src-1", "src-2"] {
+            harness.connector(id).setInitializeResult(capabilities: ConnectorCapabilities(
+                deltaSync: false, push: true, attendees: true, conference: true, auth: .none
+            ))
+            harness.connector(id).setFetchEvents([])
+        }
+        _ = try await harness.hub.listCalendars(source: CalendarSourceId(rawValue: "src-1"))
+        _ = try await harness.hub.listCalendars(source: CalendarSourceId(rawValue: "src-2"))
+        guard let host1 = harness.connector("src-1").lastHost else {
+            XCTFail("initialize не захватил host")
+            return
+        }
+
+        host1.notify(.changesAvailable, detail: nil)
+        await pollUntil { harness.connector("src-1").callCount(.fetchEvents) > 0 }
+
+        XCTAssertEqual(harness.connector("src-1").callCount(.fetchEvents), 1)
+        XCTAssertEqual(
+            harness.connector("src-2").callCount(.fetchEvents), 0,
+            "не публичный sync(trigger:) — тот обошёл бы ВСЕ источники, syncOne трогает только src-1"
+        )
+    }
+
+    /// Отдельный вход: `notify(.authExpired)`/`notify(.configInvalid)` — не вызывают ни
+    /// `syncOne`, ни `sync`; фиксируются тем же перехватчиком, что К14 (`recordedNotifications`
+    /// рядом с `loggedEntries`), для последующего чтения хостом.
+    func test_k61_authExpiredAndConfigInvalidAreRecordedNotSynced() async throws {
+        let harness = Harness(sourceIds: ["src-1"])
+        harness.connectorRepository.seed([Harness.record(id: "src-1")])
+        harness.connector("src-1").setInitializeResult(capabilities: ConnectorCapabilities(
+            deltaSync: false, push: false, attendees: true, conference: true, auth: .none
+        ))
+        _ = try await harness.hub.listCalendars(source: source)
+        guard let host = harness.connector("src-1").lastHost else {
+            XCTFail("initialize не захватил host")
+            return
+        }
+
+        host.notify(.authExpired, detail: nil)
+        host.notify(.configInvalid, detail: "bad config")
+        await pollUntil { await harness.hub.recordedNotifications(for: source).count == 2 }
+
+        let entries = await harness.hub.recordedNotifications(for: source)
+        XCTAssertEqual(entries.map(\.kind), [.authExpired, .configInvalid])
+        XCTAssertEqual(harness.connector("src-1").callCount(.fetchEvents), 0, "не вызывают ни syncOne, ни sync")
     }
 }

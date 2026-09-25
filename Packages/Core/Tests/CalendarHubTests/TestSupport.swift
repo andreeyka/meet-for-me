@@ -204,18 +204,25 @@ final class FakeSecretStore: SecretStore, @unchecked Sendable {
 }
 
 struct Harness {
-    let connectorRepository = InMemoryConnectorRepository()
-    let meetingRepository = InMemoryMeetingRepository()
+    let connectorRepository: InMemoryConnectorRepository
+    let meetingRepository: InMemoryMeetingRepository
     let waitSeam = FakeWaitSeam()
     let secretStore = FakeSecretStore()
     let connectors: [String: FakeCalendarConnector]
     let hub: CalendarPortImpl
 
-    init(sourceIds: [String]) {
+    /// `sharedLog`: К64 просит порядок МЕЖДУ `meetingRepository`/коннектором (`save`/
+    /// `delete`/`fetchEvents`) и `connectorRepository` (`setCursor`) — раздельные журналы
+    /// (поведение по умолчанию, `nil`) не отвечают на «прежде» между ними ничем, у каждого
+    /// свой счёт (см. докстринг `PortCallLog`, «ЖУРНАЛ ОДИН НА ВСЕ ФЕЙКИ»). Большинству
+    /// тестов этого не нужно — параметр опциональный, не меняет прежнее поведение по умолчанию.
+    init(sourceIds: [String], sharedLog: PortCallLog? = nil) {
+        connectorRepository = InMemoryConnectorRepository(log: sharedLog ?? PortCallLog())
+        meetingRepository = InMemoryMeetingRepository(log: sharedLog ?? PortCallLog())
         var connectorMap: [CalendarSourceId: CalendarConnector] = [:]
         var fakes: [String: FakeCalendarConnector] = [:]
         for id in sourceIds {
-            let fake = FakeCalendarConnector()
+            let fake = FakeCalendarConnector(log: sharedLog ?? PortCallLog())
             connectorMap[CalendarSourceId(rawValue: id)] = fake
             fakes[id] = fake
         }

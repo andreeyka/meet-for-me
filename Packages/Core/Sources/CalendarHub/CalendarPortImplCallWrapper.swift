@@ -30,15 +30,33 @@ extension CalendarPortImpl {
     /// `.rateLimited` — до трёх раз, потолок задержки 60с, отмена во время ожидания —
     /// `.cancelled`, не `.transport`. `retryable: false` — только для `shutdown()`
     /// (инв. 20: «shutdown никогда не повторяется»).
+    ///
+    /// СТРОКА (найдено буквальным чтением при написании теста К64 вход Б — до этого
+    /// теста на `.cursorInvalid` не было вовсе, ни здесь, ни у К55): `passthroughCursorInvalid`
+    /// — без него `.cursorInvalid` не матчит `.rateLimited` веткой ниже и уходит через
+    /// `else` тем же путём, что и любая другая невосстановимая ошибка — `throw
+    /// Self.mapConnectorError(...)` превращает её в `CalendarError` ПРЕЖДЕ, чем вызывающая
+    /// сторона (`applyDeltaSync`/`applyFirstDeltaStep`) успевает получить шанс поймать её
+    /// СВОИМ `catch let error as ConnectorError` — тот перехватывает `CalendarError`, не
+    /// `ConnectorError`, и никогда не срабатывает: ветка восстановления по инв. 19
+    /// («забыть курсор, fetchEvents на полном окне») была мертвым кодом. Флаг — исключение
+    /// ИМЕННО для этого случая: даёт `.cursorInvalid` пройти наружу СВОИМ типом
+    /// (`ConnectorError`, не отображённым), только когда вызывающая сторона объявила, что
+    /// сама знает, что с ним делать; по умолчанию `false` — не меняет поведение ни одного
+    /// из прочих вызовов `callConnector` в модуле.
     func callConnector<Value: Sendable>(
         source: CalendarSourceId, connector: CalendarConnector, timeout: MethodTimeout,
-        retryable: Bool = true, operation: @escaping @Sendable () async throws -> Value
+        retryable: Bool = true, passthroughCursorInvalid: Bool = false,
+        operation: @escaping @Sendable () async throws -> Value
     ) async throws -> Value {
         var attempt = 0
         while true {
             do {
                 return try await raceTimeout(source: source, timeout: timeout, operation: operation)
             } catch let error as ConnectorError {
+                if passthroughCursorInvalid, case .cursorInvalid = error {
+                    throw error
+                }
                 guard case .rateLimited(let retryAfterSeconds) = error, retryable, attempt < 3 else {
                     // Развилка Р10: `upstreamUnavailable` — тот же сигнал «переподключить
                     // заново», что таймаут (raceTimeout ниже) — следующий вызов этого
