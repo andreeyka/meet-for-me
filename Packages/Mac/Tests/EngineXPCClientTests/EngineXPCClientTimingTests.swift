@@ -115,6 +115,9 @@ final class EngineXPCClientTimingTests: XCTestCase {
         let task = Task { try await fixture.client.transcribe(self.makeSpec()) { collector.append($0) } }
         try await Task.sleep(nanoseconds: 150_000_000)   // дать transcribe дойти до сервиса
         let jobId = try XCTUnwrap(fixture.service.receivedJobIds.last)
+        // `FakeTranscriptionEngine` без `progressScript` сама шлёт `.started(.asr)` сразу —
+        // отсчёт «долетело/не долетело» ведётся ОТ ЭТОГО момента, а не от нуля.
+        let countBeforeBadFrame = collector.all.count
 
         let corrupted = try PlistSurgery.data(
             for: EngineProgressMessage(jobId: jobId, progress: .advanced(stage: .asr, fraction: 0.5)),
@@ -122,12 +125,14 @@ final class EngineXPCClientTimingTests: XCTestCase {
         )
         fixture.service.pushRawProgressData(corrupted)
         try await Task.sleep(nanoseconds: 100_000_000)
-        XCTAssertEqual(collector.all.count, 0, "испорченный кадр не должен был долететь до потребителя")
+        XCTAssertEqual(
+            collector.all.count, countBeforeBadFrame, "испорченный кадр не должен был долететь до потребителя"
+        )
 
         fixture.service.pushRawProgress(jobId: jobId, progress: .advanced(stage: .asr, fraction: 0.3))
         try await Task.sleep(nanoseconds: 100_000_000)
         XCTAssertEqual(
-            collector.all.map(\.fraction), [0.3], "настоящий прогресс той же задачи обязан дойти как обычно"
+            collector.all.last?.fraction, 0.3, "настоящий прогресс той же задачи обязан дойти как обычно"
         )
         _ = try await task.value
     }
@@ -148,16 +153,20 @@ final class EngineXPCClientTimingTests: XCTestCase {
         let task = Task { try await fixture.client.transcribe(self.makeSpec()) { collector.append($0) } }
         try await Task.sleep(nanoseconds: 150_000_000)
         let jobId = try XCTUnwrap(fixture.service.receivedJobIds.last)
+        // Тот же учёт, что К40(ii): `FakeTranscriptionEngine` уже прислала своё `.started`.
+        let countBeforeForeignFrame = collector.all.count
 
         let foreignJobId = EngineJobId(rawValue: UUID())
         fixture.service.pushRawProgress(jobId: foreignJobId, progress: .advanced(stage: .asr, fraction: 0.9))
         try await Task.sleep(nanoseconds: 100_000_000)
-        XCTAssertEqual(collector.all.count, 0, "чужой кадр не должен был долететь до потребителя")
+        XCTAssertEqual(
+            collector.all.count, countBeforeForeignFrame, "чужой кадр не должен был долететь до потребителя"
+        )
 
         fixture.service.pushRawProgress(jobId: jobId, progress: .advanced(stage: .asr, fraction: 0.4))
         try await Task.sleep(nanoseconds: 100_000_000)
         XCTAssertEqual(
-            collector.all.map(\.fraction), [0.4], "настоящий прогресс живой задачи обязан дойти как обычно"
+            collector.all.last?.fraction, 0.4, "настоящий прогресс живой задачи обязан дойти как обычно"
         )
         _ = try await task.value
     }
