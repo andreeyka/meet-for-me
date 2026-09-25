@@ -43,6 +43,58 @@ final class DedupCollisionTests: XCTestCase {
         try await Self.runCollision(idX: Self.idHigh, idY: Self.idLow)
     }
 
+    /// Возврат РП (приёмка #135, очередь после): атомарность через фейк. MEE-407
+    /// (`save(_:absorbing:)`, C-010 v21/v22 инв. 33) заменила раздельные `delete()`+`save()`
+    /// в `mergeIncoming` — до этого отказ `save()` ПОСЛЕ уже прошедшего `delete()` терял бы
+    /// проигравшую запись без следа (собственная СТРОКА `CalendarPortImplMerge.swift` до
+    /// этой правки). Доказательство: `save(_:absorbing:)` настроен на отказ — ни проигравшая,
+    /// ни выигравшая запись не изменились ни на йоту, слияние не состоялось частично.
+    ///
+    /// Возврат РП (приёмка #137, голова 689f312): двух проверок хранилища недостаточно —
+    /// добавлены (1) `assertNoChangeArrives` на `hub.changes()`, доказывающее, что `.deleted`
+    /// не публикуется при отказе (без неё тест остался бы зелёным, даже переедь `emit(.deleted)`
+    /// раньше `save`), и (2) проверка по `callLog`, что вызван именно `save(_:absorbing:)`
+    /// с `[loserId]`, а не какой-то другой метод/аргумент.
+    func test_k19_saveAbsorbingFailureLeavesBothRecordsUntouched() async throws {
+        let harness = Harness.mergeReady(sourceIds: ["src-1", "src-2"])
+        let sharedStart = Date(timeIntervalSince1970: 1_700_000_000)
+        let winnerId = Self.idLow
+        let loserId = Self.idHigh
+
+        try seedCollisionCandidateX(harness, id: winnerId, start: sharedStart)
+        try seedCollisionCandidateY(harness, id: loserId, start: sharedStart.addingTimeInterval(3_600))
+        harness.meetingRepository.fail(with: .io(message: "диск недоступен"), on: .save, id: winnerId.uuidString)
+
+        let iterator = StreamIteratorBox(harness.hub.changes())
+        let colliding = try mergeTestPayload(
+            connectorId: "src-2", externalId: "evt-2", lastModified: sharedStart.addingTimeInterval(20),
+            location: "Room-New"
+        )
+        do {
+            _ = try await harness.hub.applyIncoming(payload: colliding)
+            XCTFail("ожидался отказ save(_:absorbing:)")
+        } catch {
+            // ожидаемо — StorageError.io, настроенный выше.
+        }
+
+        await assertNoChangeArrives(iterator, "отказ save(_:absorbing:) не должен публиковать .deleted")
+
+        let absorbingCall = harness.meetingRepository.callLog.calls(port: "MeetingRepository")
+            .last { $0.method == "save(_:absorbing:)" }
+        XCTAssertEqual(
+            absorbingCall?.arguments, [winnerId.uuidString, loserId.uuidString],
+            "mergeIncoming обязан звать save(_:absorbing:) с победителем и [loserId], не delete()+save()"
+        )
+
+        let stored = harness.meetingRepository.storedRecords
+        XCTAssertEqual(stored.count, 2, "отказ save(_:absorbing:) не удалил ни одной записи")
+        let winnerAfter = stored.first { $0.event.id == winnerId }
+        let loserAfter = stored.first { $0.event.id == loserId }
+        XCTAssertEqual(winnerAfter?.sources.count, 1, "источники победителя не слиты — отказ до commit")
+        XCTAssertEqual(loserAfter?.sources.count, 1, "проигравшая запись цела, со своим источником")
+        XCTAssertEqual(winnerAfter?.event.location, "Room-X", "победитель не перезаписан слиянием")
+    }
+
     private static func runCollision(idX: UUID, idY: UUID) async throws {
         let harness = Harness.mergeReady(sourceIds: ["src-1", "src-2"])
         let sharedStart = Date(timeIntervalSince1970: 1_700_000_000)
