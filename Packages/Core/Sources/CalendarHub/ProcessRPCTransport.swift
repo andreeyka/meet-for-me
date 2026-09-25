@@ -65,16 +65,7 @@ public actor ProcessRPCTransport: RPCTransport {
         stderrHandle = stderrPipe.fileHandleForReading
 
         try process.run()
-        installHandlers(onStderrLine: onStderrLine)
-    }
 
-    /// Отдельный метод, не тело `init`: захват `[weak self]` в замыканиях, ЛЕКСИЧЕСКИ
-    /// стоящих внутри инициализатора актора, компилятор отвергает («reference to captured
-    /// var 'self' in concurrently-executing code») — до возврата из `init` `self` считается
-    /// ещё не полностью устоявшимся значением для анализа определённой инициализации, даже
-    /// когда все хранимые свойства к этой строке уже присвоены. Обычный метод, вызванный
-    /// последней строкой `init`, снимает это ограничение: здесь `self` — обычная ссылка.
-    private func installHandlers(onStderrLine: @escaping @Sendable (String) -> Void) {
         stderrHandle.readabilityHandler = { handle in
             let data = handle.availableData
             guard !data.isEmpty, let text = String(data: data, encoding: .utf8) else { return }
@@ -82,12 +73,19 @@ public actor ProcessRPCTransport: RPCTransport {
                 onStderrLine(String(line))
             }
         }
+        // `Task { [weak self] in … }` — капture-лист повторён НА САМОМ Task, не только на
+        // объемлющем замыкании `readabilityHandler`: неявный захват уже-слабой локальной
+        // `self` внешнего замыкания вложенным `Task { await self?...}` компилятор отвергает
+        // («reference to captured var 'self' in concurrently-executing code» — внутренняя
+        // ячейка слабой ссылки сама по себе мутабельна, и вложенное конкурентное замыкание
+        // не вправе на неё молча полагаться). Свежий `[weak self]` на самом `Task` — тот же
+        // приём, что и везде в этом файле, только явный дважды.
         stdoutHandle.readabilityHandler = { [weak self] handle in
             let data = handle.availableData
-            Task { await self?.handleStdout(data) }
+            Task { [weak self] in await self?.handleStdout(data) }
         }
         process.terminationHandler = { [weak self] proc in
-            Task { await self?.handleTermination(status: proc.terminationStatus) }
+            Task { [weak self] in await self?.handleTermination(status: proc.terminationStatus) }
         }
     }
 
