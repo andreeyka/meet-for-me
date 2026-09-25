@@ -94,6 +94,23 @@ enum TestFixtures {
         ]
     }
 
+    /// К109 (MEE-422): непустые, различные `text`/`textOriginal`/`words`, с хотя бы одним
+    /// словом, чей `original` отличен от текущего `text` — то, что `markSegmentsUserEdited`
+    /// обязан оставить побайтово нетронутым.
+    static func segmentWithEditHistory(
+        startMs: Int, endMs: Int, text: String, textOriginal: String, wordOriginal: String
+    ) throws -> Transcript.Segment {
+        let words = [
+            try Transcript.Word(
+                startMs: startMs, endMs: startMs + 100, text: text, confidence: 0.9, original: wordOriginal
+            )
+        ]
+        return try Transcript.Segment(
+            startMs: startMs, endMs: endMs, channel: .mic, speakerCluster: nil,
+            text: text, textOriginal: textOriginal, textConfidence: 0.9, words: words
+        )
+    }
+
     /// Поля `Job` сверх пяти обязательных параметров `job(id:type:payload:status:options:)`
     /// (лимит `function_parameter_count`) — значения по умолчанию соответствуют
     /// только что созданной, ничем не занятой задаче.
