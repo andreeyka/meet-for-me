@@ -88,6 +88,54 @@ final class FakeAttributionPortTests: XCTestCase {
         }
     }
 
+    // MARK: - Режим «инв. 8» (MEE-420, приёмка `8328dd7c`) — средство для К52 плана MEE-410
+
+    /// Выключен по умолчанию — старое поведение (форсированный результат отдаётся как есть).
+    func test_fakeAttributionPortAppliesInvariant8DefaultsToOffAndReturnsForcedResultUnfiltered() async throws {
+        let port = FakeAttributionPort()
+        let update = SegmentAttributionUpdate(
+            segmentId: 1, personId: UUID(), speakerConfidence: 0.9, attributionSource: .micChannel
+        )
+        port.forcedResult = AttributionResult(
+            transcriptId: UUID(), assignments: [], segmentUpdates: [update], textCorrections: [], profileUpdates: []
+        )
+        let input = AttributionFixtures.oneOnOneWithoutProfiles
+
+        let result = try await port.attribute(input, thresholds: .slice1Defaults)
+
+        XCTAssertEqual(result.segmentUpdates, [update])
+    }
+
+    /// Включённый режим фильтрует `segmentUpdates` по ФАКТИЧЕСКОМУ `userEditedSegmentIds`
+    /// вызова, а не по заранее заданной фикстуре — так К52 плана MEE-410 различает верный
+    /// фасад (кластер исключён из входа, сегменты доходят) от фасада с багом К50 (кластер
+    /// не исключён, фейк их отфильтровывает).
+    func test_fakeAttributionPortAppliesInvariant8FiltersSegmentUpdatesByActualCallInput() async throws {
+        let port = FakeAttributionPort()
+        port.appliesInvariant8 = true
+        let excludedUpdate = SegmentAttributionUpdate(
+            segmentId: 1, personId: UUID(), speakerConfidence: 0.9, attributionSource: .micChannel
+        )
+        let keptUpdate = SegmentAttributionUpdate(
+            segmentId: 2, personId: UUID(), speakerConfidence: 0.9, attributionSource: .micChannel
+        )
+        port.forcedResult = AttributionResult(
+            transcriptId: UUID(), assignments: [], segmentUpdates: [excludedUpdate, keptUpdate],
+            textCorrections: [], profileUpdates: []
+        )
+        let base = AttributionFixtures.oneOnOneWithoutProfiles
+        let input = AttributionInput(
+            transcriptId: base.transcriptId, transcript: base.transcript, segmentIds: base.segmentIds,
+            meetingId: base.meetingId, attendees: base.attendees, me: base.me, nameForms: base.nameForms,
+            profiles: base.profiles, voiceProfilesEnabled: base.voiceProfilesEnabled,
+            embeddingModelVersion: base.embeddingModelVersion, userEditedSegmentIds: [1]
+        )
+
+        let result = try await port.confirm(transcriptId: UUID(), cluster: 0, personId: UUID(), input: input)
+
+        XCTAssertEqual(result.segmentUpdates, [keptUpdate], "id 1 входит в userEditedSegmentIds вызова — отфильтрован")
+    }
+
     // MARK: - Фикстуры: шесть именованных входов C-015 §«Фейк для тестов»
 
     func test_fixtureOneOnOneWithoutProfilesHasExactlyTwoAttendeesAndOneSystemCluster() {

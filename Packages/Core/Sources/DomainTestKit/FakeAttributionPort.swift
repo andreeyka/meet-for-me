@@ -28,6 +28,13 @@ public final class FakeAttributionPort: AttributionPort, @unchecked Sendable {
     /// подделка результата, который тест не просил.
     public var forcedResult: AttributionResult?
 
+    /// Режим «инв. 8» (C-015, MEE-420, приёмка `8328dd7c`) — выключен по умолчанию, старые
+    /// тесты не меняются. Включённый режим перед возвратом `forcedResult` отфильтровывает из
+    /// `segmentUpdates` элементы, чей `segmentId` есть во входном `userEditedSegmentIds`
+    /// фактического вызова — то, что обязан делать честный порт по инв. 8, но чего этот фейк
+    /// структурно не проверяет, когда режим выключен (`forcedResult` тогда отдаётся как есть).
+    public var appliesInvariant8 = false
+
     private var attributeCalls = 0
     private var confirmCalls = 0
     private var rejectCalls = 0
@@ -59,7 +66,7 @@ public final class FakeAttributionPort: AttributionPort, @unchecked Sendable {
             lastAttributeInput = input
             lastAttributeThresholds = thresholds
         }
-        return try result()
+        return try result(input: input)
     }
 
     public func confirm(
@@ -75,7 +82,7 @@ public final class FakeAttributionPort: AttributionPort, @unchecked Sendable {
             lastConfirmPersonId = personId
             lastConfirmInput = input
         }
-        return try result()
+        return try result(input: input)
     }
 
     public func reject(
@@ -89,15 +96,23 @@ public final class FakeAttributionPort: AttributionPort, @unchecked Sendable {
             lastRejectCluster = cluster
             lastRejectInput = input
         }
-        return try result()
+        return try result(input: input)
     }
 
-    private func result() throws -> AttributionResult {
+    private func result(input: AttributionInput) throws -> AttributionResult {
         if let forcedError = locked({ forcedError }) { throw forcedError }
         guard let forcedResult = locked({ forcedResult }) else {
             preconditionFailure("тест обязан задать forcedResult до вызова attribute/confirm/reject")
         }
-        return forcedResult
+        guard locked({ appliesInvariant8 }) else { return forcedResult }
+        let excluded = Set(input.userEditedSegmentIds)
+        return AttributionResult(
+            transcriptId: forcedResult.transcriptId,
+            assignments: forcedResult.assignments,
+            segmentUpdates: forcedResult.segmentUpdates.filter { !excluded.contains($0.segmentId) },
+            textCorrections: forcedResult.textCorrections,
+            profileUpdates: forcedResult.profileUpdates
+        )
     }
 
     // MARK: - Наблюдаемость: считает вызовы с их аргументами (§«Фейк для тестов»)
