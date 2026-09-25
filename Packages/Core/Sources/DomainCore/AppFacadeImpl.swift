@@ -191,12 +191,6 @@ public actor AppFacadeImpl: AppFacade {
 
     // MARK: - editSegmentText (группа Г плана MEE-410; К13, К14)
 
-    /// К13 (инв. 13, часть 1): ровно один вызов `TranscriptRepository.updateSegmentText(
-    /// isUserEdited: true)`, без `applyTextCorrections` — правка целиком заменяет текст
-    /// сегмента, а не накладывает список точечных замен слов (`applyTextCorrections` сама
-    /// пишет `is_user_edited = 0` — см. `Repositories.swift` — для правок распознавания,
-    /// не для ручного редактирования целиком). К14: повторная правка того же сегмента идёт
-    /// тем же путём, не переключается на `applyTextCorrections`.
     // К33 (МЕЕ-437, группа Л, инв. 15; возврат РП, приёмка 10:15 UTC, «мелочи»): эта команда
     // ДОЛЖНА публиковать `.transcriptChanged(transcriptId:)` (сама меняет текст сегмента),
     // но принимает только `segmentId` (C-016 §4, дословно) — резолвинг `segmentId →
@@ -207,6 +201,12 @@ public actor AppFacadeImpl: AppFacade {
     // зеркалить контракт дословно, не шире. Нужен новый метод в САМОМ контракте C-010 (не
     // только в Swift) — решение архитектора/РП, не эта задача; публикация здесь остаётся
     // дырой сознательно, не по недосмотру.
+    /// К13 (инв. 13, часть 1): ровно один вызов `TranscriptRepository.updateSegmentText(
+    /// isUserEdited: true)`, без `applyTextCorrections` — правка целиком заменяет текст
+    /// сегмента, а не накладывает список точечных замен слов (`applyTextCorrections` сама
+    /// пишет `is_user_edited = 0` — см. `Repositories.swift` — для правок распознавания,
+    /// не для ручного редактирования целиком). К14: повторная правка того же сегмента идёт
+    /// тем же путём, не переключается на `applyTextCorrections`.
     public func editSegmentText(segmentId: Int64, text: String) async throws {
         do {
             try await transcripts.updateSegmentText(segmentId: segmentId, text: text, isUserEdited: true)
