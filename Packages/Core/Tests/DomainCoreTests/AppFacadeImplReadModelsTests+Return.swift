@@ -259,4 +259,12 @@ private final class ThrowingOpenSettingsPermissionsPort: PermissionsPort, @unche
     func note(observed: PermissionStatus, for kind: PermissionKind) async {
         await inner.note(observed: observed, for: kind)
     }
+
+    func isLaunchAtLoginEnabled() async -> Bool {
+        await inner.isLaunchAtLoginEnabled()
+    }
+
+    func setLaunchAtLogin(_ enabled: Bool) async throws {
+        try await inner.setLaunchAtLogin(enabled)
+    }
 }
