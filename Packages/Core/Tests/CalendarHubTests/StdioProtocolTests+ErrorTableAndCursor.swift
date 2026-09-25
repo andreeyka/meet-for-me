@@ -103,6 +103,10 @@ extension StdioProtocolTests {
         XCTAssertFalse(
             transport.sent[3].contains(#""cursor":"#), "второй цикл начинается с cursor: nil (ключ опущен)"
         )
+        // Возврат РП (приёмка #135, финальный, мелочи): пятый кадр (`sent[4]`) не был проверен
+        // отдельно — комментарий выше уже называл его `fetchEvents` шага 2 (Р9), но ни одна
+        // проверка это не подтверждала.
+        XCTAssertTrue(transport.sent[4].contains(#""method":"fetchEvents""#), "пятый кадр — fetchEvents (шаг 2)")
     }
 
     func test_k55_repeatedCursorInvalidOnRecoveryFetchEventsSurfacesAsFailure() async throws {

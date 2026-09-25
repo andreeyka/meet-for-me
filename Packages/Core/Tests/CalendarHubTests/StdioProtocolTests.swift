@@ -2,11 +2,10 @@
 //  `ScriptedRPCTransport`/`StdioCalendarConnector` (MEE-402 шаг 2). К57-К65 — отдельные файлы
 //  (уже написаны частями 3и/3з, некоторые уже упоминают Ш2 в MEE-361 не как новый тест, а как
 //  учёт: К64/К65 полностью проверены транспорт-независимой оснасткой `FakeCalendarConnector`
-//  ранее и здесь не повторяются). К9 вход Б/К12/К1 (MAJOR-вектор) — тоже НЕ здесь: они
-//  используют этот же `StdioCalendarConnector`, но требуют правки `CalendarPortImplCallWrapper`
-//  (кадр `shutdown` на таймауте) и `HostServicesTests.swift`, которых эта задача не трогает —
-//  следующая часть MEE-386 по прямому слову РП (переставлен порядок портов: сначала хост, эти
-//  три — сразу за ним).
+//  ранее и здесь не повторяются). К1 (MAJOR-вектор рукопожатия `initialize`) — здесь же, ниже
+//  (MEE-386). К9 вход Б/К12 — по-прежнему НЕ здесь: требуют правки `CalendarPortImplCallWrapper`
+//  (кадр `shutdown` на таймауте, нужен зависающий сценарий транспорта) и `HostServicesTests.swift`
+//  — отдельные части MEE-386.
 //
 //  К54 в этом файле — ТОЛЬКО таблица кодов JSON-RPC → ConnectorError → CalendarError (11
 //  различимых кодовых векторов из 19 строк §5.1): три строки без кода (таймаут — К9, отменённый
@@ -62,10 +61,10 @@ enum StdioHarness {
         )
     }
 
-    static func initializeFrame(id: Int, deltaSync: Bool = false) -> String {
+    static func initializeFrame(id: Int, deltaSync: Bool = false, protocolVersion: String = "1.0") -> String {
         """
         {"schemaVersion":1,"id":\(id),"result":{\
-        "plugin":{"id":"plug","name":"Plug","version":"1.0"},\
+        "plugin":{"id":"plug","name":"Plug","version":"1.0"},"protocolVersion":"\(protocolVersion)",\
         "capabilities":{"deltaSync":\(deltaSync),"push":false,"attendees":true,"conference":true,"auth":"none"}}}
         """
     }
@@ -126,5 +125,45 @@ final class StdioProtocolTests: XCTestCase {
         // не отправил ничего сверх своих двух исходящих запросов (`initialize`, `listCalendars`),
         // хотя прочитал два входящих `notification`-кадра между ними.
         XCTAssertEqual(transport.sent.count, 2, "на notification ответ не отправляется")
+    }
+
+    // MARK: - К1 (C-006 §1 — рукопожатие `initialize`, MAJOR/MINOR `protocolVersion`)
+
+    /// Отдельный вход К1 (MEE-386): `initialize` отвечает `protocolVersion` с MAJOR, не
+    /// совпадающим с `RPCHostVersioning.supportedProtocolMajor` (1) — хост считает это
+    /// фатальной ошибкой соединения; коннектор не используется дальше в этом цикле (тот же
+    /// эффект, что и у любой другой ошибки `initialize` — `capabilities[source]` не кешируется,
+    /// см. докстринг `StdioCalendarConnector.initialize`).
+    func test_k1_initializeMajorVersionMismatchIsFatalProtocolViolation() async throws {
+        let bundle = StdioHarness.make()
+        let hub = bundle.hub
+        let transport = bundle.transport
+        transport.enqueue(StdioHarness.initializeFrame(id: 1, protocolVersion: "2.0"))
+
+        do {
+            _ = try await hub.listCalendars(source: StdioHarness.source)
+            XCTFail("ожидался protocolViolation на несовместимом MAJOR protocolVersion")
+        } catch let error as CalendarError {
+            guard case .protocolViolation = error else {
+                return XCTFail("ожидался .protocolViolation, получено \(error)")
+            }
+        }
+
+        XCTAssertEqual(transport.sent.count, 1, "коннектор не используется дальше — только initialize ушёл")
+    }
+
+    /// Тот же вход, но `MINOR`-расхождение (`"1.9"` против ожидаемого `"1.x"`) — не фатально,
+    /// работа продолжается обычным путём.
+    func test_k1_initializeMinorVersionMismatchIsNotFatal() async throws {
+        let bundle = StdioHarness.make()
+        let hub = bundle.hub
+        let transport = bundle.transport
+        transport.enqueue(StdioHarness.initializeFrame(id: 1, protocolVersion: "1.9"))
+        transport.enqueue(#"{"schemaVersion":1,"id":2,"result":{"calendars":[]}}"#)
+
+        let calendars = try await hub.listCalendars(source: StdioHarness.source)
+
+        XCTAssertEqual(calendars, [], "MINOR-расхождение не мешает работе")
+        XCTAssertEqual(transport.sent.count, 2, "initialize + listCalendars — оба ушли, работа продолжается")
     }
 }

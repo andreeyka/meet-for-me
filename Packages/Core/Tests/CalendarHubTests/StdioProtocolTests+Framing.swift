@@ -68,12 +68,19 @@ extension StdioProtocolTests {
     /// строгое чтение `decodeBounded` внутри `RPCFramePeek` (`try?` глушит его в `nil`), и
     /// кадр без распознанного `id` уходит тем же путём, что кадр вовсе без него (К46/К47:
     /// нет `method` — тоже отказ, не тихая трактовка как notification).
+    ///
+    /// Возврат РП (приёмка #135, финальный, мелочи): вектор — РОВНО `2^53`
+    /// (`9007199254740992`), не производное число из 20 девяток. То прежнее значение вообще
+    /// не влезает в `Int64`/`UInt64` и проваливается на разборе самого JSON-числа, не на
+    /// проверке границы `decodeBounded` (`±(2^53-1)`) — тест на деле не проверял именно ГРАНИЦУ.
+    /// `9007199254740992` — тот же литерал, что уже устоявшаяся конвенция репозитория для этой
+    /// же границы (`IntegerReadingTests.swift`, `SchemaAndEnumTests.swift` и другие).
     func test_k48_inputD_integerFieldOutsideRepresentableRangeIsProtocolViolation() async throws {
         let bundle = StdioHarness.make()
         let hub = bundle.hub
         let transport = bundle.transport
         transport.enqueue(StdioHarness.initializeFrame(id: 1))
-        transport.enqueue(#"{"schemaVersion":1,"id":99999999999999999999,"result":{"calendars":[]}}"#)
+        transport.enqueue(#"{"schemaVersion":1,"id":9007199254740992,"result":{"calendars":[]}}"#)
 
         await assertListCalendarsFails(hub)
     }
