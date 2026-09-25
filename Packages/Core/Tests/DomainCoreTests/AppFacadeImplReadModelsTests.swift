@@ -37,10 +37,12 @@ final class AppFacadeImplReadModelsTests: XCTestCase {
             recordings: repositories.recordings,
             transcripts: transcripts,
             persons: repositories.persons,
+            speakerProfiles: repositories.speakerProfiles,
             permissions: permissions,
             modelCatalog: FakeModelCatalogPort(),
             calendar: FakeCalendarPort(),
             sessionCoordinator: NoOpSessionCoordinator(),
+            attribution: FakeAttributionPort(),
             settings: repositories.settings,
             clock: clock
         )

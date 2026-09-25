@@ -37,10 +37,12 @@ final class RecordingCommandsTests: XCTestCase {
             recordings: repositories.recordings,
             transcripts: repositories.transcripts,
             persons: repositories.persons,
+            speakerProfiles: repositories.speakerProfiles,
             permissions: permissions,
             modelCatalog: FakeModelCatalogPort(),
             calendar: FakeCalendarPort(),
             sessionCoordinator: sessionCoordinator,
+            attribution: FakeAttributionPort(),
             settings: repositories.settings,
             clock: { clock.now() }
         )

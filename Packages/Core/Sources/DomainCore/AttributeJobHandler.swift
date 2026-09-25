@@ -70,9 +70,12 @@ public struct AttributeJobHandler: JobHandler {
         do {
             let input = try await buildInput(transcriptId: transcriptId, meetingId: meetingId)
             let result = try await port.attribute(input, thresholds: .slice1Defaults)
-            try await apply(result, transcriptId: transcriptId)
+            try await AttributionSupport.apply(
+                result, transcriptId: transcriptId, transcripts: transcripts,
+                speakerProfiles: speakerProfiles, now: Date()
+            )
             return .success
-        } catch let failure as InputBuildFailure {
+        } catch let failure as AttributionSupport.InputBuildFailure {
             return .permanentFailure(error: failure.message)
         } catch let error as AppFacadeError {
             return Self.outcome(for: error)
@@ -84,22 +87,6 @@ public struct AttributeJobHandler: JobHandler {
             return Self.outcome(for: error)
         } catch {
             return .permanentFailure(error: "\(error)")
-        }
-    }
-
-    /// Ранний выход построения входа — не `StorageError` и не `AttributionError`:
-    /// обработчик не строит `AttributionInput` и не вызывает порт вовсе (§7 дословно).
-    private enum InputBuildFailure: Error {
-        case transcriptNotFound(UUID)
-        case embeddingModelVersionMissing(transcriptId: UUID)
-
-        var message: String {
-            switch self {
-            case .transcriptNotFound(let id):
-                return "AttributeJobHandler: транскрипт \(id) не найден"
-            case .embeddingModelVersionMissing(let id):
-                return "AttributeJobHandler: транскрипт \(id) несёт спикеров без единой версии эмбеддинга"
-            }
         }
     }
 
@@ -133,116 +120,16 @@ public struct AttributeJobHandler: JobHandler {
         }
     }
 
-    // MARK: - Построение AttributionInput (§7)
+    // MARK: - Построение AttributionInput (§7) — общая логика в AttributionSupport (MEE-420)
 
     private func buildInput(transcriptId: UUID, meetingId: UUID?) async throws -> AttributionInput {
-        guard let transcript = try await transcripts.transcript(id: transcriptId) else {
-            throw InputBuildFailure.transcriptNotFound(transcriptId)
-        }
-        let segmentRows = try await transcripts.segments(transcriptId: transcriptId)
-        let segmentIds = segmentRows.map(\.id)
-        let userEditedSegmentIds = segmentRows.filter(\.isUserEdited).map(\.id)
-        let embeddingModelVersion = try Self.embeddingModelVersion(transcript: transcript, transcriptId: transcriptId)
-
-        let attendees = try await resolvedAttendees(meetingId: meetingId)
-        let me = try await persons.me()
-        var nameFormPersonIds = Set(attendees.map(\.id))
-        if let me { nameFormPersonIds.insert(me.id) }
-        let nameForms = try await persons.nameForms(personIds: Array(nameFormPersonIds))
-
         let voiceEnabled = try await appFacade.settings().voiceProfilesEnabled
-        let profiles: [SpeakerProfile]
-        if voiceEnabled {
-            profiles = try await speakerProfiles.profiles(
-                personIds: Array(nameFormPersonIds), modelVersion: embeddingModelVersion
-            )
-        } else {
-            profiles = []
-        }
-
-        return AttributionInput(
-            transcriptId: transcriptId, transcript: transcript, segmentIds: segmentIds,
-            meetingId: meetingId, attendees: attendees, me: me, nameForms: nameForms,
-            profiles: profiles, voiceProfilesEnabled: voiceEnabled,
-            embeddingModelVersion: embeddingModelVersion, userEditedSegmentIds: userEditedSegmentIds
+        let repositories = AttributionSupport.Repositories(
+            transcripts: transcripts, meetings: meetings, persons: persons, speakerProfiles: speakerProfiles
         )
-    }
-
-    /// §7 «attendees»: пусто и для `meetingId == nil` (ad-hoc созвон), и для встречи,
-    /// удалённой между постановкой задачи и её выполнением, — тем же путём; адреса, не
-    /// разрешившиеся в `PersonRecord`, из списка выпадают молча.
-    private func resolvedAttendees(meetingId: UUID?) async throws -> [PersonRecord] {
-        guard let meetingId, let meeting = try await meetings.meeting(id: meetingId) else {
-            return []
-        }
-        var resolved: [PersonRecord] = []
-        for attendee in meeting.event.attendees {
-            guard let email = attendee.person.email,
-                  let person = try await persons.person(email: email) else { continue }
-            resolved.append(person)
-        }
-        return resolved
-    }
-
-    /// §7 «embeddingModelVersion»: первая непустая версия среди `transcript.speakers`;
-    /// пустой `speakers` — штатный вход (запись только с микрофона, IR-128), версия — "".
-    /// Спикеры есть, а версии нет ни у одного — испорченный вход, ранний `permanentFailure`.
-    private static func embeddingModelVersion(transcript: Transcript, transcriptId: UUID) throws -> String {
-        guard !transcript.speakers.isEmpty else { return "" }
-        guard let version = transcript.speakers.compactMap(\.embeddingModelVersion).first else {
-            throw InputBuildFailure.embeddingModelVersionMissing(transcriptId: transcriptId)
-        }
-        return version
-    }
-
-    // MARK: - Применение AttributionResult (§7 «Применение»)
-
-    private func apply(_ result: AttributionResult, transcriptId: UUID) async throws {
-        if !result.segmentUpdates.isEmpty {
-            try await transcripts.updateAttribution(result.segmentUpdates)
-        }
-        for update in result.profileUpdates {
-            try await speakerProfiles.upsert(SpeakerProfile(
-                personId: update.personId, embedding: update.embedding,
-                modelVersion: update.modelVersion, sampleCount: update.sampleCount, updatedAt: Date()
-            ))
-        }
-        try await applyTextCorrections(result.textCorrections, transcriptId: transcriptId)
-    }
-
-    /// §7: по одному вызову `applyTextCorrections` на сегмент, у которого правки этого
-    /// сегмента непусты — не один вызов на весь результат. `text` строит обработчик,
-    /// заменяя слова по `wordIndex`; способ склейки слов в строку — не предмет контракта
-    /// и не проверяется инвариантом 32 (C-010): решение реализации — соединение пробелом.
-    ///
-    /// Сегмент из `textCorrections`, которого нет среди строк транскрипта (правка приёмки
-    /// РП, PR #136, 03:15 UTC) — пропускается молча: применить правку неоткуда взять слова
-    /// сегмента, а `text = ""` стёр бы содержимое строки, которой правка не касалась.
-    private func applyTextCorrections(_ corrections: [TextCorrection], transcriptId: UUID) async throws {
-        guard !corrections.isEmpty else { return }
-        let bySegment = Dictionary(grouping: corrections, by: \.segmentId)
-        let rows = try await transcripts.segments(transcriptId: transcriptId)
-        let wordsBySegment = Dictionary(uniqueKeysWithValues: rows.map { ($0.id, $0.segment.words) })
-        for (segmentId, segmentCorrections) in bySegment {
-            guard let words = wordsBySegment[segmentId] else { continue }
-            let text = Self.correctedText(words: words, corrections: segmentCorrections)
-            try await transcripts.applyTextCorrections(
-                segmentId: segmentId, text: text, corrections: segmentCorrections
-            )
-        }
-    }
-
-    /// Правило при двух правках одного `wordIndex` (C-015 не гарантирует его уникальность
-    /// в `textCorrections`) — правка приёмки РП, PR #136, 03:15 UTC: побеждает последняя
-    /// по порядку в массиве. `run` по C-013 не должен ронять процесс — `uniqueKeysWithValues`
-    /// на неуникальном ключе именно это и делал.
-    private static func correctedText(words: [Transcript.Word], corrections: [TextCorrection]) -> String {
-        let replacementByIndex = Dictionary(
-            corrections.map { ($0.wordIndex, $0.replacement) },
-            uniquingKeysWith: { _, latest in latest }
+        return try await AttributionSupport.buildInput(
+            transcriptId: transcriptId, meetingId: meetingId, excludingClusterFromUserEdited: nil,
+            repositories: repositories, voiceProfilesEnabled: voiceEnabled
         )
-        return words.enumerated()
-            .map { index, word in replacementByIndex[index] ?? word.text }
-            .joined(separator: " ")
     }
 }

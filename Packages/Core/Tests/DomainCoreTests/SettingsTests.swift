@@ -25,10 +25,12 @@ final class SettingsTests: XCTestCase {
             recordings: repositories.recordings,
             transcripts: repositories.transcripts,
             persons: repositories.persons,
+            speakerProfiles: repositories.speakerProfiles,
             permissions: FakePermissionsPort(startingStatus: .granted, startingOutcome: .granted, checkedAt: Date()),
             modelCatalog: FakeModelCatalogPort(),
             calendar: FakeCalendarPort(),
             sessionCoordinator: NoOpSessionCoordinator(),
+            attribution: FakeAttributionPort(),
             settings: repositories.settings,
             clock: { Date() }
         )
@@ -117,10 +119,12 @@ final class SettingsTests: XCTestCase {
             recordings: repositories.recordings,
             transcripts: repositories.transcripts,
             persons: repositories.persons,
+            speakerProfiles: repositories.speakerProfiles,
             permissions: FakePermissionsPort(startingStatus: .granted, startingOutcome: .granted, checkedAt: Date()),
             modelCatalog: FakeModelCatalogPort(),
             calendar: FakeCalendarPort(),
             sessionCoordinator: NoOpSessionCoordinator(),
+            attribution: FakeAttributionPort(),
             settings: FailingSettingsRepository(),
             clock: { Date() }
         )

@@ -1,10 +1,11 @@
 //  AppFacadeImpl — реализация `AppFacade` (C-016 v10, MEE-25) поверх настоящих портов и
-//  репозиториев. MEE-420 часть 4 (план MEE-410): группа Г — `editSegmentText` (К13-К14),
-//  поверх частей 1-3 (группы А, Б, В, Х-К48б, слитых #145/#151). Несколько мелких, дословно
-//  однозначных сквозных обёрток (§«Поведение»: «фасад — тонкий слой сборки… вызывает порты
-//  и репозитории») реализованы попутно, потому что риск ошибки в них тот же, что у уже
-//  проверенных методов, — их приёмка в этом PR не заявляется, тесты для них заводит
-//  соответствующая группа плана.
+//  репозиториев. MEE-420 часть 5 (план MEE-410): группы Д и Е — assignSpeaker/clearSpeaker/
+//  createPersonAndAssign/forgetVoiceProfile (К15-К20, К50-К52 дельты Щ перечня MEE-401),
+//  поверх частей 1-4 (группы А, Б, В, Г, Х-К48б, слитых #145/#151/#153). Несколько мелких,
+//  дословно однозначных сквозных обёрток (§«Поведение»: «фасад — тонкий слой сборки…
+//  вызывает порты и репозитории») реализованы попутно, потому что риск ошибки в них тот же,
+//  что у уже проверенных методов, — их приёмка в этом PR не заявляется, тесты для них
+//  заводит соответствующая группа плана.
 //
 //  Модуль: domain-core · Владелец: DEV-2 · Слой: домен
 //
@@ -17,15 +18,16 @@
 //  «активная сессия» проверяется явным чтением `sessions()`, не сведена в отдельный throw
 //  у фейка/машины на этот случай.
 //
-//  ЧТО НЕ РЕАЛИЗОВАНО ЭТИМ PR, И ПОЧЕМУ ЭТО НЕ НЕДОДЕЛКА. Оставшиеся ~22 метода
-//  протокола (группы Д-Ц плана, кроме уже названных сквозных обёрток и групп В/Г) бросают
-//  `notImplemented(_:)` — самоописывающийся отказ, а не молчаливая заглушка: вызвать их
-//  сегодня физически некому — `App/` (композиционный корень, единственное место, что
-//  создаёт `AppFacadeImpl`) не существует ни одним файлом (план MEE-410 §7, слой 3), и до
-//  его появления эти методы мертвы для продакшена, а не только для тестов. Реализация
-//  каждой группы — предмет своего PR, по прямому разрешению постановки МЕЕ-420
-//  («можно разбить фасад на несколько PR по группам плана»). `skipMeeting` (группа Х, К47)
-//  остаётся стоп-заглушкой — РП назвал следующей работой запись/обработку/атрибуцию/
+//  ЧТО НЕ РЕАЛИЗОВАНО ЭТИМ PR, И ПОЧЕМУ ЭТО НЕ НЕДОДЕЛКА. Оставшиеся методы протокола
+//  (группы З-Ц плана, кроме уже названных сквозных обёрток и групп В/Г/Д/Е; группа Ж —
+//  `settings()`/`updateSettings()` — реализована отдельным PR, MEE-425, слитым в main
+//  параллельно с этим) бросают `notImplemented(_:)` — самоописывающийся отказ, а не
+//  молчаливая заглушка: вызвать их сегодня физически некому — `App/` (композиционный
+//  корень, единственное место, что создаёт `AppFacadeImpl`) не существует ни одним файлом
+//  (план MEE-410 §7, слой 3), и до его появления эти методы мертвы для продакшена, а не
+//  только для тестов. Реализация каждой группы — предмет своего PR, по прямому разрешению
+//  постановки МЕЕ-420 («можно разбить фасад на несколько PR по группам плана»).
+//  `skipMeeting` (группа Х, К47) остаётся стоп-заглушкой — РП назвал следующей работой
 //  календарь/настройки/события, не группу Х целиком.
 //
 //  `status()` — минимальная, честно неполная реализация: `activeSession`/`connectors`
@@ -35,8 +37,12 @@
 //  нули/пусто до групп Н/К. Ни одно поле не изобретает данных, которых порты не дали.
 //
 //  `settings()`/`updateSettings()` (группа Ж) реализованы отдельным файлом,
-//  `AppFacadeImpl+Settings.swift` (MEE-425) — `AppSettings.slice1Defaults` объявлен
-//  (`AppSettings.swift`, IR-105 закрыт C-016 v10).
+//  `AppFacadeImpl+Settings.swift` (MEE-425, слито в main после этого PR) —
+//  `AppSettings.slice1Defaults` объявлен (`AppSettings.swift`, IR-105 закрыт C-016 v10).
+//  Группа Д (этот PR) тем не менее использует контрактный литерал
+//  `voiceProfilesEnabled = false` напрямую, в обход `settings()` — см.
+//  `AppFacadeImpl+Attribution.swift`: та работа шла параллельно с MEE-425 и слиянием
+//  сюда не переписана, чтобы не тянуть в этот PR чужие изменения задним числом.
 
 import Foundation
 
@@ -46,10 +52,12 @@ public actor AppFacadeImpl: AppFacade {
     let recordings: RecordingRepository
     let transcripts: TranscriptRepository
     let persons: PersonRepository
+    let speakerProfiles: SpeakerProfileRepository
     let permissionsPort: PermissionsPort
     let modelCatalog: ModelCatalogPort
     let calendar: CalendarPort
     let sessionCoordinator: SessionCoordinator
+    let attribution: AttributionPort
     let settingsRepository: SettingsRepository
     let clock: @Sendable () -> Date
 
@@ -60,10 +68,12 @@ public actor AppFacadeImpl: AppFacade {
         recordings: RecordingRepository,
         transcripts: TranscriptRepository,
         persons: PersonRepository,
+        speakerProfiles: SpeakerProfileRepository,
         permissions: PermissionsPort,
         modelCatalog: ModelCatalogPort,
         calendar: CalendarPort,
         sessionCoordinator: SessionCoordinator,
+        attribution: AttributionPort,
         settings: SettingsRepository,
         clock: @escaping @Sendable () -> Date = { Date() }
     ) {
@@ -71,10 +81,12 @@ public actor AppFacadeImpl: AppFacade {
         self.recordings = recordings
         self.transcripts = transcripts
         self.persons = persons
+        self.speakerProfiles = speakerProfiles
         self.permissionsPort = permissions
         self.modelCatalog = modelCatalog
         self.calendar = calendar
         self.sessionCoordinator = sessionCoordinator
+        self.attribution = attribution
         self.settingsRepository = settings
         self.clock = clock
     }
