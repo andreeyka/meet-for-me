@@ -18,6 +18,16 @@
 //  значение подписчикам). Без `setStatus(_:for:)` `status()` внутри обработчика видел бы
 //  прежний (`.granted`) снимок независимо от того, что было `emit()`-нуто, и
 //  `AppStatus.permissionsReady` внутри `.statusChanged` не совпадал бы с ожидаемым.
+//
+//  СНАЧАЛА СОБРАТЬ ПЕРВУЮ ПАРУ СОБЫТИЙ, ПОТОМ МЕНЯТЬ ЖИВОЕ СОСТОЯНИЕ ДЛЯ ВТОРОЙ (находка CI
+//  после третьей редакции): `setStatus(_:for:)`/`emit(_:)` — синхронные вызовы на стороне
+//  теста, они не ждут, пока фоновая `Task` фасада успеет обработать УЖЕ буферизованное
+//  первое событие. Если второй `setStatus(_:for:)` выполняется раньше, чем обработчик
+//  первого события дошёл до своего `await status()`, тот читает УЖЕ изменённое (вторым
+//  вызовом) живое состояние — «первый» `.statusChanged` получает ответ, предназначенный
+//  второму. `await collectEvents(...)` на первой паре — барьер: он гарантированно не
+//  возвращается, пока оба события первой пары не обработаны, значит `status()` внутри них
+//  успел прочитать состояние ДО второго `setStatus(_:for:)`.
 
 import XCTest
 @testable import DomainCore
@@ -48,25 +58,28 @@ extension EventsTests {
 
         fixture.permissions.emit(allGrantedSnapshot())
 
+        let firstEvents = await collectEvents(stream, count: 2)
+        XCTAssertEqual(firstEvents.count, 2, "\(firstEvents)")
+        guard case .permissionsChanged = firstEvents[0] else {
+            return XCTFail("первым ожидался .permissionsChanged, получено \(firstEvents[0])")
+        }
+        guard case .statusChanged(let firstStatus) = firstEvents[1] else {
+            return XCTFail("вторым ожидался .statusChanged (первый снимок — безусловно), получено \(firstEvents[1])")
+        }
+        XCTAssertEqual(firstStatus.permissionsReady, .ready)
+
         fixture.permissions.setStatus(.denied, for: .microphone)
         let deniedMicrophoneSnapshot = await fixture.permissions.snapshot()
         fixture.permissions.emit(deniedMicrophoneSnapshot)
 
-        let events = await collectEvents(stream, count: 4)
-        XCTAssertEqual(events.count, 4, "\(events)")
-        guard case .permissionsChanged = events[0] else {
-            return XCTFail("первым ожидался .permissionsChanged, получено \(events[0])")
-        }
-        guard case .statusChanged(let firstStatus) = events[1] else {
-            return XCTFail("вторым ожидался .statusChanged (первый снимок — безусловно), получено \(events[1])")
-        }
-        XCTAssertEqual(firstStatus.permissionsReady, .ready)
-        guard case .permissionsChanged(let snapshot) = events[2] else {
-            return XCTFail("третьим ожидался .permissionsChanged, получено \(events[2])")
+        let secondEvents = await collectEvents(stream, count: 2)
+        XCTAssertEqual(secondEvents.count, 2, "\(secondEvents)")
+        guard case .permissionsChanged(let snapshot) = secondEvents[0] else {
+            return XCTFail("первым (второй пары) ожидался .permissionsChanged, получено \(secondEvents[0])")
         }
         XCTAssertEqual(snapshot, deniedMicrophoneSnapshot)
-        guard case .statusChanged(let status) = events[3] else {
-            return XCTFail("четвёртым ожидался .statusChanged, получено \(events[3])")
+        guard case .statusChanged(let status) = secondEvents[1] else {
+            return XCTFail("вторым (второй пары) ожидался .statusChanged, получено \(secondEvents[1])")
         }
         XCTAssertEqual(status.permissionsReady, .notReady)
     }
@@ -80,23 +93,26 @@ extension EventsTests {
 
         fixture.permissions.emit(allGrantedSnapshot())
 
+        let firstEvents = await collectEvents(stream, count: 2)
+        XCTAssertEqual(firstEvents.count, 2, "\(firstEvents)")
+        guard case .permissionsChanged = firstEvents[0] else {
+            return XCTFail("первым ожидался .permissionsChanged, получено \(firstEvents[0])")
+        }
+        guard case .statusChanged = firstEvents[1] else {
+            return XCTFail("вторым ожидался .statusChanged (первый снимок — безусловно), получено \(firstEvents[1])")
+        }
+
         fixture.permissions.setStatus(.denied, for: .screenRecording)
         let deniedScreenRecordingSnapshot = await fixture.permissions.snapshot()
         fixture.permissions.emit(deniedScreenRecordingSnapshot)
 
-        // Таймаут короче обычного (1 с вместо 5) у последнего ожидаемого события: если бы
-        // `.statusChanged` всё же ушёл (регрессия), `collectEvents(count: 4)` поймал бы его
+        // Таймаут короче обычного (1 с вместо 5) у второго ожидаемого события: если бы
+        // `.statusChanged` всё же ушёл (регрессия), `collectEvents(count: 2)` поймал бы его
         // в отведённое время.
-        let events = await collectEvents(stream, count: 4, timeoutSeconds: 1)
-        XCTAssertEqual(events.count, 3, "\(events)")
-        guard case .permissionsChanged = events[0] else {
-            return XCTFail("первым ожидался .permissionsChanged, получено \(events[0])")
-        }
-        guard case .statusChanged = events[1] else {
-            return XCTFail("вторым ожидался .statusChanged (первый снимок — безусловно), получено \(events[1])")
-        }
-        guard case .permissionsChanged = events[2] else {
-            return XCTFail("третьим ожидался .permissionsChanged, получено \(events[2])")
+        let secondEvents = await collectEvents(stream, count: 2, timeoutSeconds: 1)
+        XCTAssertEqual(secondEvents.count, 1, "\(secondEvents)")
+        guard case .permissionsChanged = secondEvents[0] else {
+            return XCTFail("ожидался .permissionsChanged, получено \(secondEvents[0])")
         }
     }
 }
