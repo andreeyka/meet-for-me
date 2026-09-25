@@ -38,18 +38,22 @@ public final class EngineXPCClient: TranscriptionServicePort, @unchecked Sendabl
 
     static let pingTimeoutSeconds = 10
     static let workTimeoutSeconds = 120
-    private static let watchdogPollNanoseconds: UInt64 = 20_000_000   // 20мс
+    // Не `private` — методы соединения/кругового обмена читают эти члены из
+    // `EngineXPCClient+Transport.swift`; `private` в Swift ограничен ФАЙЛОМ объявления, не
+    // типом, и был бы недоступен оттуда (тот же приём, что у хранимых свойств `AppFacadeImpl`,
+    // читаемых из `AppFacadeImpl+*.swift`).
+    static let watchdogPollNanoseconds: UInt64 = 20_000_000   // 20мс
 
-    private let makeConnection: @Sendable () -> NSXPCConnection
+    let makeConnection: @Sendable () -> NSXPCConnection
     private let modelCatalog: ModelCatalogPort
-    private let clock: @Sendable () -> Date
+    let clock: @Sendable () -> Date
 
-    private let lock = NSLock()
-    private var connection: NSXPCConnection?
-    private var jobs: [EngineJobId: PendingJob] = [:]
+    let lock = NSLock()
+    var connection: NSXPCConnection?
+    var jobs: [EngineJobId: PendingJob] = [:]
     /// К21: сброшен `connectionDied` при пересоздании соединения — рукопожатие проверяется
     /// заново на каждое новое соединение, не один раз за всё время жизни клиента.
-    private var handshakeVerified = false
+    var handshakeVerified = false
 
     /// Прод: соединение по имени сервиса launchd. Реальный `EngineXPCServiceProtocol`
     /// раздаёт сервис (`Services/TranscriptionEngineXPC`), эта сторона его не знает —
@@ -78,7 +82,7 @@ public final class EngineXPCClient: TranscriptionServicePort, @unchecked Sendabl
         self.clock = clock
     }
 
-    private func locked<Value>(_ body: () -> Value) -> Value {
+    func locked<Value>(_ body: () -> Value) -> Value {
         lock.lock(); defer { lock.unlock() }
         return body()
     }

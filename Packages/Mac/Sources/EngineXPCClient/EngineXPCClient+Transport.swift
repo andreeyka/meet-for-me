@@ -107,7 +107,7 @@ extension EngineXPCClient {
         guard let message = try? EngineWire.decode(EngineProgressMessage.self, from: data) else { return }
         let job: PendingJob? = locked { jobs[message.jobId] }
         guard let job else { return }   // К40(iii): запоздалый/чужой кадр — молча отброшен
-        job.touch(clock())
+        job.touch(self.clock())
         job.progress?(TranscriptionProgress(
             stage: Self.stageName(message.progress), fraction: Self.fraction(message.progress)
         ))
@@ -142,7 +142,7 @@ extension EngineXPCClient {
         return try await withTaskCancellationHandler(
             operation: {
                 try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<EngineReply, Error>) in
-                    let job = PendingJob(continuation: continuation, progress: progress, startedAt: clock())
+                    let job = PendingJob(continuation: continuation, progress: progress, startedAt: self.clock())
                     locked { jobs[jobId] = job }
                     startWatchdog(jobId: jobId, job: job, timeoutSeconds: timeoutSeconds)
                     dispatch(requestData, jobId: jobId)
@@ -170,7 +170,7 @@ extension EngineXPCClient {
         return data
     }
 
-    private func dispatch(_ requestData: Data, jobId: EngineJobId, job: PendingJob) {
+    private func dispatch(_ requestData: Data, jobId: EngineJobId) {
         guard let proxy = serviceProxy(errorHandler: { [weak self] error in
             self?.complete(jobId: jobId, replyData: nil, error: error)
         }) else {
