@@ -11,6 +11,14 @@
 //  «нейтральный» снимок (всё выдано), заводящий базу тем же значением, что и стартовая
 //  `FakePermissionsPort(startingStatus: .granted, …)` из `makeFixture()`; второй — вектор,
 //  который тест на самом деле проверяет.
+//
+//  `setStatus(_:for:)` ПЕРЕД КАЖДЫМ `emit(_:)`, НЕ ТОЛЬКО САМ `emit(_:)` (находка CI после
+//  второй редакции): `.statusChanged`-ветка публикует `await status()`, а `status()` читает
+//  ЖИВОЕ состояние `permissionsPort.snapshot()`, не значение, протолкнутое через поток
+//  `changes()`, — они у фейка НЕЗАВИСИМЫ (`emit(_:)` не трогает `statuses`, только шлёт
+//  значение подписчикам). Без `setStatus(_:for:)` `status()` внутри `observePermissionsChanges`
+//  видел бы прежний (`.granted`) снимок независимо от того, что было `emit()`-нуто, и
+//  `AppStatus.permissionsReady` внутри `.statusChanged` не совпадал бы с ожидаемым.
 
 import XCTest
 @testable import DomainCore
@@ -40,12 +48,8 @@ extension EventsTests {
 
         fixture.permissions.emit(allGrantedSnapshot())
 
-        let deniedMicrophoneSnapshot = PermissionSnapshot(
-            states: PermissionKind.allCases.map { kind in
-                PermissionState(kind: kind, status: kind == .microphone ? .denied : .granted)
-            },
-            checkedAt: Date()
-        )
+        fixture.permissions.setStatus(.denied, for: .microphone)
+        let deniedMicrophoneSnapshot = await fixture.permissions.snapshot()
         fixture.permissions.emit(deniedMicrophoneSnapshot)
 
         let events = await collectEvents(stream, count: 3)
@@ -71,12 +75,8 @@ extension EventsTests {
 
         fixture.permissions.emit(allGrantedSnapshot())
 
-        let deniedScreenRecordingSnapshot = PermissionSnapshot(
-            states: PermissionKind.allCases.map { kind in
-                PermissionState(kind: kind, status: kind == .screenRecording ? .denied : .granted)
-            },
-            checkedAt: Date()
-        )
+        fixture.permissions.setStatus(.denied, for: .screenRecording)
+        let deniedScreenRecordingSnapshot = await fixture.permissions.snapshot()
         fixture.permissions.emit(deniedScreenRecordingSnapshot)
 
         // Таймаут короче обычного (1 с вместо 5) у последнего ожидаемого события: если бы
