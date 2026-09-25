@@ -58,6 +58,11 @@ extension SessionMachine {
         case .recording:
             // Строка 10 прочитана раньше — она в фазе сроков; здесь строка 11.
             guard hasArrivedCaptureFailure else { return false }
+            // MEE-423 (IR-137, C-018 v11 инв. 25): захват уже остановился сам
+            // (`CaptureEvent.failed`) — очередь узнаёт об этом здесь, до записи перехода и
+            // независимо от её исхода, тем же приёмом, каким `enterStopping` (строка 10)
+            // сообщает об остановке до `capture.stop()`.
+            await queue.recordingDidStop()
             try await transition(session.sessionId, to: .failed, now: now)
             return true
         case .stopping:
