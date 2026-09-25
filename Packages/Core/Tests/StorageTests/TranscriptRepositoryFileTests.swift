@@ -175,4 +175,86 @@ final class TranscriptRepositoryFileTests: StorageAsyncTestCase {
         XCTAssertEqual(updated.attributionSource, .user)
         XCTAssertTrue(updated.isUserEdited, "остаётся true — метод не трогает этот столбец")
     }
+
+    /// К114 (MEE-422), случай (ii): `is_user_edited` выставлен через
+    /// `updateSegmentText(…, isUserEdited: true)`, не через `markSegmentsUserEdited` (случай
+    /// (i), уже покрыт `testMEE421_…` выше) — `.user`-присвоение всё равно проходит.
+    func testK114_caseIIFlagFromUpdateSegmentTextStillAllowsUserSourceWrite() async throws {
+        let temp = try StorageTestSupport.makeDatabase()
+        defer { StorageTestSupport.cleanup(temp) }
+        let layout = FileLayout(root: temp.directory)
+        let recordingRepository = temp.database.recordingRepository(fileLayout: layout)
+        let transcripts = temp.database.transcriptRepository()
+        let persons = temp.database.personRepository()
+
+        let recordingId = UUID()
+        try await recordingRepository.save(RecordingRecord(
+            manifest: try TestFixtures.recordingManifest(recordingId: recordingId), status: .recording
+        ))
+        let segments = try TestFixtures.threeDistinctSegments(prefix: "k114")
+        let header = try await transcripts.save(
+            try TestFixtures.transcript(recordingId: recordingId, segments: segments)
+        )
+        let rows = try await transcripts.segments(transcriptId: header.id)
+        let userPersonId = try await persons.upsert(displayName: "K114 Person", emails: ["k114@example.com"])
+
+        try await transcripts.updateSegmentText(segmentId: rows[0].id, text: "edited by user", isUserEdited: true)
+        try await transcripts.updateAttribution([
+            SegmentAttributionUpdate(
+                segmentId: rows[0].id, personId: userPersonId, speakerConfidence: 1.0, attributionSource: .user
+            )
+        ])
+
+        let after = try await transcripts.segments(transcriptId: header.id)
+        let updated = try XCTUnwrap(after.first { $0.id == rows[0].id })
+        XCTAssertEqual(updated.personId, userPersonId, "запись прошла, флаг от updateSegmentText не помешал")
+        XCTAssertEqual(updated.attributionSource, .user)
+        XCTAssertTrue(updated.isUserEdited)
+    }
+
+    /// К115 (MEE-422, C-010 v25 инв. 17, базовое правило): строка, помеченная случаем (ii)
+    /// К114 и уже несущая `.user`-присвоение, — следующий автоматический вызов её пропускает
+    /// молча, присвоение `.user` и флаг не меняются.
+    func testK115_automaticUpdateAfterUserWriteIsSkippedSilently() async throws {
+        let temp = try StorageTestSupport.makeDatabase()
+        defer { StorageTestSupport.cleanup(temp) }
+        let layout = FileLayout(root: temp.directory)
+        let recordingRepository = temp.database.recordingRepository(fileLayout: layout)
+        let transcripts = temp.database.transcriptRepository()
+        let persons = temp.database.personRepository()
+
+        let recordingId = UUID()
+        try await recordingRepository.save(RecordingRecord(
+            manifest: try TestFixtures.recordingManifest(recordingId: recordingId), status: .recording
+        ))
+        let segments = try TestFixtures.threeDistinctSegments(prefix: "k115")
+        let header = try await transcripts.save(
+            try TestFixtures.transcript(recordingId: recordingId, segments: segments)
+        )
+        let rows = try await transcripts.segments(transcriptId: header.id)
+        let userPersonId = try await persons.upsert(displayName: "K115 User", emails: ["k115-user@example.com"])
+        let automaticPersonId = try await persons.upsert(
+            displayName: "K115 Automatic", emails: ["k115-auto@example.com"]
+        )
+
+        try await transcripts.updateSegmentText(segmentId: rows[0].id, text: "edited by user", isUserEdited: true)
+        try await transcripts.updateAttribution([
+            SegmentAttributionUpdate(
+                segmentId: rows[0].id, personId: userPersonId, speakerConfidence: 1.0, attributionSource: .user
+            )
+        ])
+
+        try await transcripts.updateAttribution([
+            SegmentAttributionUpdate(
+                segmentId: rows[0].id, personId: automaticPersonId, speakerConfidence: 0.2,
+                attributionSource: .oneOnOne
+            )
+        ])
+
+        let after = try await transcripts.segments(transcriptId: header.id)
+        let stillProtected = try XCTUnwrap(after.first { $0.id == rows[0].id })
+        XCTAssertEqual(stillProtected.personId, userPersonId, "автоматика не перезаписала .user-присвоение")
+        XCTAssertEqual(stillProtected.attributionSource, .user)
+        XCTAssertTrue(stillProtected.isUserEdited)
+    }
 }

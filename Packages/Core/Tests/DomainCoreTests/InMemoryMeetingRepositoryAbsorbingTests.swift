@@ -116,6 +116,41 @@ final class InMemoryMeetingRepositoryAbsorbingTests: XCTestCase {
         XCTAssertEqual(read?.status, .armed, "не ошибка — обычный save прошёл")
     }
 
+    /// К108 (MEE-422, C-010 инвариант 7, второй путь смены `meeting_id`; приёмка `6cb6270b`):
+    /// перенос идёт через словарь `meetingBinding` (`InMemoryRecordingRepository`), не через
+    /// перезапись `manifest` — `recording(id:).manifest.meetingId` остаётся равным id
+    /// проигравшей встречи, тому же значению, что было до поглощения.
+    func test_k108_recordingManifestMeetingIdStaysAtLoserAfterAbsorbing() async throws {
+        let repositories = InMemoryRepositories()
+        let winnerEvent = MeetingEventFixtures.oneOnOneZoom
+        try await repositories.meetings.save(
+            MeetingRecord(event: winnerEvent, dedupKey: nil, status: .scheduled, sources: [])
+        )
+        let loserEvent = MeetingEventFixtures.withoutConference
+        try await repositories.meetings.save(
+            MeetingRecord(event: loserEvent, dedupKey: nil, status: .scheduled, sources: [])
+        )
+        let recordingId = UUID()
+        let manifest = try Self.manifest(recordingId: recordingId, meetingId: loserEvent.id)
+        repositories.recordings.seed([RecordingRecord(manifest: manifest, status: .recording)])
+
+        try await repositories.meetings.save(
+            MeetingRecord(event: winnerEvent, dedupKey: nil, status: .scheduled, sources: []),
+            absorbing: [loserEvent.id]
+        )
+
+        let recordingsForWinner = try await repositories.recordings.recordings(meetingId: winnerEvent.id)
+        XCTAssertTrue(
+            recordingsForWinner.contains { $0.manifest.recordingId == recordingId },
+            "перенос виден через meetingBinding — recordings(meetingId:) находит запись у победителя"
+        )
+        let byId = try await repositories.recordings.recording(id: recordingId)
+        XCTAssertEqual(
+            byId?.manifest.meetingId, loserEvent.id,
+            "manifest.meetingId не тронут переносом — по-прежнему id проигравшей встречи, не победителя и не nil"
+        )
+    }
+
     static func manifest(recordingId: UUID, meetingId: UUID) throws -> RecordingManifest {
         try RecordingManifest(
             recordingId: recordingId,
