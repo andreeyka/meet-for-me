@@ -38,7 +38,10 @@ final class AttributeJobHandlerInputTests: XCTestCase {
     func test_k26_segmentIdsOrderedAndUserEditedSubsetCorrect() async throws {
         let harness = AttributeHarness()
         let segments = try (0..<5).map { index in
-            try AttributeFixture.segment(words: [try AttributeFixture.word("word\(index)")])
+            try AttributeFixture.segment(
+                words: [try AttributeFixture.word("word\(index)")],
+                start: index * 1_000, end: index * 1_000 + 1_000
+            )
         }
         let transcript = try AttributeFixture.transcript(segments: segments)
         let transcriptId = try await harness.seedTranscript(transcript)

@@ -68,10 +68,11 @@ final class AttributeJobHandlerApplyTests: XCTestCase {
     func test_k38_applyTextCorrectionsCalledOncePerSegmentWithCorrections() async throws {
         let harness = AttributeHarness()
         let words = [try AttributeFixture.word("привет"), try AttributeFixture.word("мир")]
-        let uncorrected = try AttributeFixture.segment(words: [try AttributeFixture.word("тишина")])
-        let transcript = try AttributeFixture.transcript(
-            segments: [try AttributeFixture.segment(words: words), uncorrected]
+        let corrected = try AttributeFixture.segment(words: words, start: 0, end: 500)
+        let uncorrected = try AttributeFixture.segment(
+            words: [try AttributeFixture.word("тишина")], start: 500, end: 1_000
         )
+        let transcript = try AttributeFixture.transcript(segments: [corrected, uncorrected])
         let transcriptId = try await harness.seedTranscript(transcript)
         let rows = try await harness.transcripts.segments(transcriptId: transcriptId)
         let correctedSegmentId = rows[0].id
