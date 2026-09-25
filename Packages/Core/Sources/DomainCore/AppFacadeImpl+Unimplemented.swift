@@ -1,8 +1,9 @@
-//  AppFacadeImpl — команды, не реализованные этим срезом MEE-420 части 3. См. заголовок
+//  AppFacadeImpl — команды, не реализованные этим срезом MEE-420 части 4. См. заголовок
 //  `AppFacadeImpl.swift`: каждая ждёт своего PR по группе плана MEE-410, названной в
 //  сообщении отказа. Разведено в отдельный файл, чтобы группа, чья реализация появится
-//  следующей, меняла один метод в одном файле, не трогая остальные ~22. Группа В (К10-К12,
-//  startRecording/stopRecording) реализована — см. `AppFacadeImpl+Recording.swift`.
+//  следующей, меняла один метод в одном файле, не трогая остальные ~21. Группа В (К10-К12,
+//  startRecording/stopRecording) реализована — см. `AppFacadeImpl+Recording.swift`. Группа Г
+//  (К13-К14, editSegmentText) реализована — см. `AppFacadeImpl.swift`.
 //
 //  Модуль: domain-core · Владелец: DEV-2 · Слой: домен
 
@@ -74,7 +75,7 @@ extension AppFacadeImpl {
         throw notImplemented("retryJob(id:)", group: "Н (команды обработки)")
     }
 
-    // MARK: - Команды правки транскрипта (группы Г, Д, Е, Ф)
+    // MARK: - Команды правки транскрипта (группы Д, Е, Ф — Г реализована, см. AppFacadeImpl.swift)
 
     public func assignSpeaker(transcriptId: UUID, cluster: Int, personId: UUID) async throws {
         throw notImplemented("assignSpeaker(transcriptId:cluster:personId:)", group: "Д (правка спикеров)")
@@ -90,10 +91,6 @@ extension AppFacadeImpl {
 
     public func clearSpeaker(transcriptId: UUID, cluster: Int) async throws {
         throw notImplemented("clearSpeaker(transcriptId:cluster:)", group: "Д (правка спикеров)")
-    }
-
-    public func editSegmentText(segmentId: Int64, text: String) async throws {
-        throw notImplemented("editSegmentText(segmentId:text:)", group: "Г (editSegmentText)")
     }
 
     public func renamePerson(personId: UUID, displayName: String) async throws {
