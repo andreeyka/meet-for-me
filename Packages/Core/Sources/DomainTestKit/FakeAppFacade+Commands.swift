@@ -61,7 +61,7 @@ extension FakeAppFacade {
     }
 
     public func configureConnector(sourceId: CalendarSourceId, settings: Data) async throws {
-        record("configureConnector(sourceId:settings:)", [sourceId.rawValue])
+        record("configureConnector(sourceId:settings:)", [sourceId.rawValue, settings.base64EncodedString()])
         if let forcedError { throw forcedError }
     }
 
@@ -103,7 +103,7 @@ extension FakeAppFacade {
     }
 
     public func saveProfile(_ profile: TranscriptionProfile) async throws {
-        record("saveProfile(_:)", [profile.id])
+        record("saveProfile(_:)", [String(describing: profile)])
         if let forcedError { throw forcedError }
     }
 
@@ -193,7 +193,7 @@ extension FakeAppFacade {
     // MARK: - Настройки
 
     public func updateSettings(_ settings: AppSettings) async throws {
-        record("updateSettings(_:)", [])
+        record("updateSettings(_:)", [String(describing: settings)])
         if let forcedError { throw forcedError }
         settingsValue = settings
     }

@@ -259,16 +259,21 @@ final class SessionMachineEntryTests: XCTestCase {
         let after = try unwrap(await stand.machine.session(id: live.sessionId))
         XCTAssertNil(after.recordingId, "инвариант 5: до `recording` `recordingId == nil`")
         XCTAssertNil(after.target, "цель сброшена вместе со входом")
+        let rawAfter = await stand.machine.store[live.sessionId]
+        XCTAssertNil(rawAfter?.lastTargetObservedAt, "lastTargetObservedAt тоже сброшен (приёмка `2cf96755`)")
         await stand.machine.stop()
     }
 
     /// `capture.stop()` вправе отказать сам при откате — это не меняет исход:
-    /// `recordingDidStop()` зовётся всё равно, ровно один раз.
+    /// `recordingDidStop()` зовётся всё равно, ровно один раз, `capture.stop()` зван ровно
+    /// один раз, и наружу идёт исходная ошибка перехода, а не `.notRunning` от `.stop()`
+    /// (приёмка `2cf96755`).
     func test_mee423_enterRecordingRollbackCallsRecordingDidStopEvenWhenCaptureStopFails() async throws {
         let (stand, _) = try await standing(policy: .auto, at: -60)
         stand.allowCaptureStart()
         stand.capture.failStop(with: .notRunning)
-        stand.meetings.fail(with: .io(message: "запись перехода не удалась"), on: .setStatus)
+        let failure = StorageError.io(message: "запись перехода не удалась")
+        stand.meetings.fail(with: failure, on: .setStatus)
         let live = try unwrap(await stand.machine.sessions().first)
         let target = ProcessGroup(appKey: "us.zoom.xos", pids: [501], observedAt: moment.addingTimeInterval(-60))
 
@@ -278,12 +283,18 @@ final class SessionMachineEntryTests: XCTestCase {
                 now: moment.addingTimeInterval(-60)
             )
             XCTFail("ожидался отказ записи перехода")
+        } catch let error as StorageError {
+            XCTAssertEqual(error, failure, "наружу — исходная ошибка перехода, не `.notRunning` от capture.stop()")
         } catch {
-            // ожидаемо — исходная ошибка перехода, проверена отдельным тестом выше.
+            XCTFail("неожиданный тип ошибки: \(error)")
         }
 
         XCTAssertEqual(
             stand.queue.recordingDidStopCallCount, 1, "вызван даже когда capture.stop() бросил"
+        )
+        XCTAssertEqual(
+            stand.capture.callCount(of: { if case .stop = $0 { return true }; return false }), 1,
+            "capture.stop() зван ровно один раз, несмотря на собственный отказ"
         )
         await stand.machine.stop()
     }

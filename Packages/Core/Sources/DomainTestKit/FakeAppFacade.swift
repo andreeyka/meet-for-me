@@ -18,15 +18,25 @@
 //  «заставить любую команду бросить любую AppFacadeError» без слова «одновременно» или
 //  «разные ошибки разным методам» — сценарий теста ставит фасад в одно отказное
 //  состояние зараз, тем же приёмом, каким `forcedError` устроен у более простых фейков
-//  этого пакета (`FakeAttributionPort` и подобные).
+//  этого пакета (`FakeAttributionPort` и подобные). `settingsError` — исключение,
+//  добавленное приёмкой РП по PR #141 (`111b061b`): фикстура «настройка не читается»
+//  до этого ставила общий `forcedError`, из-за чего отказывали все команды разом, а не
+//  только `settings()`.
 //
 //  Значения чтения (`AppStatus`, `PermissionSnapshot`, `AppSettings`) обязательны при
 //  создании: `AppSettings.slice1Defaults` не объявлен (см. `AppSettings.swift`), фейку
 //  неоткуда взять их сам, и он не имеет права изобретать их — состояние целиком задаёт тест.
 //
-//  Разведён на этот файл (состояние, чтение, события) и `FakeAppFacade+Commands.swift`
-//  (все методы-команды) — по объёму (`type_body_length`/`file_length`), не по смыслу,
-//  тем же приёмом, что `GRDBMeetingRepositoryWrite.swift`/`InMemoryTranscriptRepositoryCorrections.swift`.
+//  ВСЕ ИЗМЕНЯЕМЫЕ ПОЛЯ — ПОД ЗАМКОМ (приёмка РП по PR #141, `111b061b`, п.4): класс
+//  `@unchecked Sendable`, и `app-ui`/обработчики задач читают состояние из задач, отличных
+//  от той, что его настраивает. Хранение вынесено в приватные поля, публичный доступ идёт
+//  через вычисляемые свойства с `locked { }` на обеих сторонах — тем же приёмом, каким
+//  `FakeJobQueue` уже защищает свои читаемые тестом журналы.
+//
+//  Разведён на три файла по объёму (`type_body_length`/`file_length`), не по смыслу, тем
+//  же приёмом, что `GRDBMeetingRepositoryWrite.swift`/`InMemoryTranscriptRepositoryCorrections.swift`:
+//  этот файл — хранение и состояние чтения; `FakeAppFacade+Values.swift` — вычисляемые
+//  свойства результатов команд; `FakeAppFacade+Commands.swift` — все методы-команды.
 
 import Foundation
 import DomainCore
@@ -60,49 +70,49 @@ public final class FakeAppFacade: AppFacade, @unchecked Sendable {
 
     let lock = NSLock()
 
-    // MARK: - Состояние чтения (задаётся тестом)
+    // MARK: - Состояние чтения (хранение; публичный доступ — `FakeAppFacade+Values.swift`)
 
-    public var statusValue: AppStatus
-    public var meetingsValue: [MeetingListItem] = []
-    public var meetingDetailValue: MeetingDetail?
-    public var transcriptValue: TranscriptView?
-    public var latestTranscriptValue: TranscriptView?
-    public var searchHitsValue: [SearchHit] = []
-    public var permissionSnapshotValue: PermissionSnapshot
-    public var modelsValue: [ModelDescriptor] = []
-    public var modelStateValue: ModelState = .available
-    public var profilesValue: [TranscriptionProfile] = []
-    public var jobsValue: [Job] = []
-    public var settingsValue: AppSettings
+    var storedStatusValue: AppStatus
+    var storedMeetingsValue: [MeetingListItem] = []
+    var storedMeetingDetailValue: MeetingDetail?
+    var storedTranscriptValue: TranscriptView?
+    var storedLatestTranscriptValue: TranscriptView?
+    var storedSearchHitsValue: [SearchHit] = []
+    var storedPermissionSnapshotValue: PermissionSnapshot
+    var storedModelsValue: [ModelDescriptor] = []
+    var storedModelStateValue: ModelState = .available
+    var storedProfilesValue: [TranscriptionProfile] = []
+    var storedJobsValue: [Job] = []
+    var storedSettingsValue: AppSettings
 
-    // MARK: - Возвращаемые значения команд (задаются тестом, разумные значения по умолчанию)
+    // MARK: - Возвращаемые значения команд (хранение; разумные значения по умолчанию)
 
-    var startRecordingResult = UUID()
-    var syncCalendarsResult: [CalendarSyncResult] = []
-    var beginConnectorAuthResult = AuthChallenge(
+    var storedStartRecordingResult = UUID()
+    var storedSyncCalendarsResult: [CalendarSyncResult] = []
+    var storedBeginConnectorAuthResult = AuthChallenge(
         authUrl: URL(string: "https://example.com/oauth")!, redirectScheme: "meetforme"
     )
-    var completeConnectorAuthResult: String?
-    var connectorSettingsSchemaResult = Data()
-    var connectorHealthTemplate = ConnectorHealthTemplate()
-    var requestPermissionResult: PermissionRequestOutcome = .granted
-    var retranscribeResult = UUID()
-    var retryJobResult = UUID()
-    var createPersonAndAssignResult = UUID()
-    var exportResult = URL(fileURLWithPath: "/tmp/export")
+    var storedCompleteConnectorAuthResult: String?
+    var storedConnectorSettingsSchemaResult = Data()
+    var storedConnectorHealthTemplate = ConnectorHealthTemplate()
+    var storedRequestPermissionResult: PermissionRequestOutcome = .granted
+    var storedRetranscribeResult = UUID()
+    var storedRetryJobResult = UUID()
+    var storedCreatePersonAndAssignResult = UUID()
+    var storedExportResult = URL(fileURLWithPath: "/tmp/export")
 
     // MARK: - Управление из теста
 
-    /// Заставить любую команду бросить эту ошибку; `nil` снимает отказ.
-    public var forcedError: AppFacadeError?
+    var storedForcedError: AppFacadeError?
+    var storedSettingsError: AppFacadeError?
 
     var recordedCommandsStorage: [FakeAppFacadeCommand] = []
     var continuations: [AsyncStream<AppEvent>.Continuation] = []
 
     public init(status: AppStatus, permissions: PermissionSnapshot, settings: AppSettings) {
-        self.statusValue = status
-        self.permissionSnapshotValue = permissions
-        self.settingsValue = settings
+        self.storedStatusValue = status
+        self.storedPermissionSnapshotValue = permissions
+        self.storedSettingsValue = settings
     }
 
     func locked<Value>(_ body: () -> Value) -> Value {
@@ -174,7 +184,7 @@ public final class FakeAppFacade: AppFacade, @unchecked Sendable {
         return jobsValue
     }
     public func settings() async throws -> AppSettings {
-        if let forcedError { throw forcedError }
+        if let error = locked({ storedSettingsError ?? storedForcedError }) { throw error }
         return settingsValue
     }
 
