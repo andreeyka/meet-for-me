@@ -176,7 +176,8 @@ final class AppFacadeImplReadModelsTests: XCTestCase {
         // остаются nil на своей строке с момента save(), тем же приёмом, что и любая другая
         // ещё не атрибутированная запись.
 
-        let view = try XCTUnwrap(await facade.transcript(id: header.id))
+        let maybeView = try await facade.transcript(id: header.id)
+        let view = try XCTUnwrap(maybeView)
 
         let known = try XCTUnwrap(view.speakers.first { $0.cluster == 0 })
         XCTAssertEqual(known.displayName, "Иван Петров")
@@ -220,7 +221,8 @@ final class AppFacadeImplReadModelsTests: XCTestCase {
             )
         ])
 
-        let view = try XCTUnwrap(await facade.transcript(id: header.id))
+        let maybeView = try await facade.transcript(id: header.id)
+        let view = try XCTUnwrap(maybeView)
 
         let speaker = try XCTUnwrap(view.speakers.first)
         XCTAssertTrue(speaker.isUncertain, "confidence ниже confirmedConfidenceMin")
