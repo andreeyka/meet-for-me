@@ -34,15 +34,34 @@ public actor StdioCalendarConnector: CalendarConnector {
         self.transport = transport
     }
 
+    /// К1 (MEE-386): `protocolVersion` — та же форма сравнения, что манифест (К53,
+    /// `RPCProtocolVersion.majorIsCompatible`, `PluginManifest.swift`) — совпадение `MAJOR`
+    /// обязательно, `MINOR` нет. Несовпадение `MAJOR` — `protocolViolation`, до того как
+    /// `capabilities`/`plugin` вообще возвращаются вызывающей стороне: `ensureInitialized`
+    /// (`CalendarPortImpl.swift`) не кеширует `capabilities[source]` при брошенной ошибке,
+    /// так что коннектор остаётся неинициализированным и не используется дальше в этом
+    /// цикле — то же самое, чем уже становится любая другая ошибка `initialize` сегодня, без
+    /// отдельного «навсегда чёрного списка», которого контракт не называет.
     public func initialize(
         host: ConnectorHostServices, connectorInstanceId: String
     ) async throws -> (PluginInfo, ConnectorCapabilities) {
         self.host = host
         struct Params: Encodable { let connectorInstanceId: String }
-        struct Result: Decodable { let plugin: PluginInfo; let capabilities: ConnectorCapabilities }
+        struct Result: Decodable {
+            let plugin: PluginInfo
+            let protocolVersion: String
+            let capabilities: ConnectorCapabilities
+        }
         let result: Result = try await call(
             method: "initialize", params: Params(connectorInstanceId: connectorInstanceId)
         )
+        let supportedMajor = RPCHostVersioning.supportedProtocolMajor
+        guard RPCProtocolVersion.majorIsCompatible(result.protocolVersion, supportedMajor: supportedMajor) else {
+            throw ConnectorError.protocolViolation(
+                message: "protocolVersion несовместим: получено \(result.protocolVersion), "
+                    + "нужен MAJOR \(supportedMajor)"
+            )
+        }
         return (result.plugin, result.capabilities)
     }
 
