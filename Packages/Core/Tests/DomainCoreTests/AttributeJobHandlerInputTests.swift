@@ -194,7 +194,7 @@ final class AttributeJobHandlerInputTests: XCTestCase {
 
     func test_k33_voiceProfilesEnabledPassedThroughAndGatesProfilesFetch() async throws {
         let disabled = AttributeHarness()
-        disabled.voiceProfilesEnabledValue = false
+        disabled.appFacade.settingsValue = AttributeFixture.settings(voiceProfilesEnabled: false)
         let transcript = try AttributeFixture.transcript(segments: [
             try AttributeFixture.segment(words: [try AttributeFixture.word("hi")])
         ])
@@ -208,7 +208,7 @@ final class AttributeJobHandlerInputTests: XCTestCase {
         )
 
         let enabled = AttributeHarness()
-        enabled.voiceProfilesEnabledValue = true
+        enabled.appFacade.settingsValue = AttributeFixture.settings(voiceProfilesEnabled: true)
         let me = AttributeFixture.person(name: "Me", email: "me@example.com", isMe: true)
         enabled.persons.seed([me])
         let profile = SpeakerProfile(

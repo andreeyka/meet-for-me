@@ -11,15 +11,16 @@
 //  этого файла: `struct`, а не `class`, одна зависимость на порт плюс репозитории,
 //  `guard case` на payload первой строкой `run(_:progress:)`.
 //
-//  СТРОКА, ПОСТОЯННАЯ (решение РП, приёмка PR #136, 03:15 UTC, вариант «б» вопроса из
-//  Linear-комментария 01:48 UTC): §7 называет единственный источник `voiceProfilesEnabled` —
-//  `AppFacade.settings()` (C-016), но сам `AppFacade` в этой задаче не объявляется — заведена
-//  отдельная задача на его реализацию. Источник здесь — простое замыкание, а не тип с
-//  именем `AppFacade`, чтобы не столкнуться с будущим объявлением. К33 (сама передача флага
-//  и гейт `profiles`) построен и проверен этим замыканием; К49 (`AppFacadeError` →
-//  `JobOutcome` по случаю `settingsUnreadable`/`underlying`) сюда не входит — любая ошибка
-//  замыкания сегодня уходит через общий `catch` ниже как `.permanentFailure`. Замену на
-//  настоящий `AppFacade.settings()` и проверку К49 несёт задача на реализацию `AppFacade`.
+//  ХВОСТ MEE-415 ЗАКРЫТ MEE-420: §7 называет единственный источник `voiceProfilesEnabled` —
+//  `AppFacade.settings()` (C-016) — теперь зависимость на настоящий `AppFacade`, не на
+//  временное замыкание. К33 (передача флага, гейт `profiles`) — построение входа ниже;
+//  К49 (`AppFacadeError` → `JobOutcome` по случаю `settingsUnreadable`/`underlying`) — свой
+//  `catch` в `run(_:progress:)`: `settingsUnreadable` — данные не читаются, повтор с тем же
+//  ключом даст тот же результат, `permanentFailure`; `underlying` с кодом `storage.io` —
+//  переходный отказ хранилища, тот же довод и та же лестница, что у `StorageError.io`
+//  ниже, `retry(after: 30)`; любой другой случай `AppFacadeError` из `settings()` контракт
+//  не предусматривает (§2.1 называет только эти два пути) — `permanentFailure` как более
+//  безопасный исход неизвестного случая.
 //
 //  ПОРЯДОК ПОСТРОЕНИЯ ВХОДА здесь не совпадает построчно с порядком перечисления полей
 //  в §7: `embeddingModelVersion` вычислен раньше `profiles` (а не позже, как в тексте),
@@ -41,7 +42,7 @@ public struct AttributeJobHandler: JobHandler {
     private let meetings: MeetingRepository
     private let persons: PersonRepository
     private let speakerProfiles: SpeakerProfileRepository
-    private let voiceProfilesEnabled: @Sendable () async throws -> Bool
+    private let appFacade: AppFacade
 
     public init(
         port: AttributionPort,
@@ -49,14 +50,14 @@ public struct AttributeJobHandler: JobHandler {
         meetings: MeetingRepository,
         persons: PersonRepository,
         speakerProfiles: SpeakerProfileRepository,
-        voiceProfilesEnabled: @Sendable @escaping () async throws -> Bool
+        appFacade: AppFacade
     ) {
         self.port = port
         self.transcripts = transcripts
         self.meetings = meetings
         self.persons = persons
         self.speakerProfiles = speakerProfiles
-        self.voiceProfilesEnabled = voiceProfilesEnabled
+        self.appFacade = appFacade
     }
 
     public func run(
@@ -73,6 +74,8 @@ public struct AttributeJobHandler: JobHandler {
             return .success
         } catch let failure as InputBuildFailure {
             return .permanentFailure(error: failure.message)
+        } catch let error as AppFacadeError {
+            return Self.outcome(for: error)
         } catch let error as AttributionError {
             // §7 дословно: все шесть случаев — данные или согласованность, не сеть и не
             // диск, повтор с тем же входом дал бы тот же результат. `.retry` не заведён.
@@ -113,6 +116,23 @@ public struct AttributeJobHandler: JobHandler {
         }
     }
 
+    /// К49 (§2.1 C-016 дословно): `settings()` называет ровно два пути отказа.
+    /// `settingsUnreadable` — байты значения не разбираются в объявленный тип; повтор с
+    /// той же строкой базы даёт тот же результат, `permanentFailure`. `underlying` с
+    /// кодом `storage.io` — переходный отказ хранилища под `settings()`, тот же довод и
+    /// та же лестница C-013 §5, что у `StorageError.io`, `retry(after: 30)`. Любой другой
+    /// случай `AppFacadeError` контракт для `settings()` не называет — `permanentFailure`.
+    private static func outcome(for error: AppFacadeError) -> JobOutcome {
+        switch error {
+        case .settingsUnreadable:
+            return .permanentFailure(error: "\(error)")
+        case .underlying(let view) where view.code == "storage.io":
+            return .retry(after: 30, error: view.code)
+        default:
+            return .permanentFailure(error: "\(error)")
+        }
+    }
+
     // MARK: - Построение AttributionInput (§7)
 
     private func buildInput(transcriptId: UUID, meetingId: UUID?) async throws -> AttributionInput {
@@ -130,7 +150,7 @@ public struct AttributeJobHandler: JobHandler {
         if let me { nameFormPersonIds.insert(me.id) }
         let nameForms = try await persons.nameForms(personIds: Array(nameFormPersonIds))
 
-        let voiceEnabled = try await voiceProfilesEnabled()
+        let voiceEnabled = try await appFacade.settings().voiceProfilesEnabled
         let profiles: [SpeakerProfile]
         if voiceEnabled {
             profiles = try await speakerProfiles.profiles(
