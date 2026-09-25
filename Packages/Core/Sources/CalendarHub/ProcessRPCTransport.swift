@@ -115,16 +115,31 @@ public actor ProcessRPCTransport: RPCTransport {
         }
     }
 
+    /// `withTaskCancellationHandler` — голый `withCheckedThrowingContinuation` не отвечает на
+    /// отмену вызывающей задачи сам по себе (возврат РП, приёмка PR #138: тест-обвязка,
+    /// гоняющая эту функцию наперегонки с тайм-аутом через `TaskGroup.cancelAll()`, иначе не
+    /// смогла бы её реально прервать — отмена дошла бы до задачи, но не до уже висящего
+    /// продолжения). `onCancel` не изолирован актором — хопает туда отдельным `Task`.
     public func receive() async throws -> String {
         if let line = try extractLine() { return line }
         if let terminated { throw terminated }
-        return try await withCheckedThrowingContinuation { continuation in
-            pendingReceive = continuation
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                pendingReceive = continuation
+            }
+        } onCancel: {
+            Task { await self.failPendingReceive(CancellationError()) }
         }
     }
 
-    /// SIGTERM и закрытие каналов; возвращается, только когда процесс действительно вышел —
-    /// через `terminationHandler` (МЕЕ-417: «не на стенных часах»), не через сон по времени.
+    /// SIGTERM и закрытие каналов; возвращается, когда процесс вышел — по EOF `stdout`
+    /// (`handleStdout`, тот же путь, что и обычная смерть процесса) или по
+    /// `terminationHandler`, какой из двух сработает первым, плюс ограниченный сторож
+    /// (`waitForExit`) на случай, если на конкретной платформе не сработает ни один
+    /// (возврат РП: Linux, приёмка PR #138, — CI зависла именно здесь, `terminationHandler`
+    /// swift-corelibs-foundation исторически ненадёжен; EOF `stdout` — ядерный, не
+    /// Foundation-специфичный сигнал, сторож — конечная подстраховка, не политика тайм-аутов
+    /// «Поведения» C-006 §5.2, которую и запрещает «не на стенных часах»).
     /// Не часть `RPCTransport` (протокол не называет остановку процесса — Seams.swift, «форма
     /// — решение этой задачи»): вызывающая сторона зовёт его отдельно от
     /// `CalendarConnector.shutdown()` (тот шлёт JSON-RPC уведомление тем же транспортом,
@@ -159,7 +174,7 @@ public actor ProcessRPCTransport: RPCTransport {
 
     private func handleStdout(_ data: Data) {
         guard !data.isEmpty else {
-            failPendingReceive(ProcessRPCTransportError(description: "плагин закрыл stdout"))
+            markGone(ProcessRPCTransportError(description: "плагин закрыл stdout"))
             return
         }
         // `data.contains(0x0A)` — на самом ПРИШЕДШЕМ куске, до `append`, не на всём `buffer`
@@ -183,8 +198,15 @@ public actor ProcessRPCTransport: RPCTransport {
     }
 
     private func handleTermination(status: Int32) {
-        let error = ProcessRPCTransportError(description: "процесс плагина завершился, код \(status)")
-        terminated = error
+        markGone(ProcessRPCTransportError(description: "процесс плагина завершился, код \(status)"))
+    }
+
+    /// Общая точка «процесса больше нет» для обоих независимых сигналов (EOF `stdout` в
+    /// `handleStdout`, `terminationHandler` в `init`) — какой бы ни сработал первым, отказывает
+    /// ожидающий `receive()` и снимает `waitForExit()` в `close()`. Идемпотентна: второй сигнал
+    /// (обычно оба приходят почти одновременно) видит уже пустые `pendingExits`/`pendingReceive`.
+    private func markGone(_ error: ProcessRPCTransportError) {
+        if terminated == nil { terminated = error }
         failPendingReceive(error)
         for continuation in pendingExits { continuation.resume() }
         pendingExits.removeAll()
@@ -196,10 +218,24 @@ public actor ProcessRPCTransport: RPCTransport {
         continuation.resume(throwing: error)
     }
 
+    /// Сторож на 5 секунд — конечная подстраховка на случай, если ни EOF `stdout`, ни
+    /// `terminationHandler` не сработают на конкретной платформе (не политика тайм-аутов
+    /// «Поведения», см. докстринг `close()`): без него `close()` рисковал бы зависнуть
+    /// навсегда, если оба сигнала почему-то молчат.
     private func waitForExit() async {
         if !process.isRunning { return }
+        let watchdog = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(5))
+            await self?.forceResolveExits()
+        }
         await withCheckedContinuation { continuation in
             pendingExits.append(continuation)
         }
+        watchdog.cancel()
+    }
+
+    private func forceResolveExits() {
+        for continuation in pendingExits { continuation.resume() }
+        pendingExits.removeAll()
     }
 }
