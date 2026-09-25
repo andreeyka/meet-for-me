@@ -88,8 +88,12 @@ enum Fixture {
         return (transcript, segmentIds)
     }
 
+    /// Дефолт детерминирован (MEE-411, хвост приёмки #130): `UUID()` в значении по умолчанию
+    /// делал `XCTAssertNotEqual` на двух независимо построенных `AttributionResult` зелёным
+    /// по построению — оба несли разный случайный `transcriptId`, и содержимое можно было не
+    /// проверять вовсе. Тест, которому нужен другой `transcriptId`, передаёт его явно.
     static func input(
-        transcriptId: UUID = UUID(),
+        transcriptId: UUID = Fixture.uuid(0),
         transcript: Transcript,
         segmentIds: [Int64],
         attendees: [PersonRecord] = [],

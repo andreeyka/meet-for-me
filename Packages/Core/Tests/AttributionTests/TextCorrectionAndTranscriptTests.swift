@@ -40,6 +40,24 @@ final class TextCorrectionAndTranscriptTests: XCTestCase {
             "\(type(of: $1))" == "Transcript"
         }
         XCTAssertFalse(hasTranscriptField, "AttributionResult не обязан и не должен нести Transcript")
+
+        // Мех.-часть (MEE-411, хвост приёмки #130): сигнатуры всех трёх методов протокола, ни
+        // один не принимает и не возвращает `Transcript`. Строки — та же дословная копия
+        // подписи, что несёт `PortContractExpectations.attributionPort` (DomainCoreTests,
+        // MEE-289), которую `PortDeclarationTests` уже сверяет с реальным исходником
+        // `AttributionPort.swift`; здесь она проверяется на отсутствие подстроки `Transcript`,
+        // не переписывается заново. `AttributionTests` не видит `DomainCoreTests` (разные
+        // таргеты SPM) — отсюда копия, не импорт.
+        let attributionPortSignatures = [
+            "func attribute(_ input: AttributionInput, thresholds: AttributionThresholds) async throws " +
+            "-> AttributionResult",
+            "func confirm(transcriptId: UUID, cluster: Int, personId: UUID, input: AttributionInput) " +
+            "async throws -> AttributionResult",
+            "func reject(transcriptId: UUID, cluster: Int, input: AttributionInput) async throws -> AttributionResult"
+        ]
+        for signature in attributionPortSignatures {
+            XCTAssertFalse(signature.contains("Transcript"), "\(signature) не должна принимать/возвращать Transcript")
+        }
     }
 
     func test_k15_lowConfidenceWordOnlyCandidateForCorrection() async throws {
