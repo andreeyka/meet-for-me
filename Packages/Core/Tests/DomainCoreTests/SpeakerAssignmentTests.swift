@@ -26,13 +26,17 @@ final class SpeakerAssignmentTests: XCTestCase {
     private func makeFixture() async throws -> Fixture {
         let repositories = InMemoryRepositories()
         let recordingId = RecordingManifestFixtures.hourlyTwoChannels.recordingId
+        // По одному слову на сегмент — К15/К16 ссылаются на wordIndex 0 через TextCorrection,
+        // а applyTextCorrections проверяет его в границах words самого сегмента.
+        let wordA = try Transcript.Word(startMs: 0, endMs: 800, text: "слово", confidence: nil, original: nil)
+        let wordB = try Transcript.Word(startMs: 800, endMs: 1600, text: "слово", confidence: nil, original: nil)
         let segmentA = try Transcript.Segment(
             startMs: 0, endMs: 800, channel: .system, speakerCluster: 0,
-            text: "слова кластера А", textOriginal: nil, textConfidence: nil, words: []
+            text: "слова кластера А", textOriginal: nil, textConfidence: nil, words: [wordA]
         )
         let segmentB = try Transcript.Segment(
             startMs: 800, endMs: 1600, channel: .system, speakerCluster: 1,
-            text: "слова кластера Б", textOriginal: nil, textConfidence: nil, words: []
+            text: "слова кластера Б", textOriginal: nil, textConfidence: nil, words: [wordB]
         )
         // Инв. 9: каждый speakerCluster сегмента обязан присутствовать среди speakers.
         // embeddingModelVersion непуст хотя бы у одного — иначе AttributionSupport.buildInput
