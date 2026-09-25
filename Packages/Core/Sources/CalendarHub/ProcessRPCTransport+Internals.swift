@@ -28,7 +28,6 @@ extension ProcessRPCTransport {
 
     func handleStdout(_ data: Data) {
         guard !data.isEmpty else {
-            debugLog("stdout EOF observed") // DEBUG-TEMP
             markGone(ProcessRPCTransportError(description: "плагин закрыл stdout"))
             return
         }
@@ -78,7 +77,6 @@ extension ProcessRPCTransport {
     /// `handleStdout`, и сам ответ был бы молча потерян (`handleStdout` просто отбрасывает
     /// извлечённую строку, если `pendingReceive` уже `nil`).
     func handleTermination(status: Int32) {
-        debugLog("terminationHandler fired, status=\(status)") // DEBUG-TEMP
         recordTermination(ProcessRPCTransportError(description: "процесс плагина завершился, код \(status)"))
     }
 
@@ -93,9 +91,6 @@ extension ProcessRPCTransport {
     /// Идемпотентна: `markGone` тоже зовёт её первым делом, повторный вызов видит уже пустые
     /// `pendingExits`/уже выставленный `terminated`.
     func recordTermination(_ error: ProcessRPCTransportError) {
-        if !pendingExits.isEmpty { // DEBUG-TEMP
-            debugLog("recordTermination(): resolving pendingExits via real signal")
-        }
         if terminated == nil { terminated = error }
         for continuation in pendingExits { continuation.resume() }
         pendingExits.removeAll()
@@ -125,17 +120,14 @@ extension ProcessRPCTransport {
     /// «Поведения», см. докстринг `close()`): без него `close()` рисковал бы зависнуть
     /// навсегда, если оба сигнала почему-то молчат.
     func waitForExit() async {
-        if !process.isRunning {
-            debugLog("waitForExit(): already not running, returning immediately") // DEBUG-TEMP
-            return
-        }
+        if !process.isRunning { return }
         let watchdog = Task { [weak self] in
             try? await Task.sleep(for: .seconds(5))
             // `try?` глотает `CancellationError` молча — без проверки `isCancelled` эта задача
-            // звала бы `forceResolveExits()` СРАЗУ после отмены (`watchdog.cancel()` ниже),
-            // даже если реальный сигнал разрешил ожидание за миллисекунды (DEBUG-TEMP-прогон,
-            // macOS, `472abec`→`34c4804`: именно так и происходило — безобидно, `pendingExits`
-            // уже пуст к этому моменту, но диагностика вводила в заблуждение).
+            // звала бы `forceResolveExits()` СРАЗУ после отмены (`watchdog.cancel()` ниже), даже
+            // если реальный сигнал разрешил ожидание за миллисекунды: безобидно само по себе
+            // (`pendingExits` уже пуст к этому моменту), но неверно по смыслу — эта задача не
+            // «сторож сработал», а отменённый и без того ничего не значащий довесок.
             guard !Task.isCancelled else { return }
             await self?.forceResolveExits()
         }
@@ -146,7 +138,6 @@ extension ProcessRPCTransport {
     }
 
     func forceResolveExits() {
-        debugLog("forceResolveExits(): 5s watchdog fired, no real signal arrived in time") // DEBUG-TEMP
         for continuation in pendingExits { continuation.resume() }
         pendingExits.removeAll()
     }

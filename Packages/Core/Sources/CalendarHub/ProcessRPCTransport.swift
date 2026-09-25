@@ -66,10 +66,6 @@ public actor ProcessRPCTransport: RPCTransport {
     var pendingExits: [CheckedContinuation<Void, Never>] = []
     var terminated: ProcessRPCTransportError?
     let stdoutContinuation: AsyncStream<Data>.Continuation
-    // DEBUG-TEMP (диагностика возврата РП 06:10 UTC, п.2 — снятие раннего nil'а обработчиков
-    // НЕ изменило тайминг на Linux вовсе, гипотеза требует проверки живым CI-прогоном, локального
-    // тулчейна нет): убрать вместе со всеми debugLog() ниже после того, как причина найдена.
-    let createdAt = Date()
 
     /// Один раз на процесс хоста, а не на транспорт: `signal()` — глобальная настройка, не
     /// свойство одного дескриптора (переносимого `F_SETNOSIGPIPE`, доступного только на
@@ -229,56 +225,45 @@ public actor ProcessRPCTransport: RPCTransport {
     /// какой сработает первым, см. `recordTermination`), плюс ограниченный сторож
     /// (`waitForExit`) на случай, если на конкретной платформе не сработает ни один.
     ///
-    /// На Linux был замерен стабильный 5с сторож вместо настоящего сигнала на
-    /// `close`/`roundTrip`/`manifest`/`secondReceive`-тестах — измерено ДВАЖДЫ: сначала
-    /// списано на утечку родительской копии конца канала (`closeParentSideOfPipes`, см. `init`)
-    /// — фикс не устранил симптом на повторном замере. Настоящая причина (возврат РП, повторная
-    /// приёмка PR #138, п. 2): этот метод сам снимал `readabilityHandler` ДО `terminate()`,
-    /// отключая тем самым единственный надёжный путь (EOF) и оставляя только
-    /// `terminationHandler`, ненадёжный по времени на Linux. Обработчики больше не снимаются
-    /// заранее — см. комментарий на месте снятия ниже. Сторож остаётся в любом случае —
-    /// конечная подстраховка, не политика тайм-аутов «Поведения» C-006 §5.2, которую и запрещает
-    /// «не на стенных часах»; корректность не страдает от его присутствия, сработай он хоть раз
-    /// — только (возможная) латентность.
+    /// Известное ограничение окружения CI на Linux (`swift:5.10-jammy`, НЕ прод — прод только
+    /// macOS, C-006 §7): `SIGTERM` реального дочернего процесса `cat`/`sh` там НЕ убивает его
+    /// вовсе — убивает только `SIGKILL` (эскалация ниже), давая стабильные ~5с (сам сторож
+    /// `waitForExit`) на тестах, которые останавливают ещё живой процесс. Три версии причины
+    /// проверены и опровергнуты по факту прогона CI, не оставлены гипотезой: (1) утечка
+    /// родительской копии конца канала (`closeParentSideOfPipes`, см. `init`) — исправлена
+    /// отдельно, симптом остался; (2) снятие `readabilityHandler` в этом методе ДО `terminate()`
+    /// — перенесено на после `waitForExit()`, симптом остался; (3) маска заблокированных/
+    /// игнорируемых сигналов ребёнка, наследуемая через `exec` — проверено печатью
+    /// `/proc/self/status` изнутри ребёнка, SIGTERM там НЕ заблокирован и НЕ игнорируется.
+    /// `terminationHandler`/EOF при этом срабатывают МГНОВЕННО на настоящий сигнал что на
+    /// macOS, что на Linux (после реального `SIGKILL`) — детектирование смерти процесса в этом
+    /// файле работает верно на обеих платформах; сама доставка `SIGTERM` живому ребёнку —
+    /// свойство конкретного контейнера CI, не этого транспорта. Сторож — конечная подстраховка,
+    /// не политика тайм-аутов «Поведения» C-006 §5.2, которую и запрещает «не на стенных
+    /// часах»; корректность не страдает от его присутствия — только (на этом конкретном CI)
+    /// латентность порядка 5с на остановку живого плагина, которой в проде на macOS нет.
     /// Не часть `RPCTransport` (протокол не называет остановку процесса — Seams.swift, «форма
     /// — решение этой задачи»): вызывающая сторона зовёт его отдельно от
     /// `CalendarConnector.shutdown()` (тот шлёт JSON-RPC уведомление тем же транспортом,
     /// этот метод сам процесс не трогает).
     public func close() async {
-        debugLog("close() begin, isRunning=\(process.isRunning)")
         if process.isRunning {
             process.terminate()
-            debugLog("terminate() (SIGTERM) sent")
             await waitForExit()
-            debugLog("first waitForExit() returned, isRunning=\(process.isRunning)")
             if process.isRunning {
                 kill(process.processIdentifier, SIGKILL)
-                debugLog("SIGKILL sent")
                 await waitForExit()
-                debugLog("second waitForExit() returned, isRunning=\(process.isRunning)")
             }
         }
-        // ПОСЛЕ ожидания выхода, не до (возврат РП, повторная приёмка PR #138, п. 2): сняв
-        // обработчик здесь заранее, `close()` сам отключал единственный надёжный путь
-        // детектирования смерти процесса (EOF `stdout`/`stderr`) и оставлял только
-        // `terminationHandler`, исторически ненадёжный по времени на Linux — отсюда стабильные
-        // 5с (ровно длительность сторожа `waitForExit`) на `roundTrip`/`close`/`manifest`/
-        // `secondReceive`. Обработчик и так снимает сам себя на EOF (`installReadabilityHandler`)
-        // — здесь это просто финальная подчистка на случай, если EOF по какой-то причине не
-        // случился (сторож всё равно уже разрешил `waitForExit()` к этому моменту).
+        // Обработчик и так снимает сам себя на EOF (`installReadabilityHandler`) — здесь просто
+        // финальная подчистка на случай, если EOF по какой-то причине не случился (сторож всё
+        // равно уже разрешил `waitForExit()` к этому моменту). ПОСЛЕ ожидания выхода, не до: до
+        // — отключал бы EOF как путь детектирования ещё до того, как он успел бы сработать.
         stdoutHandle.readabilityHandler = nil
         stderrHandle.readabilityHandler = nil
         try? stdinHandle.close()
         try? stdoutHandle.close()
         try? stderrHandle.close()
-    }
-
-    // DEBUG-TEMP — см. комментарий у `createdAt`.
-    func debugLog(_ message: String) {
-        let elapsed = String(format: "%.3f", Date().timeIntervalSince(createdAt))
-        let pid = process.processIdentifier
-        let line = "[PRT-DEBUG-TEMP \(elapsed)s pid=\(pid)] \(message)\n"
-        FileHandle.standardError.write(Data(line.utf8))
     }
 
     /// Лучшее усилие на уничтожении: `close()` не вызван — `deinit` актора выполняется вне
