@@ -276,7 +276,9 @@ public actor ProcessRPCTransport: RPCTransport {
     // DEBUG-TEMP — см. комментарий у `createdAt`.
     func debugLog(_ message: String) {
         let elapsed = String(format: "%.3f", Date().timeIntervalSince(createdAt))
-        FileHandle.standardError.write(Data("[PRT-DEBUG-TEMP \(elapsed)s pid=\(process.processIdentifier)] \(message)\n".utf8))
+        let pid = process.processIdentifier
+        let line = "[PRT-DEBUG-TEMP \(elapsed)s pid=\(pid)] \(message)\n"
+        FileHandle.standardError.write(Data(line.utf8))
     }
 
     /// Лучшее усилие на уничтожении: `close()` не вызван — `deinit` актора выполняется вне

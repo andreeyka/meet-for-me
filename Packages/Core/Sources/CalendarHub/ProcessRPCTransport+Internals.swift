@@ -93,7 +93,9 @@ extension ProcessRPCTransport {
     /// Идемпотентна: `markGone` тоже зовёт её первым делом, повторный вызов видит уже пустые
     /// `pendingExits`/уже выставленный `terminated`.
     func recordTermination(_ error: ProcessRPCTransportError) {
-        if !pendingExits.isEmpty { debugLog("recordTermination(): resolving pendingExits via real signal") } // DEBUG-TEMP
+        if !pendingExits.isEmpty { // DEBUG-TEMP
+            debugLog("recordTermination(): resolving pendingExits via real signal")
+        }
         if terminated == nil { terminated = error }
         for continuation in pendingExits { continuation.resume() }
         pendingExits.removeAll()
@@ -129,6 +131,12 @@ extension ProcessRPCTransport {
         }
         let watchdog = Task { [weak self] in
             try? await Task.sleep(for: .seconds(5))
+            // `try?` глотает `CancellationError` молча — без проверки `isCancelled` эта задача
+            // звала бы `forceResolveExits()` СРАЗУ после отмены (`watchdog.cancel()` ниже),
+            // даже если реальный сигнал разрешил ожидание за миллисекунды (DEBUG-TEMP-прогон,
+            // macOS, `472abec`→`34c4804`: именно так и происходило — безобидно, `pendingExits`
+            // уже пуст к этому моменту, но диагностика вводила в заблуждение).
+            guard !Task.isCancelled else { return }
             await self?.forceResolveExits()
         }
         await withCheckedContinuation { continuation in
