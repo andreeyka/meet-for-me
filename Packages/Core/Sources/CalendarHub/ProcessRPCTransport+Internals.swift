@@ -132,6 +132,16 @@ extension ProcessRPCTransport {
         // следующей итерации `for await` — ни `readabilityHandler` (уже снят), ни что-либо
         // ещё больше не даст ему элемент, а `finish()` никто до этого места не звал.
         stdoutContinuation.finish()
+        resolvePendingStdioEOFIfBothObserved()
+    }
+
+    /// МЕЕ-444: `stderr`-аналог ветки `data.isEmpty` в `handleStdout`/`markGone` — настоящий
+    /// EOF `stderr`, а не просто «пусто, нечего разбирать построчно». В отличие от `stdout`,
+    /// `stderr` не несёт `pendingReceive`/`stdoutContinuation` — резолвить здесь нечего, кроме
+    /// самого признака для `waitForStdioEOF`.
+    func markStderrEOFObserved() {
+        stderrEOFObserved = true
+        resolvePendingStdioEOFIfBothObserved()
     }
 
     func failPendingReceive(_ error: Error) {
@@ -167,5 +177,38 @@ extension ProcessRPCTransport {
     func forceResolveExits() {
         for continuation in pendingExits { continuation.resume() }
         pendingExits.removeAll()
+    }
+
+    /// МЕЕ-444: гейт `close()` перед тем, как оно тронет `stdoutHandle`/`stderrHandle`
+    /// напрямую — только когда ОБА достигли настоящего EOF (их `readabilityHandler` уже снял
+    /// сам себя изнутри своего же вызова, см. докстринг `close()`), форсированные
+    /// `readabilityHandler = nil`/`close()` больше не рискуют застать ещё активный
+    /// диспетчерский источник чтения на другом потоке. Тот же сторож-приём, что `waitForExit`
+    /// (не политика тайм-аутов §5.2, см. её докстринг) — 2с с большим запасом: родитель уже
+    /// закрыл свои копии обоих концов (`closeParentSideOfPipes`), поэтому настоящий EOF у
+    /// живого дескриптора наступает практически сразу после смерти ребёнка; форсированный путь
+    /// остаётся только на случай утёкшего внуку дескриптора (тот же редкий, задокументированный
+    /// случай, что и у `recordTermination`).
+    func waitForStdioEOF(timeoutSeconds: Double = 2) async {
+        if stdoutClosed != nil, stderrEOFObserved { return }
+        let watchdog = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(timeoutSeconds))
+            guard !Task.isCancelled else { return }
+            await self?.forceResolveStdioEOF()
+        }
+        await withCheckedContinuation { continuation in
+            pendingStdioEOF.append(continuation)
+        }
+        watchdog.cancel()
+    }
+
+    func resolvePendingStdioEOFIfBothObserved() {
+        guard stdoutClosed != nil, stderrEOFObserved else { return }
+        forceResolveStdioEOF()
+    }
+
+    func forceResolveStdioEOF() {
+        for continuation in pendingStdioEOF { continuation.resume() }
+        pendingStdioEOF.removeAll()
     }
 }
