@@ -18,58 +18,6 @@ import DomainCore
 private struct NoParams: Encodable {}
 private struct VoidResult: Decodable { init(from decoder: Decoder) throws {} }
 
-/// Один ожидающий слота К12 (MEE-386) — своя блокировка (`NSLock`), не изоляция актора: `onCancel`
-/// у `withTaskCancellationHandler` не гарантированно выполняется на акторе. `suspend()` проверяет
-/// `Task.isCancelled` внутри замка ДО того, как сохранить continuation — тот же приём, что уже
-/// решает ровно эту гонку в `TestSupport.swift`, `FakeWaitSeam.sleep(for:)` («отмена пришла раньше,
-/// чем `withTaskCancellationHandler` вообще успел сохранить continuation»): без этой проверки
-/// `cancel()` мог бы прийти первым, застать `continuation == nil` (сохранять ещё нечего) и не
-/// сделать ничего, а `suspend()` чуть позже сохранил бы continuation, который уже некому будет
-/// разбудить — вызов повис бы навсегда вместо немедленной отмены.
-private final class CallSlotWaiter: @unchecked Sendable {
-    private let lock = NSLock()
-    private var continuation: CheckedContinuation<Void, Error>?
-
-    func suspend() async throws {
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            let alreadyCancelled: Bool = {
-                lock.lock()
-                defer { lock.unlock() }
-                guard !Task.isCancelled else { return true }
-                self.continuation = continuation
-                return false
-            }()
-            if alreadyCancelled {
-                continuation.resume(throwing: CancellationError())
-            }
-        }
-    }
-
-    /// Вызывается `onCancel`, вне изоляции актора — только через замок, никогда напрямую
-    /// `callSlotWaiters`.
-    func cancel() {
-        let toResume: CheckedContinuation<Void, Error>? = {
-            lock.lock()
-            defer { lock.unlock() }
-            defer { continuation = nil }
-            return continuation
-        }()
-        toResume?.resume(throwing: CancellationError())
-    }
-
-    /// Отдаёт слот этому ожидающему — `false`, если он уже отменён (`cancel()` уже забрал и
-    /// разбудил его continuation первым): `releaseCallSlot()` тогда переходит к следующему в
-    /// очереди, не считая слот освобождённым.
-    func grant() -> Bool {
-        lock.lock()
-        defer { lock.unlock() }
-        guard let continuation else { return false }
-        self.continuation = nil
-        continuation.resume()
-        return true
-    }
-}
-
 /// Один RPC-вызов туда-обратно: кодирует запрос, шлёт через `RPCTransport.send(_:)`, читает
 /// кадры через `RPCTransport.receive()` в цикле — `notification`-кадры (host/log, host/notify)
 /// диспетчерует и продолжает ждать (К47), кадр с чужим `id` — немедленный `protocolViolation`
@@ -89,8 +37,12 @@ public actor StdioCalendarConnector: CalendarConnector {
 
     /// Только для тестов (МЕЕ-386, К12): число вызовов `call()`, ждущих своей очереди на слот
     /// — не `private`, чтобы `@testable import` мог опросить его детерминированно (без сна по
-    /// часам) в гонке «второй вызов уже пытается начать, но ещё не начал».
-    var pendingCallSlotWaiterCount: Int { callSlotWaiters.count }
+    /// часам) в гонке «второй вызов уже пытается начать, но ещё не начал». `isPending` (возврат
+    /// РП, комментарий 10:05) — не считает уже выданных/отменённых `waiter`, которые могли
+    /// остаться в массиве до следующего прохода `releaseCallSlot()` (сама по себе их временная
+    /// задержка в массиве безвредна — `grant()` их просто пропускает, — но безусловный `.count`
+    /// завышал бы то, что тест буквально называет «ждущими»).
+    var pendingCallSlotWaiterCount: Int { callSlotWaiters.filter(\.isPending).count }
 
     /// К1 (MEE-386): `protocolVersion` — та же форма сравнения, что манифест (К53,
     /// `RPCProtocolVersion.majorIsCompatible`, `PluginManifest.swift`) — совпадение `MAJOR`
@@ -220,20 +172,12 @@ public actor StdioCalendarConnector: CalendarConnector {
     /// исполняет `call()` не более одного за раз МЕЖДУ точками приостановки, но каждая точка
     /// (`await transport.send`/`await transport.receive` внутри `awaitResponse`) впускает
     /// другие вызовы того же актора — без явной очереди второй вызов мог бы начать СВОЙ
-    /// `send()`, пока первый ещё ждёт ответа.
-    ///
-    /// Возврат РП (MEE-386, комментарий 09:15): раньше ожидание слота было НЕ отменяемым
-    /// (`CheckedContinuation<Void, Never>`) — отмена вызывающей стороны (например, `raceTimeout`
-    /// на своём таймауте) никак не снимала уже стоящего в очереди ожидания. Два следствия: (1)
-    /// `.timeout` до вызывающей стороны доходил только ПОСЛЕ того, как слот естественно
-    /// освобождался и доставался этому вызову — `withThrowingTaskGroup` не возвращается из
-    /// своей области, пока не завершится КАЖДАЯ дочерняя задача, включая проигравшую гонку
-    /// (`group.cancelAll()` лишь просит её отмениться, не обрывает немедленно); (2) отменённый
-    /// вызов, получив слот НАКОНЕЦ, всё равно отправлял свой `request` — кадр, которого
-    /// вызывающая сторона уже не ждёт, путал бы id следующего настоящего вызова (К46). `waiter`
-    /// теперь несёт свою отмену сам (`CallSlotWaiter`, см. ниже) — `withTaskCancellationHandler`
-    /// снимает КОНКРЕТНО этого ожидающего, не трогая доступ к `callSlotWaiters` (актор — уже сам
-    /// по себе последовательный доступ) из неизолированного `onCancel`.
+    /// `send()`, пока первый ещё ждёт ответа. Ожидание слота отменяемо (`CallSlotWaiter.swift` —
+    /// полная история двух возвратов РП на эту тему, 09:15 и 10:05: отмена вызывающей стороны
+    /// снимает КОНКРЕТНО этого ждущего, не касаясь остальных того же актора). Континуация
+    /// заводится ЗДЕСЬ, напрямую внутри изолированного метода — НЕ через отдельный неизолированный
+    /// `async`-метод `CallSlotWaiter` (SE-0338: такой вызов ушёл бы с актора раньше своего тела,
+    /// оставляя окно для гонки с `releaseCallSlot()` — детали там же).
     private func acquireCallSlot() async throws {
         guard callSlotHeld else {
             callSlotHeld = true
@@ -242,23 +186,20 @@ public actor StdioCalendarConnector: CalendarConnector {
         }
         let waiter = CallSlotWaiter()
         callSlotWaiters.append(waiter)
-        // Без `await` между `append` выше и запуском `waiter.suspend()` ниже — актор не может
-        // впустить `releaseCallSlot()` другого вызова до того, как `waiter` сам зарегистрирует
-        // свой continuation (внутри `suspend()`), так что `grant()` там всегда застаёт либо
-        // continuation, либо явную отметку отмены, никогда «пусто».
         try await withTaskCancellationHandler {
-            try await waiter.suspend()
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                waiter.register(continuation)
+            }
         } onCancel: {
             waiter.cancel()
         }
         try checkCancellationAfterAcquiring()
     }
 
-    /// И быстрый путь (слот свободен сразу), и путь через `waiter.suspend()` МОГЛИ фактически
-    /// получить слот именно в момент, когда вызывающая сторона уже отменена (гонка `resume()`
-    /// с доставкой отмены) — в обоих случаях слот СВОЙ, и его нужно передать дальше явно:
-    /// внешний `defer` в `call()` для этого случая не сработает (функция бросает раньше, чем
-    /// до него доходит).
+    /// И быстрый путь (слот свободен сразу), и путь через очередь МОГЛИ фактически получить
+    /// слот именно в момент, когда вызывающая сторона уже отменена (гонка `resume()` с доставкой
+    /// отмены) — в обоих случаях слот СВОЙ, и его нужно передать дальше явно: внешний `defer` в
+    /// `call()` для этого случая не сработает (функция бросает раньше, чем до него доходит).
     private func checkCancellationAfterAcquiring() throws {
         guard Task.isCancelled else { return }
         releaseCallSlot()
@@ -269,7 +210,9 @@ public actor StdioCalendarConnector: CalendarConnector {
     /// вызовы пришли. Пропускает уже отменённых (`grant()` вернул `false`): такой `waiter` мог
     /// остаться в очереди, потому что `cancel()` (неизолированный `onCancel`) не имеет доступа
     /// к `callSlotWaiters`, чтобы удалить себя оттуда сам — сам факт остаться в очереди не
-    /// значит остаться держателем слота, который эта функция могла бы ему передать.
+    /// значит остаться держателем слота, который эта функция могла бы ему передать. (Дважды
+    /// выданным — `grant()` тоже вернул бы `false` — здесь взяться неоткуда: каждый `waiter`
+    /// удаляется из массива в момент, когда ему пытаются передать слот, `removeFirst()` выше.)
     private func releaseCallSlot() {
         while !callSlotWaiters.isEmpty {
             let next = callSlotWaiters.removeFirst()

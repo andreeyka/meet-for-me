@@ -2,7 +2,8 @@
 //  очереди без ответа: второй вызов держится, пока первый не завершится (ответом или отменой),
 //  прежде чем отправляет СВОЙ кадр. `resolvePendingHang(with:)` (`ScriptedRPCTransport.swift`)
 //  отпускает первый вызов настоящим ответом, не отменой — иначе не отличить «второй ждёт слот»
-//  от «второго вообще не было».
+//  от «второго вообще не было». Нижние два теста — `CallSlotWaiter` напрямую, в отрыве от
+//  актора (возврат РП, комментарий 10:05): устойчивость к «выдаче/отмене раньше подвешивания».
 //
 //  Модуль: calendar-hub · Владелец: DEV-1 · Слой: домен
 
@@ -106,5 +107,51 @@ final class StdioProtocolRequestQueueingTests: XCTestCase {
         // Swift сам отменяет и ДОЖИДАЕТСЯ (структурная конкурентность) — отмена снимает зависший
         // `receive()` тем же путём, что и К9 вход Б (`.hang`-ветка теперь отвечает на отмену),
         // так что функция не виснет по возврату из теста, хотя сценарий так и не дал ответа.
+    }
+
+    // MARK: - CallSlotWaiter напрямую (возврат РП, MEE-386, комментарий 10:05)
+
+    /// «Выдача раньше подвешивания»: раньше (до этого возврата) `CallSlotWaiter.suspend()` был
+    /// ОТДЕЛЬНЫМ неизолированным `async`-методом — по SE-0338 вызов такого метода уходит с
+    /// актора вызывающей стороны СРАЗУ, ещё до его тела, оставляя окно, где `releaseCallSlot()`
+    /// того же актора мог вызвать `grant()` РАНЬШЕ, чем `register()` вообще сохранял
+    /// continuation — `grant()` тогда видел пусто, считал ждущего отменённым и уходил дальше,
+    /// а `register()`, отработав чуть позже, сохранял continuation, который уже НИКТО не
+    /// разбудит (вечное зависание). Актор больше не может воспроизвести этот порядок
+    /// (`withCheckedThrowingContinuation` теперь вызывается напрямую внутри изолированного
+    /// `acquireCallSlot()`, без промежуточного неизолированного метода — сам по себе уже
+    /// закрывает гонку), но `CallSlotWaiter` устойчив к этому порядку и без опоры на
+    /// планировщик: тест конструирует его напрямую и вызывает `grant()` ДО `register()`.
+    func test_k12_callSlotWaiterGrantBeforeRegisterStillResolves() async throws {
+        let waiter = CallSlotWaiter()
+
+        XCTAssertTrue(waiter.grant(), "выдача раньше подвешивания — слот закреплён за этим ждущим")
+        XCTAssertFalse(waiter.isPending, "уже не «ждёт» — выдан, раз `grant()` вернул true")
+
+        // Если бы `register()` молча сохранил continuation, не заметив уже состоявшуюся выдачу,
+        // `withCheckedThrowingContinuation` ниже никогда бы не вернулся — тест упал бы по
+        // таймауту XCTest, а не по явному assert; успешный `try await` здесь И ЕСТЬ проверка.
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            waiter.register(continuation)
+        }
+    }
+
+    /// Симметричный случай: `cancel()` раньше `register()` (та же гонка теоретически могла бы
+    /// прийти с ЛЮБОЙ стороны, не только с `grant()`) — `register()` обязан разбудить
+    /// continuation отменой немедленно, не сохранять его молча.
+    func test_k12_callSlotWaiterCancelBeforeRegisterStillResolvesWithCancellation() async throws {
+        let waiter = CallSlotWaiter()
+
+        waiter.cancel()
+        XCTAssertFalse(waiter.isPending)
+
+        do {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                waiter.register(continuation)
+            }
+            XCTFail("ожидалась CancellationError — register() после cancel() не должен молча повиснуть")
+        } catch is CancellationError {
+            // Ожидаемо.
+        }
     }
 }
