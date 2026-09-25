@@ -184,7 +184,15 @@ extension EngineXPCClient {
         }
     }
 
+    /// К35: «оба заданы» и «оба пусты» — одно и то же нарушение протокола ответа, до
+    /// разбора причины отдельно (обычный отказ транспорта или NSXPCConnection всегда несёт
+    /// РОВНО одно из двух — эта проверка ловит только испорченный ответ, не штатный путь).
     private func complete(jobId: EngineJobId, replyData: Data?, error: Error?) {
+        guard error == nil || replyData == nil else {
+            let message = "нарушение протокола ответа: получены и данные, и ошибка одновременно"
+            finish(jobId: jobId, with: .failure(TranscriptionServiceError.serviceUnavailable(message: message)))
+            return
+        }
         if let error {
             finish(jobId: jobId, with: .failure(map(nsError: error as NSError)))
             return

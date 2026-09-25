@@ -84,7 +84,11 @@ let package = Package(
         ),
         .testTarget(
             name: "EngineXPCClientTests",
-            dependencies: ["EngineXPCClient", .product(name: "DomainTestKit", package: "Core")]
+            dependencies: [
+                "EngineXPCClient",
+                .product(name: "DomainTestKit", package: "Core"),
+                .product(name: "EngineKit", package: "Core"),
+            ]
         ),
         .testTarget(
             name: "SecretStoreKeychainTests",
