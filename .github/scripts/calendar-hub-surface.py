@@ -36,18 +36,34 @@ import tempfile
 
 ALLOWED_IMPORTS = {"Foundation", "DomainCore"}
 
-IMPORT_RE = re.compile(r"^\s*import\s+(\S+)\s*$")
+# Допускает необязательные атрибуты (`@preconcurrency`, `@testable`,
+# `@_exported`, ...) перед `import`, необязательное ключевое слово вида
+# импорта (`import struct EventKit.EKEvent` и т.п.) и хвостовой комментарий
+# (`import EventKit // комментарий`) — находка РП по PR #133 (MEE-412):
+# исходная `^\s*import\s+(\S+)\s*$` не прощала ни одной из этих трёх форм.
+IMPORT_RE = re.compile(
+    r"^\s*(?:@\w+\s+)*"
+    r"import\s+"
+    r"(?:(?:struct|class|enum|protocol|func|var|let|typealias)\s+)?"
+    r"(\S+)"
+    r"\s*(?://.*)?$"
+)
 
 # Литералы имени коннектора — точное совпадение "eventkit"/"graph", либо
 # префикс "graph:" (module-map называет реальный rawValue `"graph:work"`).
-CONNECTOR_LITERAL_RE = re.compile(r'"(eventkit|graph(:[^"]*)?)"')
+# Регистронезависимо (РП, PR #133): "EventKit"/"Graph" — то же знание.
+CONNECTOR_LITERAL_RE = re.compile(r'"(eventkit|graph(:[^"]*)?)"', re.IGNORECASE)
 
 # `.type`/`.rawValue` на одной стороне сравнения со строковым литералом на
-# другой — в любом порядке; и `case "литерал":` как ветвь switch.
+# другой — в любом порядке; `case "литерал":` как ветвь switch; и то же
+# самое содержательное знание через `.hasPrefix`/`.hasSuffix`/`.contains`/
+# `.starts(with:)` над `.type`/`.rawValue` (РП, PR #133 — раньше был учтён
+# только `.hasPrefix`).
 CONTENT_BRANCH_RES = [
     re.compile(r"\.(type|rawValue)\s*(==|!=)\s*\"[^\"]*\""),
     re.compile(r"\"[^\"]*\"\s*(==|!=)\s*[\w.]*\.(type|rawValue)\b"),
-    re.compile(r"\.(type|rawValue)\.hasPrefix\(\s*\""),
+    re.compile(r"\.(type|rawValue)\.(hasPrefix|hasSuffix|contains)\(\s*\""),
+    re.compile(r"\.(type|rawValue)\.starts\(with:\s*\""),
     re.compile(r"case\s+\"[^\"]*\"\s*:"),
 ]
 
@@ -66,9 +82,13 @@ def check_imports(path, lines):
         m = IMPORT_RE.match(line)
         if not m:
             continue
-        module = m.group(1)
-        if module not in ALLOWED_IMPORTS:
-            violations.append((path, lineno, "import %s" % module))
+        module_path = m.group(1)
+        # `import Foundation.NSDate` / `import struct Foundation.Date` — тот
+        # же модуль `Foundation`, member-import; судим по части до первой
+        # точки, а не по всей строке (РП, PR #133: без этого — ложный отказ).
+        top_level = module_path.split(".", 1)[0]
+        if top_level not in ALLOWED_IMPORTS:
+            violations.append((path, lineno, "import %s" % module_path))
     return violations
 
 
@@ -153,6 +173,13 @@ def self_test():
         ("    import Foundation\n", []),  # отступ внутри #if — тоже импорт
         ("// import GRDB\n", []),  # закомментированный импорт — не совпадает с ^\\s*import
         ("importantThing = 1\n", []),  # не строка import вовсе
+        ("@preconcurrency import EventKit\n", ["import EventKit"]),  # РП, PR #133
+        ("@testable import EventKit\n", ["import EventKit"]),  # РП, PR #133
+        ("@_exported import EventKit\n", ["import EventKit"]),  # РП, PR #133
+        ("import struct EventKit.EKEvent\n", ["import EventKit.EKEvent"]),  # РП, PR #133
+        ("import EventKit // комментарий\n", ["import EventKit"]),  # РП, PR #133
+        ("import Foundation.NSDate\n", []),  # РП, PR #133: ложный отказ до фикса
+        ("import struct Foundation.Date\n", []),  # РП, PR #133
     ]
     failures = 0
     for line, expected_modules in import_cases:
@@ -172,6 +199,11 @@ def self_test():
         ('newSource.sourceConnectorId == existing.sourceConnectorId\n', False),  # сравнение двух полей, не литерала
         ("record.type, pluginId: record.pluginId\n", False),  # копирование поля, не сравнение (CalendarPortImpl.swift:388)
         ('source.rawValue.hasPrefix("graph")\n', True),  # содержательная проверка префикса
+        ('source.type.hasSuffix("Kit")\n', True),  # РП, PR #133
+        ('source.rawValue.contains("graph")\n', True),  # РП, PR #133
+        ('source.type.starts(with: "eventkit")\n', True),  # РП, PR #133
+        ('if record.type == "EventKit" {\n', True),  # РП, PR #133: литерал регистронезависимо
+        ("lhs.rawValue.hasPrefix(rhs.rawValue)\n", False),  # префикс двух динамических значений — не литерал
     ]
     branch_failures = 0
     for line, expect_violation in branch_cases:
