@@ -49,6 +49,7 @@ public enum RecordingRepositoryMethod: String, Sendable, CaseIterable {
     case unfinalized
     case adHoc
     case delete
+    case createDirectory
 }
 
 /// Фейк репозитория записей. Всё поведение задаёт тест.
@@ -64,6 +65,7 @@ public final class InMemoryRecordingRepository: RecordingRepository, @unchecked 
     private var order: [UUID] = []
     private var failures: [RecordingRepositoryMethod: (id: String?, error: StorageError)] = [:]
     private var deletedDirectories: [String] = []
+    private var createdDirectories: [UUID] = []
 
     /// Привязка «запись → встреча» (инвариант 7 C-010 v7), отдельная от
     /// `RecordingManifest.meetingId`. Ключ — `recordingId`; запись присутствует в словаре
@@ -121,6 +123,13 @@ public final class InMemoryRecordingRepository: RecordingRepository, @unchecked 
     /// Файлов у фейка нет; это НАБЛЮДАЕМОСТЬ намерения, а не запись об удалении с диска.
     public var directoriesAskedToDelete: [String] {
         locked { deletedDirectories }
+    }
+
+    /// `recordingId`, для которых `createDirectory(recordingId:)` вернул URL, по порядку
+    /// вызова — та же наблюдаемость намерения, что и `directoriesAskedToDelete`, симметрично
+    /// (MEE-440). Файлов у фейка по-прежнему нет (инвариант 14) — здесь только адрес вызова.
+    public var directoriesCreated: [UUID] {
+        locked { createdDirectories }
     }
 
     public var storedRecords: [RecordingRecord] {
@@ -253,6 +262,19 @@ public final class InMemoryRecordingRepository: RecordingRepository, @unchecked 
                 .compactMap { records[$0] }
                 .filter { meetingBinding[$0.manifest.recordingId] == nil }
         }
+    }
+
+    /// MEE-440: инвариант 14 держится тем же приёмом, что и весь остальной файл — фейк не
+    /// трогает диск ни здесь, ни в `delete`. URL заведомо синтетический (`/dev/null/…`) —
+    /// адрес для сравнения в тесте (`directoriesCreated`), не путь для чтения/записи.
+    public func createDirectory(recordingId: UUID) async throws -> URL {
+        log.record(port: Self.portName, method: "createDirectory(recordingId:)", arguments: [recordingId.uuidString])
+        if let error = failureIfAny(.createDirectory, id: recordingId.uuidString) {
+            throw error
+        }
+        locked { createdDirectories.append(recordingId) }
+        return URL(fileURLWithPath: "/dev/null/InMemoryRecordingRepository/recordings")
+            .appendingPathComponent(recordingId.uuidString)
     }
 
     public func delete(recordingId: UUID, deleteFiles: Bool) async throws {

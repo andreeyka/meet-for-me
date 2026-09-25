@@ -96,30 +96,27 @@ extension CompositionRoot {
     // MARK: - Шаг 6 — оркестрация сессии
 
     static func makeSessionMachine(_ partial: PartialGraph, settings: AppSettings) -> SessionMachine {
-        let fileLayout = partial.context.fileLayout
         let storage = partial.context.storage
+        let recordings = storage.recordingRepository(fileLayout: partial.context.fileLayout)
         return SessionMachine(
             processes: partial.adapters.detector,
             calendar: partial.calendarPort,
             meetings: storage.meetingRepository(),
-            recordings: storage.recordingRepository(fileLayout: fileLayout),
+            recordings: recordings,
             transcripts: storage.transcriptRepository(),
             capture: AudioCaptureImpl(power: partial.adapters.power),
             queue: partial.jobQueue,
             power: partial.adapters.power,
             settings: settings,
             weights: partial.adapters.weights,
-            // Б1 (возврат РП, MEE-433): каталог записи никто не создавал — замыкание только
-            // считало URL, а TrackFile открывает файл O_CREAT, каталог сам не заводит →
-            // directoryUnusable на первой же живой записи. `(UUID) -> URL` не throws (контракт
-            // SessionMachine, не этого файла) — try? лучшим усилием: если создание всё же
-            // откажет (диск, права), последующая попытка записи откажет тем же путём, что и
-            // раньше, просто на шаг позже, а не тихим "каталог недоступен" без причины.
-            recordingDirectory: { id in
-                let directory = fileLayout.recordingDirectory(id.uuidString)
-                try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-                return directory
-            },
+            // MEE-440 (находка РП на приёмке composition root, MEE-434, 09:15 UTC): Б1
+            // (возврат РП, MEE-433) чинился здесь ad hoc, `try?` — каталог создавал сам
+            // composition root, глотая отказ файловой системы молча. Решение архитектора:
+            // создание каталога — обязанность `storage` (симметрично удалению, которое он уже
+            // делает), не этого файла. `SessionMachine.recordingDirectory` теперь `async throws`
+            // (тот же MEE-440) — отказ `createDirectory` доходит до `enterRecording` как есть,
+            // не подменяется на «отказ записи тем же путём, но на шаг позже, без причины».
+            recordingDirectory: { id in try await recordings.createDirectory(recordingId: id) },
             // Срез 1 не даёт настройке выбора устройства своего поля в
             // AppSettings.slice1Defaults (MEE-430 §3) — выбор конкретного uid остаётся за
             // пределами этой задачи.

@@ -245,6 +245,17 @@ public protocol RecordingRepository: Sendable {
     func unfinalized() async throws -> [RecordingRecord]
     func adHoc() async throws -> [RecordingRecord]
     func delete(recordingId: UUID, deleteFiles: Bool) async throws
+
+    /// MEE-440 (находка РП на приёмке composition root, MEE-434, 09:15 UTC): создаёт каталог
+    /// записи `recordings/<recordingId>` по `FileLayout` — симметрично `delete(recordingId:
+    /// deleteFiles:)`, который его удаляет. `CaptureRequest.directory` (C-004,
+    /// `AudioCapturePort.swift`) документирован «каталог записи, созданный storage (C-010 §1)» —
+    /// до этого метода в продуктовом коде не было ни одной реализации, создающей его; composition
+    /// root заводил его сам, ad hoc, глотая отказ `try?`. Бросает `StorageError.io` при отказе
+    /// файловой системы (диск, права) — не глотает его. `directoryName` не параметр: инвариант
+    /// 13 (`directory_name` равен `recordingId.uuidString`) держит его равным этому `recordingId`
+    /// на любом входе, второго источника имени каталога порт не заводит.
+    func createDirectory(recordingId: UUID) async throws -> URL
 }
 
 public protocol TranscriptRepository: Sendable {
