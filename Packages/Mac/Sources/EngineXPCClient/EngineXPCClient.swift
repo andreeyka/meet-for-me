@@ -55,8 +55,9 @@ public final class EngineXPCClient: TranscriptionServicePort, @unchecked Sendabl
     /// возврат РП по MEE-431 (09:40 UTC): плоский флаг решала гонка с `connectionDied` —
     /// успешный `pong`, дошедший ПОСЛЕ того, как то же соединение уже умерло и было
     /// заменено новым, мог бы выставить флаг для НОВОГО (на деле непроверенного)
-    /// соединения. Сброшен `connectionDied` в `nil`; `markHandshakeVerified(for:)` пишет
-    /// только если проверяемое соединение всё ещё текущее.
+    /// соединения. Сброшен `connectionDied` в `nil`; `markHandshakeVerifiedIfMatchingPong`
+    /// (`EngineXPCClient+Transport.swift`) пишет только по факту разбора настоящего `.pong`,
+    /// то есть только для соединения, на котором тот реально пришёл.
     var handshakeVerifiedConnection: ObjectIdentifier?
 
     /// Прод: соединение по имени сервиса launchd. Реальный `EngineXPCServiceProtocol`
@@ -93,19 +94,16 @@ public final class EngineXPCClient: TranscriptionServicePort, @unchecked Sendabl
     // MARK: - TranscriptionServicePort
 
     public func ping() async throws -> String {
-        // Соединение фиксируется ДО круговой отправки — если оно умрёт и будет
-        // пересоздано, пока этот `ping` в пути, `markHandshakeVerified` ниже увидит, что
-        // текущее соединение уже не то, что было проверено, и не пометит чужое.
-        let connectionAtStart = currentConnection()
         let reply = try await roundTrip(.ping, timeoutSeconds: Self.pingTimeoutSeconds, progress: nil)
         guard case .pong(let serviceVersion, let serviceProtocolVersion) = reply else {
             throw TranscriptionServiceError.serviceUnavailable(message: "неожиданный ответ на ping: \(reply)")
         }
         try requireMatchingProtocolVersion(serviceProtocolVersion: serviceProtocolVersion)
-        // Успешный явный `ping()` — то же доказательство рукопожатия, что и внутренний
-        // (`handshakeGate`): следующий рабочий запрос на этом соединении не обязан
-        // повторять его сам (К21 — один раз на соединение, а не один раз на вызов `ping`).
-        markHandshakeVerified(for: connectionAtStart)
+        // Рукопожатие уже помечено `complete(jobId:replyData:error:)` в момент разбора
+        // ЭТОГО `.pong` — см. заголовок `markHandshakeVerifiedIfMatchingPong` в
+        // `EngineXPCClient+Transport.swift`: та точка знает АКТУАЛЬНОЕ соединение без
+        // риска создать новое только чтобы зафиксировать его «на старте» (K21 — один раз
+        // на соединение, а не один раз на вызов `ping`).
         return serviceVersion
     }
 

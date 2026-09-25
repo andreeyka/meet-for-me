@@ -67,10 +67,7 @@ extension EngineXPCClient {
         currentConnection().remoteObjectProxyWithErrorHandler(errorHandler) as? EngineXPCServiceProtocol
     }
 
-    // Не `private` — `ping()` в `EngineXPCClient.swift` фиксирует текущее соединение ДО
-    // круговой отправки, чтобы `markHandshakeVerified(for:)` могло сверить его с тем, что
-    // осталось текущим к моменту успешного ответа (см. заголовок `handshakeVerifiedConnection`).
-    func currentConnection() -> NSXPCConnection {
+    private func currentConnection() -> NSXPCConnection {
         return locked {
             if let connection { return connection }
             let fresh = makeConnection()
@@ -231,6 +228,7 @@ extension EngineXPCClient {
         }
         do {
             let reply = try EngineWire.decode(EngineReply.self, from: replyData)
+            markHandshakeVerifiedIfMatchingPong(reply)
             finish(jobId: jobId, with: .success(reply))
         } catch let validationError as DomainValidationError {
             // §3.2: байты дошли целыми, форма кадра разобрана — невалиден РАЗОБРАННЫЙ
@@ -307,15 +305,13 @@ extension EngineXPCClient {
 
     private func handshakeGate() async throws {
         guard !handshakeAlreadyVerified() else { return }
-        // Тот же приём, что явный `ping()` (EngineXPCClient.swift): соединение фиксируется
-        // ДО отправки, чтобы пометить верным именно ЕГО, а не то, что стало текущим позже.
-        let connectionAtStart = currentConnection()
         let reply = try await roundTrip(.ping, timeoutSeconds: Self.pingTimeoutSeconds, progress: nil)
         guard case .pong(_, let serviceProtocolVersion) = reply else {
             throw TranscriptionServiceError.serviceUnavailable(message: "неожиданный ответ на рукопожатие: \(reply)")
         }
         try requireMatchingProtocolVersion(serviceProtocolVersion: serviceProtocolVersion)
-        markHandshakeVerified(for: connectionAtStart)
+        // Рукопожатие уже помечено в `complete(jobId:replyData:error:)`, как только этот
+        // `.pong` был разобран — см. `markHandshakeVerifiedIfMatchingPong`.
     }
 
     private func handshakeAlreadyVerified() -> Bool {
@@ -325,16 +321,25 @@ extension EngineXPCClient {
         }
     }
 
-    /// Не `private` — вызывается и явным `ping()` из `EngineXPCClient.swift`. Пишет, только
-    /// если `verified` всё ещё ТЕКУЩЕЕ соединение — если оно уже сменилось (гонка с
-    /// `connectionDied` между отправкой и этим успешным ответом), запись — no-op: новое
-    /// соединение своё рукопожатие ещё не проходило, и молчаливо помечать его чужим было бы
-    /// именно той гонкой, которую правит `handshakeVerifiedConnection`.
-    func markHandshakeVerified(for verified: NSXPCConnection) {
-        locked {
-            guard connection === verified else { return }
-            handshakeVerifiedConnection = ObjectIdentifier(verified)
-        }
+    /// Возврат РП по MEE-431 (09:40 UTC): рукопожатие привязано к КОНКРЕТНОМУ соединению
+    /// (`ObjectIdentifier`), не голому флагу — но захватывать «текущее соединение» ДО
+    /// круговой отправки (как первая попытка этой правки делала явно в `ping()`/
+    /// `handshakeGate()`) оказалось вредным: `currentConnection()` лениво СОЗДАЁТ
+    /// соединение, и вызов этого до проверки отмены задачи давал транспорту кадр `cancel`
+    /// даже тогда, когда сам рабочий кадр (внутренний `ping`) до транспорта не дошёл вовсе
+    /// (нашёл CI, `test_inv12_taskCancelledBeforeBodyRunsNeverReachesTransport`).
+    ///
+    /// Метится здесь вместо этого — в момент, когда `.pong` УЖЕ разобран штатно: успешный
+    /// разбор ответа возможен только если соединение, на котором ушёл запрос, было живо
+    /// всё это время (умри оно раньше — этот же `jobId` резолвился бы через
+    /// `connectionDied` отказом, не успешным `.pong`), так что `self.connection` здесь —
+    /// достоверно ТО САМОЕ соединение, без отдельного захвата «на старте» и без риска
+    /// создать соединение только чтобы его пометить.
+    private func markHandshakeVerifiedIfMatchingPong(_ reply: EngineReply) {
+        guard case .pong(_, let serviceProtocolVersion) = reply,
+              serviceProtocolVersion == EngineWire.protocolVersion,
+              let current = locked({ connection }) else { return }
+        locked { handshakeVerifiedConnection = ObjectIdentifier(current) }
     }
 
     func requireMatchingProtocolVersion(serviceProtocolVersion: Int) throws {

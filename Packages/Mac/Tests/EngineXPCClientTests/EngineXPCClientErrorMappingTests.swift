@@ -355,8 +355,11 @@ final class EngineXPCClientErrorMappingTests: XCTestCase {
     /// же вектор закрывает бывший К50(iii) — третьего пути к `invalidRequest` из этого домена нет.
     func test_k51_otherCocoaDomainCodeMapsToServiceUnavailableWithDomainCodeDescription() async throws {
         let fixture = try await readyFixture()
+        // Код заведомо вне кластера NSXPCConnection* (4097/4099/4101) — этот вектор
+        // проверяет фолбэк на «постороннее», не один из трёх названных кодов.
+        let arbitraryCode = 5_000_000
         let error = NSError(
-            domain: NSCocoaErrorDomain, code: 4097, userInfo: [NSLocalizedDescriptionKey: "нечто постороннее"]
+            domain: NSCocoaErrorDomain, code: arbitraryCode, userInfo: [NSLocalizedDescriptionKey: "нечто постороннее"]
         )
         fixture.service.forcedRawResponse = (data: nil, error: error)
 
@@ -364,7 +367,7 @@ final class EngineXPCClientErrorMappingTests: XCTestCase {
             _ = try await fixture.client.transcribe(makeSpec()) { _ in }
             XCTFail("ожидался serviceUnavailable")
         } catch TranscriptionServiceError.serviceUnavailable(let message) {
-            XCTAssertEqual(message, "\(NSCocoaErrorDomain) 4097: нечто постороннее")
+            XCTAssertEqual(message, "\(NSCocoaErrorDomain) \(arbitraryCode): нечто постороннее")
         }
     }
 }
