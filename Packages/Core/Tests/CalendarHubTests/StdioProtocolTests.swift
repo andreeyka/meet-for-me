@@ -35,10 +35,16 @@ private enum StdioHarness {
         let connectorRepository = InMemoryConnectorRepository(log: PortCallLog())
         let meetingRepository = InMemoryMeetingRepository(log: PortCallLog())
         let waitSeam = FakeWaitSeam()
-        // Ни один тест этого файла не проверяет таймаут (К9, отдельная задача) — ворота Ш3
-        // здесь мешали бы без цели; повтор §5.2 (К56) не гонится с другой задачей (в отличие
-        // от `raceTimeout`), авторазрешение читает и хранит запрошенные `duration` как обычно.
-        waitSeam.setAutoResolve(true)
+        // НЕ `setAutoResolve(true)`: `FakeWaitSeam`'s собственный докстринг (TestSupport.swift)
+        // прямо предупреждает — авторазрешение делает сон `raceTimeout`'а «мгновенным» и
+        // превращает гонку операция/таймаут в монетку планировщика на КАЖДОМ вызове, не
+        // только там, где таймаут — часть проверки (найдено буквально: все 21 тест этого
+        // файла падали `.timeout` вместо ожидаемого исхода на первом же CI прогоне). Ворота
+        // (по умолчанию) держат таймаут повешенным, пока операция естественно не выиграет
+        // гонку и `group.cancelAll()` не снимет его, — тот же приём, что у всех остальных
+        // файлов `CalendarHubTests`. Задержки повтора §5.2 (К56) — отдельная, НЕ гонящаяся
+        // пересылка `waitSeam.sleep(for:)` внутри `callConnector`; тесты К56 отпускают её
+        // явно (`awaitAfterRetries` ниже), а не полагаются на авторазрешение.
         connectorRepository.seed([Harness.record(id: "src-1", cursor: cursor)])
         let hub = CalendarPortImpl(
             connectorRepository: connectorRepository, meetingRepository: meetingRepository,
@@ -379,6 +385,37 @@ final class StdioProtocolTests: XCTestCase {
         func advance() -> Int { defer { next += 1 }; return next }
     }
 
+    /// Отпускает `retries` ожидаемых задержек §5.2 по одной, пока сам вызов идёт параллельно
+    /// своим `Task`: обычный плоский `try await` завис бы навсегда — задержка повтора НЕ
+    /// гонится ни с чем внутри `callConnector` (в отличие от 10/120/30с таймаута
+    /// `raceTimeout`, которому ЕСТЬ с кем «выиграть» — операция всегда обгоняет никогда не
+    /// отпускаемый ворота-таймаут сама), а висит в `FakeWaitSeam` до явного `resolveNext()`
+    /// (её докстринг, TestSupport.swift, «режим ворот»). `pollUntil { resolveNext() }` и
+    /// ждёт появления нужного ожидания, и отпускает его — одним выражением, без риска отпустить
+    /// раньше времени чужое (в любой момент здесь висит не больше одного вызова `sleep`: гонка
+    /// таймаута снята к этому моменту предыдущим `raceTimeout`, следующая — стартует только
+    /// после того, как этот отпущен).
+    private static func callThroughRetries<Value: Sendable>(
+        _ waitSeam: FakeWaitSeam, retries: Int, _ operation: @escaping @Sendable () async throws -> Value
+    ) async throws -> Value {
+        let task = Task { try await operation() }
+        for _ in 0 ..< retries {
+            await pollUntil { waitSeam.resolveNext() }
+        }
+        return try await task.value
+    }
+
+    /// `waitSeam.durations` — общий журнал ЛЮБОГО `sleep(for:)`, включая гонку `raceTimeout`
+    /// самого таймаута (10с `.initialize`/30с `.other`) на КАЖДОЙ попытке (записывается,
+    /// когда `sleep(for:)` вызван, раньше любой отмены — тот же приём, на который опираются
+    /// уже принятые тесты этого модуля, см. `InitializationTests.swift`/
+    /// `ControlSurfaceEntryPointsTests.swift`, ни один из них не сравнивает `durations`
+    /// целиком). Отфильтровано здесь ровно так же — оставляет только задержки повтора §5.2,
+    /// которые эти тесты и проверяют.
+    private static func retryDelays(_ waitSeam: FakeWaitSeam) -> [Duration] {
+        waitSeam.durations.filter { $0 != .seconds(10) && $0 != .seconds(30) }
+    }
+
     func test_k56_defaultRateLimitedUsesFixedBackoff1_2_4() async throws {
         let (hub, transport, _, waitSeam) = StdioHarness.make()
         let ids = IdCounter()
@@ -388,9 +425,11 @@ final class StdioProtocolTests: XCTestCase {
         transport.enqueue(StdioHarness.errorFrame(id: ids.advance(), code: -32003, message: "slow down"))
         transport.enqueue(#"{"schemaVersion":1,"id":\#(ids.advance()),"result":{"calendars":[]}}"#)
 
-        _ = try await hub.listCalendars(source: StdioHarness.source)
+        _ = try await Self.callThroughRetries(waitSeam, retries: 3) {
+            try await hub.listCalendars(source: StdioHarness.source)
+        }
 
-        XCTAssertEqual(waitSeam.durations, [.seconds(1), .seconds(2), .seconds(4)])
+        XCTAssertEqual(Self.retryDelays(waitSeam), [.seconds(1), .seconds(2), .seconds(4)])
     }
 
     func test_k56_validRetryAfterSecondsUsedVerbatim() async throws {
@@ -404,9 +443,11 @@ final class StdioProtocolTests: XCTestCase {
         }
         transport.enqueue(#"{"schemaVersion":1,"id":\#(ids.advance()),"result":{"calendars":[]}}"#)
 
-        _ = try await hub.listCalendars(source: StdioHarness.source)
+        _ = try await Self.callThroughRetries(waitSeam, retries: 3) {
+            try await hub.listCalendars(source: StdioHarness.source)
+        }
 
-        XCTAssertEqual(waitSeam.durations, [.seconds(5), .seconds(5), .seconds(5)])
+        XCTAssertEqual(Self.retryDelays(waitSeam), [.seconds(5), .seconds(5), .seconds(5)])
     }
 
     func test_k56_retryAfterSecondsCeilingIsSixty() async throws {
@@ -418,9 +459,11 @@ final class StdioProtocolTests: XCTestCase {
         ))
         transport.enqueue(#"{"schemaVersion":1,"id":\#(ids.advance()),"result":{"calendars":[]}}"#)
 
-        _ = try await hub.listCalendars(source: StdioHarness.source)
+        _ = try await Self.callThroughRetries(waitSeam, retries: 1) {
+            try await hub.listCalendars(source: StdioHarness.source)
+        }
 
-        XCTAssertEqual(waitSeam.durations, [.seconds(60)], "потолок ожидания — 60с, не 3600")
+        XCTAssertEqual(Self.retryDelays(waitSeam), [.seconds(60)], "потолок ожидания — 60с, не 3600")
     }
 
     func test_k56_exhaustionAfterThreeRetriesSurfacesTransportError() async throws {
@@ -432,12 +475,14 @@ final class StdioProtocolTests: XCTestCase {
         }
 
         do {
-            _ = try await hub.listCalendars(source: StdioHarness.source)
+            _ = try await Self.callThroughRetries(waitSeam, retries: 3) {
+                try await hub.listCalendars(source: StdioHarness.source)
+            }
             XCTFail("четыре подряд -32003 обязаны исчерпать повторы")
         } catch let error as CalendarError {
             XCTAssertEqual(error, .transport(sourceId: StdioHarness.source, message: "rateLimited, retryAfter=4"))
         }
-        XCTAssertEqual(waitSeam.durations, [.seconds(1), .seconds(2), .seconds(4)], "ровно три задержки, не четыре")
+        XCTAssertEqual(Self.retryDelays(waitSeam), [.seconds(1), .seconds(2), .seconds(4)], "ровно три задержки, не четыре")
     }
 
     func test_k56_initializeAlsoParticipatesInRetryPolicy() async throws {
@@ -449,10 +494,12 @@ final class StdioProtocolTests: XCTestCase {
         transport.enqueue(StdioHarness.initializeFrame(id: ids.advance()))
         transport.enqueue(#"{"schemaVersion":1,"id":\#(ids.advance()),"result":{"calendars":[]}}"#)
 
-        let calendars = try await hub.listCalendars(source: StdioHarness.source)
+        let calendars = try await Self.callThroughRetries(waitSeam, retries: 3) {
+            try await hub.listCalendars(source: StdioHarness.source)
+        }
 
         XCTAssertEqual(calendars, [])
-        XCTAssertEqual(waitSeam.durations, [.seconds(1), .seconds(2), .seconds(4)], "initialize тоже повторяется")
+        XCTAssertEqual(Self.retryDelays(waitSeam), [.seconds(1), .seconds(2), .seconds(4)], "initialize тоже повторяется")
     }
 
     func test_k56_nonIntegerRetryAfterSecondsFallsBackToFixedDelay() async throws {
@@ -464,9 +511,11 @@ final class StdioProtocolTests: XCTestCase {
         ))
         transport.enqueue(#"{"schemaVersion":1,"id":\#(ids.advance()),"result":{"calendars":[]}}"#)
 
-        _ = try await hub.listCalendars(source: StdioHarness.source)
+        _ = try await Self.callThroughRetries(waitSeam, retries: 1) {
+            try await hub.listCalendars(source: StdioHarness.source)
+        }
 
-        XCTAssertEqual(waitSeam.durations, [.seconds(1)], "1.5 не целое — фолбэк, не округление")
+        XCTAssertEqual(Self.retryDelays(waitSeam), [.seconds(1)], "1.5 не целое — фолбэк, не округление")
     }
 
     /// Отдельно от `1.5`: `1e400` вне представимости `Double` на переполнении экспоненты — §2
@@ -484,9 +533,11 @@ final class StdioProtocolTests: XCTestCase {
         ))
         transport.enqueue(#"{"schemaVersion":1,"id":\#(ids.advance()),"result":{"calendars":[]}}"#)
 
-        _ = try await hub.listCalendars(source: StdioHarness.source)
+        _ = try await Self.callThroughRetries(waitSeam, retries: 1) {
+            try await hub.listCalendars(source: StdioHarness.source)
+        }
 
-        XCTAssertEqual(waitSeam.durations, [.seconds(1)])
+        XCTAssertEqual(Self.retryDelays(waitSeam), [.seconds(1)])
     }
 }
 
