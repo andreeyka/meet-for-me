@@ -61,4 +61,48 @@ extension CompositionRoot {
         }
         return decoded
     }
+
+    /// Итог снимка настроек на старте — само значение и признак, откуда оно взято, для
+    /// одноразового уведомления (IR-140, MEE-439). Собирает `loadSettings(from:)` и решение
+    /// `startupSettingsFallback(for:)` в одно место, вызывающее стороне решать нечего.
+    struct StartupSettingsResult: Equatable {
+        let settings: AppSettings
+        let usedDefaults: Bool
+    }
+
+    /// Снимок настроек на старте (IR-140, MEE-439, решение архитектора): сломанная строка
+    /// (`CompositionRootError.settingsUnreadable`) здесь БОЛЬШЕ НЕ фатальна — composition
+    /// root не вызывает `AppFacade.settings()` (её на этом шаге ещё нет), поэтому инвариант
+    /// 28 контракта C-016 не затронут ни строкой: он про рантайм-поведение фасада, не про
+    /// этот шаг. Любой другой отказ (каталог/БД/что угодно за пределами разбора настроек)
+    /// пробрасывается как раньше — решение МЕЕ-430 §3 для «сломанного окружения» здесь не
+    /// меняется, меняется только цена ИМЕННО нечитаемой строки настроек, у которой есть чем
+    /// восстановиться (`AppSettings.slice1Defaults` — то же значение, что уже подставляет
+    /// `settings()` на ПУСТОЙ строке).
+    static func loadSettingsForStartup(from repository: SettingsRepository) async throws -> StartupSettingsResult {
+        do {
+            return StartupSettingsResult(settings: try await loadSettings(from: repository), usedDefaults: false)
+        } catch {
+            guard let fallback = startupSettingsFallback(for: error) else { throw error }
+            return StartupSettingsResult(settings: fallback, usedDefaults: true)
+        }
+    }
+
+    /// Чистая функция (без ввода-вывода, без `async`) — по этой причине тестируема отдельно
+    /// от `SettingsRepository`. Отвечает только на ОДИН вопрос: эта ошибка — та самая
+    /// восстановимая (`CompositionRootError.settingsUnreadable`), и если да, чем заменить?
+    /// `nil` — «не эта ошибка, пробрасывай как была» (например,
+    /// `applicationSupportDirectoryUnavailable` или отказ `StorageDatabase`/`SignalWeights`
+    /// на более раннем шаге) — решение МЕЕ-430 §3 для них не тронуто ни строкой.
+    ///
+    /// Тест: `App/` не несёт тестового таргета (`project.yml` — файл архитектора, MEE-430;
+    /// объявляет ровно два таргета, `MeetForMe`/`TranscriptionEngine`, ни одного тестового —
+    /// сверено чтением файла целиком этой сессией). Завести его — правка `project.yml`, то
+    /// есть interface-request, а не эта точечная задача (готовность IR-140 называет её явно
+    /// «точечной правкой», не заводом инфраструктуры). Функция написана чистой намеренно,
+    /// чтобы условие было проверяемо чтением тела без стенда, — раскрыто здесь, а не скрыто.
+    static func startupSettingsFallback(for error: Error) -> AppSettings? {
+        guard case CompositionRootError.settingsUnreadable = error else { return nil }
+        return .slice1Defaults
+    }
 }
