@@ -94,8 +94,15 @@ final class StorageExportTests: XCTestCase {
         fixture.repositories.recordings.seed([RecordingRecord(
             manifest: try RecordingManifest(
                 recordingId: recordingId, meetingId: nil, directoryName: recordingId.uuidString,
-                startedAt: Date(timeIntervalSince1970: 0), endedAt: nil, tracks: [], markers: [],
-                capturedProcesses: [], captureGroupKey: nil, inputDevices: [], discontinuities: [], isFinalized: true
+                startedAt: Date(timeIntervalSince1970: 0), endedAt: nil,
+                tracks: [
+                    try RecordingManifest.Track(
+                        channel: .mic, fileName: "audio-mic.m4a", sampleRate: 16_000, channelCount: 1,
+                        format: "aac-m4a"
+                    )
+                ],
+                markers: [], capturedProcesses: [], captureGroupKey: nil, inputDevices: [], discontinuities: [],
+                isFinalized: true
             ),
             status: .finalized
         )])
