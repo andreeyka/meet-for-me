@@ -17,8 +17,14 @@ final class EngineXPCClientCancellationTests: XCTestCase {
     }
 
     /// К28: отмена `Task` во время ожидания — клиент бросает `.cancelled` без ожидания
-    /// финального ответа; кадр `cancel` уходит (счётчик отправок сервиса растёт минимум на
-    /// два — сам `transcribe` и `cancel`).
+    /// финального ответа; кадр `.cancel(jobId)` уходит на сервис для ТОГО ЖЕ jobId, что и
+    /// сам отменённый `transcribe`.
+    ///
+    /// Возврат РП по MEE-431 (09:40 UTC): прежняя проверка (`sendCount >= 2`) не доказывала
+    /// ничего конкретного про сам кадр `cancel` — той же отметки достигает рукопожатие
+    /// (`ping`, sendCount 1) плюс исходный `transcribe` (sendCount 2), даже если `cancel`
+    /// вообще не долетел. Проверка ниже — что и `.transcribe(jobId, …)`, и его `.cancel(jobId)`
+    /// оба разобраны сервисом с ОДНИМ И ТЕМ ЖЕ jobId (`receivedJobIds` несёт его дважды).
     func test_k28_taskCancelSendsCancelFrameAndThrowsImmediately() async throws {
         let engine = FakeTranscriptionEngine()
         engine.simulatedWorkNanoseconds = 2_000_000_000   // 2с — с запасом дольше отмены
@@ -29,6 +35,7 @@ final class EngineXPCClientCancellationTests: XCTestCase {
             try await fixture.client.transcribe(self.makeSpec()) { _ in }
         }
         try await Task.sleep(nanoseconds: 100_000_000)   // дать transcribe уйти на сервис
+        let jobId = try XCTUnwrap(fixture.service.receivedJobIds.last, "transcribe обязан был дойти до сервиса")
         task.cancel()
 
         do {
@@ -40,7 +47,8 @@ final class EngineXPCClientCancellationTests: XCTestCase {
 
         // Кадр cancel действительно ушёл на сервис — ждём короткое время, пока он долетит.
         try await Task.sleep(nanoseconds: 200_000_000)
-        XCTAssertGreaterThanOrEqual(fixture.service.sendCount, 2, "transcribe и cancel — минимум два кадра")
+        let occurrences = fixture.service.receivedJobIds.filter { $0 == jobId }.count
+        XCTAssertEqual(occurrences, 2, "тот же jobId обязан прийти дважды: сам transcribe и его cancel")
     }
 
     /// К27: гонка — обычное завершение раньше, чем клиент успел бы отменить, — результат
@@ -82,5 +90,38 @@ final class EngineXPCClientCancellationTests: XCTestCase {
         // резолва — падения/повторного исхода быть не должно (проверяется самим фактом,
         // что тест доходит досюда и завершается).
         try await Task.sleep(nanoseconds: 500_000_000)
+    }
+
+    /// Инв. 12, возврат РП по MEE-431 (09:40 UTC): `Task`, отменённый ДО того, как его тело
+    /// вообще начало выполняться — `withTaskCancellationHandler` зовёт `onCancel` немедленно
+    /// (Swift-документированное поведение для уже отменённой задачи), КОНКУРЕНТНО с
+    /// `operation`, и раньше без проверки после регистрации `onCancel` находил бы `jobs[jobId]`
+    /// ещё пустым (запрос не зарегистрирован) — отмена терялась бы молча, а запрос (в этом
+    /// случае — сам внутренний рукопожатный `ping`, до которого `transcribe` не успевает
+    /// дойти) всё равно ушёл бы на транспорт. `task.cancel()` без единого `await` между
+    /// созданием `Task` и вызовом — на этом рантайме гарантирует отмену раньше первого
+    /// исполнения тела (тот же приём, которым тесты этого файла уже полагаются на порядок
+    /// планировщика через `Task.sleep`).
+    func test_inv12_taskCancelledBeforeBodyRunsNeverReachesTransport() async throws {
+        let fixture = XPCFixture()
+        configureReadyProfile(fixture.modelCatalog)
+
+        let task = Task {
+            try await fixture.client.transcribe(self.makeSpec()) { _ in }
+        }
+        task.cancel()
+
+        do {
+            _ = try await task.value
+            XCTFail("ожидался TranscriptionServiceError.cancelled")
+        } catch TranscriptionServiceError.cancelled {
+            // ожидаемо
+        }
+
+        try await Task.sleep(nanoseconds: 100_000_000)
+        XCTAssertEqual(
+            fixture.service.sendCount, 0,
+            "отменённая до регистрации задача не должна была дойти до транспорта вовсе"
+        )
     }
 }

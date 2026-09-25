@@ -55,7 +55,7 @@ extension EngineXPCClient {
         case NSXPCConnectionInterrupted:
             return .serviceCrashed
         case NSXPCConnectionInvalid, NSXPCConnectionReplyInvalid:
-            return .serviceUnavailable(message: nsError.localizedDescription)
+            return .serviceUnavailable(message: describe(nsError))
         default:
             return .serviceUnavailable(message: describe(nsError))
         }

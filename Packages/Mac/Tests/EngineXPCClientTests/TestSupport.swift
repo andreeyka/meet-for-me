@@ -65,10 +65,19 @@ final class TestEngineXPCService: NSObject, EngineXPCServiceProtocol, @unchecked
     var sendCount: Int { locked { sendCountValue } }
     var receivedJobIds: [EngineJobId] { locked { receivedJobIdsValue } }
 
-    /// К23, К38(вектор сброса): пуш прогресса в обход настоящего движка — тест сам решает,
-    /// когда и для какого `jobId` (в том числе после того, как настоящий ответ уже ушёл).
+    /// К23, К38(вектор сброса), К40(iii): пуш прогресса в обход настоящего движка — тест сам
+    /// решает, когда и для какого `jobId` (в том числе чужого/уже завершённого, в том числе
+    /// после того, как настоящий ответ уже ушёл).
     func pushRawProgress(jobId: EngineJobId, progress: EngineProgress) {
         pushProgress(jobId: jobId, progress: progress)
+    }
+
+    /// К40(ii): произвольные байты в обход `EngineWire.encode` — единственный способ дать
+    /// клиенту кадр прогресса, который сам `EngineProgressMessage.init(from:)` никогда бы не
+    /// выпустил (тот же приём, что `PlistSurgery` для decode-тестов).
+    func pushRawProgressData(_ data: Data) {
+        guard let target = locked({ progressTarget }) else { return }
+        target.didReceiveProgress(data)
     }
 
     func send(_ requestData: Data, reply: @escaping (Data?, Error?) -> Void) {
@@ -270,4 +279,27 @@ func configureReadyProfile(_ port: FakeModelCatalogPort, embeddingModelId: Strin
     port.setCatalog(descriptors)
     port.setState(.downloaded, forId: "asr-1", version: "1.0.0")
     port.setProfiles([xpcTestProfile(id: "p1", asrModelId: "asr-1", embeddingModelId: embeddingModelId)])
+}
+
+enum PlistSurgeryError: Error {
+    case targetNotFound(String)
+    case notUTF8
+}
+
+/// Текстовая правка одного значения в XML `PropertyList` — тот же приём, что
+/// `EngineKitTests.PlistSurgery` (Packages/Core), продублирован здесь: тестовые цели
+/// разных пакетов друг друга не импортируют. Даёт декодеру байты, каких throwing-init
+/// `Transcript` сам никогда бы не выпустил — единственный способ собрать К36(ii): байты
+/// целы и разобраны штатно, а вложенный `Transcript` нарушает свой инвариант.
+enum PlistSurgery {
+    static func data<T: Encodable>(for value: T, replacing target: String, with replacement: String) throws -> Data {
+        let encoder = PropertyListEncoder()
+        encoder.outputFormat = .xml
+        let xml = try encoder.encode(value)
+        guard let text = String(data: xml, encoding: .utf8) else { throw PlistSurgeryError.notUTF8 }
+        guard text.contains(target) else { throw PlistSurgeryError.targetNotFound(target) }
+        let mutated = text.replacingOccurrences(of: target, with: replacement)
+        guard let mutatedData = mutated.data(using: .utf8) else { throw PlistSurgeryError.notUTF8 }
+        return mutatedData
+    }
 }

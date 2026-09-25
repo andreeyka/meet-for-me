@@ -1,6 +1,7 @@
 //  EngineXPCClientTimingTests — план MEE-389: К22 (уникальный `EngineJobId` на каждый
-//  запрос), К23 (запоздалый прогресс после финального ответа не публикуется), К38
-//  (таймауты 120с/10с на инжектируемых часах, сброс прогрессом).
+//  запрос), К23 (запоздалый прогресс после финального ответа не публикуется), К32
+//  (отображение стадии/доли прогресса), К38 (таймауты 120с/10с на инжектируемых часах,
+//  сброс прогрессом), К40(ii-iii) (испорченный/чужой кадр прогресса молча отброшен).
 
 import Foundation
 import XCTest
@@ -59,6 +60,79 @@ final class EngineXPCClientTimingTests: XCTestCase {
         XCTAssertEqual(
             receivedCount.current, countAfterCompletion, "запоздалый прогресс не должен был дойти до вызывающей стороны"
         )
+    }
+
+    // MARK: - К32 (отображение): стадия/доля прогресса переданы верно потребителю
+
+    /// Собиратель значений прогресса — `@Sendable`-замыканию нельзя мутировать обычный `var`
+    /// (тот же приём, что `Counter` выше).
+    private final class ProgressCollector: @unchecked Sendable {
+        private let lock = NSLock()
+        private var items: [TranscriptionProgress] = []
+        func append(_ item: TranscriptionProgress) { lock.lock(); items.append(item); lock.unlock() }
+        var all: [TranscriptionProgress] { lock.lock(); defer { lock.unlock() }; return items }
+    }
+
+    /// К32 (отображение): реальный движок скриптован тремя стадиями `EngineProgress`, идущими
+    /// через настоящий провод (`EngineWire`/`NSXPCConnection`) — клиент обязан отдать
+    /// потребителю ровно `stage.rawValue` и `0` для `.started`/`.finished`, реальную долю
+    /// только для `.advanced`.
+    func test_k32_progressStageAndFractionMappedThroughRealTransport() async throws {
+        let engine = FakeTranscriptionEngine()
+        engine.progressScript = [
+            .started(stage: .asr),
+            .advanced(stage: .asr, fraction: 0.5),
+            .finished(stage: .asr)
+        ]
+        let fixture = XPCFixture(service: TestEngineXPCService(transcription: engine))
+        configureReadyProfile(fixture.modelCatalog)
+        let collector = ProgressCollector()
+
+        _ = try await fixture.client.transcribe(makeSpec()) { collector.append($0) }
+
+        let received = collector.all
+        XCTAssertEqual(received.map(\.stage), ["asr", "asr", "asr"])
+        XCTAssertEqual(received.map(\.fraction), [0, 0.5, 0])
+    }
+
+    // MARK: - К40(ii): кадр прогресса, испорченный на проводе — молча отброшен
+
+    /// К40(ii): кадр прогресса, доля которого вне представимого диапазона (та же порча,
+    /// что `EngineWireMalformedFieldTests.test_k40i_corruptedProgressFrameFailsToDecode`
+    /// на Core (Linux) — `PlistSurgery`, реальный `EngineWire.decode` бросает на decode) —
+    /// на клиенте не крашит и не долетает никуда; последующая обычная работа не задета.
+    func test_k40ii_progressFrameWithUnrepresentableFractionSilentlyDropped() async throws {
+        let fixture = XPCFixture()
+        configureReadyProfile(fixture.modelCatalog)
+        _ = try await fixture.client.ping()   // поднимает соединение и progressTarget
+
+        let message = EngineProgressMessage(
+            jobId: EngineJobId(rawValue: UUID()), progress: .advanced(stage: .asr, fraction: 0.5)
+        )
+        let corrupted = try PlistSurgery.data(for: message, replacing: "<real>0.5</real>", with: "<real>1e400</real>")
+        fixture.service.pushRawProgressData(corrupted)
+        try await Task.sleep(nanoseconds: 100_000_000)
+
+        let transcript = try await fixture.client.transcribe(makeSpec()) { _ in }
+        XCTAssertEqual(transcript.engine, "fake-transcription", "испорченный кадр не должен был затронуть клиента")
+    }
+
+    // MARK: - К40(iii): кадр прогресса для чужого jobId — молча отброшен
+
+    /// К40(iii), вторая половина: `jobId`, которого клиент не знает ВООБЩЕ (не «уже
+    /// завершённый», как К23, а никогда не существовавший) — кадр отбрасывается тем же
+    /// путём (`guard let job else { return }`), задача (если жива) идёт своим ходом.
+    func test_k40iii_progressForNeverKnownForeignJobIdSilentlyDropped() async throws {
+        let fixture = XPCFixture()
+        configureReadyProfile(fixture.modelCatalog)
+        _ = try await fixture.client.ping()
+
+        let foreignJobId = EngineJobId(rawValue: UUID())
+        fixture.service.pushRawProgress(jobId: foreignJobId, progress: .advanced(stage: .asr, fraction: 0.5))
+        try await Task.sleep(nanoseconds: 100_000_000)
+
+        let transcript = try await fixture.client.transcribe(makeSpec()) { _ in }
+        XCTAssertEqual(transcript.engine, "fake-transcription", "чужой кадр не должен был затронуть клиента")
     }
 
     // MARK: - К38: таймауты на инжектируемых часах

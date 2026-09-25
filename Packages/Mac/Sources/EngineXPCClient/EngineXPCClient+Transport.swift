@@ -67,7 +67,10 @@ extension EngineXPCClient {
         currentConnection().remoteObjectProxyWithErrorHandler(errorHandler) as? EngineXPCServiceProtocol
     }
 
-    private func currentConnection() -> NSXPCConnection {
+    // Не `private` — `ping()` в `EngineXPCClient.swift` фиксирует текущее соединение ДО
+    // круговой отправки, чтобы `markHandshakeVerified(for:)` могло сверить его с тем, что
+    // осталось текущим к моменту успешного ответа (см. заголовок `handshakeVerifiedConnection`).
+    func currentConnection() -> NSXPCConnection {
         return locked {
             if let connection { return connection }
             let fresh = makeConnection()
@@ -90,10 +93,20 @@ extension EngineXPCClient {
         let affected: [PendingJob] = locked {
             guard connection === died else { return [] }
             connection = nil
-            handshakeVerified = false
+            handshakeVerifiedConnection = nil
             let values = Array(jobs.values)
             jobs.removeAll()
             return values
+        }
+        if crashed {
+            // Возврат РП по MEE-431 (09:40 UTC): обрыв (interruption) сам по себе не делает
+            // NSXPCConnection недействительным — без явного `invalidate()` объект вправе САМ
+            // попытаться поднять сервис заново поверх ЭТОГО ЖЕ соединения. Дизайн клиента
+            // (заголовок EngineXPCClient.swift, К30) хочет ленивое ПЕРЕСОЗДАНИЕ через
+            // `makeConnection()` на следующий запрос, а не скрытый повторный подъём в обход
+            // этого пути; `invalidate()` на уже недействительном соединении — безопасный
+            // no-op (документировано Foundation), так что вызов не по гонке не вредит.
+            died.invalidate()
         }
         for job in affected {
             job.resolve(.failure(
@@ -144,6 +157,20 @@ extension EngineXPCClient {
                 try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<EngineReply, Error>) in
                     let job = PendingJob(continuation: continuation, progress: progress, startedAt: self.clock())
                     locked { jobs[jobId] = job }
+                    // Возврат РП по MEE-431 (09:40 UTC), инв. 12: `onCancel` вправе сработать
+                    // РАНЬШЕ этой регистрации — Swift зовёт его немедленно, если `Task` уже был
+                    // отменён к моменту старта `withTaskCancellationHandler`, конкурентно с
+                    // `operation`. В этот момент `jobs[jobId]` ещё нет, `onCancel`-овский
+                    // `removeValue` находит `nil` и молча ничего не делает — отмена терялась
+                    // бы, запрос всё равно ушёл бы на транспорт, а продолжение ждало бы ответа
+                    // вечно. Проверка здесь, сразу после регистрации, подхватывает именно этот
+                    // случай; `finish` — та же точка синхронизации (`removeValue` под замком),
+                    // что и у `onCancel`, так что при одновременном срабатывании обоих путей
+                    // ровно один получит задачу из словаря, другой — no-op.
+                    guard !Task.isCancelled else {
+                        finish(jobId: jobId, with: .failure(TranscriptionServiceError.cancelled))
+                        return
+                    }
                     startWatchdog(jobId: jobId, job: job, timeoutSeconds: timeoutSeconds)
                     dispatch(requestData, jobId: jobId)
                 }
@@ -205,6 +232,16 @@ extension EngineXPCClient {
         do {
             let reply = try EngineWire.decode(EngineReply.self, from: replyData)
             finish(jobId: jobId, with: .success(reply))
+        } catch let validationError as DomainValidationError {
+            // §3.2: байты дошли целыми, форма кадра разобрана — невалиден РАЗОБРАННЫЙ
+            // домен-объект внутри него (например `Transcript` с нарушенным инвариантом).
+            // Это отказ движка, вернувшего плохой результат, а не транспорта — код
+            // «invalidResult» дословно совпадает с именем случая `EngineError.invalidResult`
+            // (`engineErrorCode`), которым размечен тот же исход, когда сервис успевает
+            // заметить его сам и прислать `.failed(jobId, .invalidResult(...))`.
+            finish(jobId: jobId, with: .failure(
+                TranscriptionServiceError.engineFailure(code: "invalidResult", message: "\(validationError)")
+            ))
         } catch {
             finish(jobId: jobId, with: .failure(
                 TranscriptionServiceError.serviceUnavailable(message: "ответ не разобран: \(error)")
@@ -217,9 +254,17 @@ extension EngineXPCClient {
         job?.resolve(result)
     }
 
+    /// Возврат РП по MEE-431 (09:40 UTC): не через `serviceProxy`/`currentConnection()` —
+    /// те лениво ПОДНИМАЮТ соединение, если текущего уже нет. Если оно мертво (сервис упал,
+    /// `connectionDied` уже обнулил `connection` и резолвил эту же задачу `serviceCrashed`),
+    /// отправлять кадр `cancel` некому и незачем — только чтения существующего соединения,
+    /// без побочного создания нового ради одного бесполезного кадра.
     private func sendCancelFrame(for jobId: EngineJobId) {
         guard let data = try? EngineWire.encode(EngineRequest.cancel(jobId)) else { return }
-        guard let proxy = serviceProxy(errorHandler: { _ in }) else { return }
+        guard let existing: NSXPCConnection = locked({ connection }) else { return }
+        guard let proxy = existing.remoteObjectProxyWithErrorHandler({ _ in }) as? EngineXPCServiceProtocol else {
+            return
+        }
         proxy.send(data) { _, _ in }
     }
 
@@ -261,14 +306,35 @@ extension EngineXPCClient {
     }
 
     private func handshakeGate() async throws {
-        let alreadyChecked: Bool = locked { handshakeVerified }
-        guard !alreadyChecked else { return }
+        guard !handshakeAlreadyVerified() else { return }
+        // Тот же приём, что явный `ping()` (EngineXPCClient.swift): соединение фиксируется
+        // ДО отправки, чтобы пометить верным именно ЕГО, а не то, что стало текущим позже.
+        let connectionAtStart = currentConnection()
         let reply = try await roundTrip(.ping, timeoutSeconds: Self.pingTimeoutSeconds, progress: nil)
         guard case .pong(_, let serviceProtocolVersion) = reply else {
             throw TranscriptionServiceError.serviceUnavailable(message: "неожиданный ответ на рукопожатие: \(reply)")
         }
         try requireMatchingProtocolVersion(serviceProtocolVersion: serviceProtocolVersion)
-        locked { handshakeVerified = true }
+        markHandshakeVerified(for: connectionAtStart)
+    }
+
+    private func handshakeAlreadyVerified() -> Bool {
+        locked {
+            guard let connection, let handshakeVerifiedConnection else { return false }
+            return ObjectIdentifier(connection) == handshakeVerifiedConnection
+        }
+    }
+
+    /// Не `private` — вызывается и явным `ping()` из `EngineXPCClient.swift`. Пишет, только
+    /// если `verified` всё ещё ТЕКУЩЕЕ соединение — если оно уже сменилось (гонка с
+    /// `connectionDied` между отправкой и этим успешным ответом), запись — no-op: новое
+    /// соединение своё рукопожатие ещё не проходило, и молчаливо помечать его чужим было бы
+    /// именно той гонкой, которую правит `handshakeVerifiedConnection`.
+    func markHandshakeVerified(for verified: NSXPCConnection) {
+        locked {
+            guard connection === verified else { return }
+            handshakeVerifiedConnection = ObjectIdentifier(verified)
+        }
     }
 
     func requireMatchingProtocolVersion(serviceProtocolVersion: Int) throws {

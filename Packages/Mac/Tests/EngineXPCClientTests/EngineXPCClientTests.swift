@@ -154,4 +154,36 @@ final class EngineXPCClientTests: XCTestCase {
         XCTAssertEqual(fixture.modelCatalog.beginUseSuccessCount, 1)
         XCTAssertEqual(fixture.modelCatalog.endUseCallCount, 1, "расписка обязана погаситься даже на отказе движка")
     }
+
+    // MARK: - Тотальность (инв. 11): DomainValidationError сборки запроса не уходит наружу как есть
+
+    /// Возврат РП по MEE-431 (09:40 UTC): `DomainValidationError` из `TranscriptionRequest`/
+    /// `AudioSlice`/`EmbeddingRequest`/`AudioRef` обязан заворачиваться в `TranscriptionServiceError`
+    /// (`EngineXPCClient.buildRequest`), не уходить наружу как есть.
+    ///
+    /// Раскрытие отклонения от предложенного РП входа: буквальное «embed с endMs < startMs»
+    /// сегодня НЕ бросает ничего — `AudioSlice.validate()` (C-011, через `EngineOwner.requireInt`)
+    /// проверяет только представимость каждого поля по отдельности (диапазон ±(2^53−1)), порядок
+    /// начала/конца среза контракт в этом типе не проверяет вовсе. Это отдельный, настоящий пробел
+    /// C-011 (нет проверки endMs > startMs), но не тот, что чинит эта правка totality — здесь не
+    /// изобретается номер инварианта без чтения контрактного текста. Тест ниже доказывает ТУ ЖЕ
+    /// обёртку входом, который действительно ломает `requireInt` сегодня: `endMs` вне
+    /// представимого диапазона.
+    func test_inv11_embedRequestValidationErrorWrappedAsInvalidRequestNotRawDomainError() async throws {
+        let fixture = XPCFixture()
+        configureReadyProfile(fixture.modelCatalog, embeddingModelId: "emb-1")
+
+        do {
+            _ = try await fixture.client.embed(
+                recordingId: UUID(), startMs: 0, endMs: 9_007_199_254_740_992, profileId: "p1"
+            )
+            XCTFail("ожидался invalidRequest")
+        } catch TranscriptionServiceError.invalidRequest(let message) {
+            XCTAssertTrue(message.contains("endMs"), message)
+        } catch {
+            XCTFail("DomainValidationError не должен был уйти наружу как есть, а ушёл: \(error)")
+        }
+        XCTAssertEqual(fixture.modelCatalog.beginUseSuccessCount, 1)
+        XCTAssertEqual(fixture.modelCatalog.endUseCallCount, 1, "расписка обязана погаситься даже на этом отказе")
+    }
 }

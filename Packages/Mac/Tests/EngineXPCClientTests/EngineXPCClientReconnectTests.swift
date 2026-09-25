@@ -1,6 +1,7 @@
 //  EngineXPCClientReconnectTests — план MEE-389: К29 (падение сервиса — все живые задачи
 //  получают `serviceCrashed` ровно раз, клиент не повторяет запрос сам), К30 (выгрузка по
-//  простою — следующий запрос тем же клиентом переподключается прозрачно).
+//  простою — следующий запрос тем же клиентом переподключается прозрачно), К52
+//  (`interruptionHandler` vs `invalidationHandler` — разные обработчики, разный исход).
 
 import XCTest
 import DomainCore
@@ -62,5 +63,31 @@ final class EngineXPCClientReconnectTests: XCTestCase {
         XCTAssertEqual(
             transcript.engine, "fake-transcription", "запрос после обрыва обязан пройти как ни в чём не бывало"
         )
+    }
+
+    /// К52: `interruptionHandler` (К29 — «сервис упал», настоящий обрыв) и `invalidationHandler`
+    /// (эта задача — соединение стало недействительным БЕЗ краха: сам клиент вызвал
+    /// `invalidate()` на СВОЁМ соединении) — два разных обработчика с разным исходом.
+    /// `NSXPCConnection` документированно зовёт только `invalidationHandler` на явный
+    /// собственный `invalidate()`, не `interruptionHandler` (тот — только на обрыв УДАЛЁННОЙ
+    /// стороны); красный этого теста — `serviceCrashed` вместо `serviceUnavailable` доказал
+    /// бы, что оба пути перепутаны местами.
+    func test_k52_clientSideInvalidationWithoutCrashMapsToServiceUnavailableNotServiceCrashed() async throws {
+        let engine = FakeTranscriptionEngine()
+        engine.simulatedWorkNanoseconds = 2_000_000_000   // с запасом дольше, чем сама инвалидация
+        let fixture = XPCFixture(service: TestEngineXPCService(transcription: engine))
+        configureReadyProfile(fixture.modelCatalog)
+
+        let task = Task { try await fixture.client.transcribe(self.makeSpec()) { _ in } }
+        try await Task.sleep(nanoseconds: 150_000_000)   // дать запросу дойти до сервиса
+        let connection = fixture.client.locked { fixture.client.connection }
+        connection?.invalidate()
+
+        do {
+            _ = try await task.value
+            XCTFail("ожидался serviceUnavailable, не serviceCrashed")
+        } catch TranscriptionServiceError.serviceUnavailable {
+            // ожидаемо — invalidationHandler, не interruptionHandler
+        }
     }
 }

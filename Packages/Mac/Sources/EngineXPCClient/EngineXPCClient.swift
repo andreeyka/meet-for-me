@@ -51,9 +51,13 @@ public final class EngineXPCClient: TranscriptionServicePort, @unchecked Sendabl
     let lock = NSLock()
     var connection: NSXPCConnection?
     var jobs: [EngineJobId: PendingJob] = [:]
-    /// К21: сброшен `connectionDied` при пересоздании соединения — рукопожатие проверяется
-    /// заново на каждое новое соединение, не один раз за всё время жизни клиента.
-    var handshakeVerified = false
+    /// К21: привязано к КОНКРЕТНОМУ соединению (`ObjectIdentifier`, не голый `Bool`) —
+    /// возврат РП по MEE-431 (09:40 UTC): плоский флаг решала гонка с `connectionDied` —
+    /// успешный `pong`, дошедший ПОСЛЕ того, как то же соединение уже умерло и было
+    /// заменено новым, мог бы выставить флаг для НОВОГО (на деле непроверенного)
+    /// соединения. Сброшен `connectionDied` в `nil`; `markHandshakeVerified(for:)` пишет
+    /// только если проверяемое соединение всё ещё текущее.
+    var handshakeVerifiedConnection: ObjectIdentifier?
 
     /// Прод: соединение по имени сервиса launchd. Реальный `EngineXPCServiceProtocol`
     /// раздаёт сервис (`Services/TranscriptionEngineXPC`), эта сторона его не знает —
@@ -89,6 +93,10 @@ public final class EngineXPCClient: TranscriptionServicePort, @unchecked Sendabl
     // MARK: - TranscriptionServicePort
 
     public func ping() async throws -> String {
+        // Соединение фиксируется ДО круговой отправки — если оно умрёт и будет
+        // пересоздано, пока этот `ping` в пути, `markHandshakeVerified` ниже увидит, что
+        // текущее соединение уже не то, что было проверено, и не пометит чужое.
+        let connectionAtStart = currentConnection()
         let reply = try await roundTrip(.ping, timeoutSeconds: Self.pingTimeoutSeconds, progress: nil)
         guard case .pong(let serviceVersion, let serviceProtocolVersion) = reply else {
             throw TranscriptionServiceError.serviceUnavailable(message: "неожиданный ответ на ping: \(reply)")
@@ -97,7 +105,7 @@ public final class EngineXPCClient: TranscriptionServicePort, @unchecked Sendabl
         // Успешный явный `ping()` — то же доказательство рукопожатия, что и внутренний
         // (`handshakeGate`): следующий рабочий запрос на этом соединении не обязан
         // повторять его сам (К21 — один раз на соединение, а не один раз на вызов `ping`).
-        locked { handshakeVerified = true }
+        markHandshakeVerified(for: connectionAtStart)
         return serviceVersion
     }
 
@@ -109,11 +117,13 @@ public final class EngineXPCClient: TranscriptionServicePort, @unchecked Sendabl
         var bundles = [profile.asr]
         if let vad = profile.vad { bundles.append(vad) }
         return try await withModelUse(profileId: spec.profileId, bundles) {
-            let audio = try Self.placeholderAudioRef(recordingId: spec.recordingId)
-            let request = try TranscriptionRequest(
-                audio: [audio], language: spec.language, wantWordTimestamps: spec.wantWordTimestamps,
-                asrModel: profile.asr, vadModel: profile.vad
-            )
+            let request = try Self.buildRequest {
+                let audio = try Self.placeholderAudioRef(recordingId: spec.recordingId)
+                return try TranscriptionRequest(
+                    audio: [audio], language: spec.language, wantWordTimestamps: spec.wantWordTimestamps,
+                    asrModel: profile.asr, vadModel: profile.vad
+                )
+            }
             let jobId = EngineJobId(rawValue: UUID())
             let reply = try await roundTrip(
                 .transcribe(jobId, request), timeoutSeconds: Self.workTimeoutSeconds, progress: progress
@@ -130,9 +140,11 @@ public final class EngineXPCClient: TranscriptionServicePort, @unchecked Sendabl
             )
         }
         return try await withModelUse(profileId: profileId, [embeddingModel]) {
-            let audio = try Self.placeholderAudioRef(recordingId: recordingId)
-            let slice = try AudioSlice(source: audio, startMs: startMs, endMs: endMs)
-            let request = try EmbeddingRequest(slice: slice, model: embeddingModel)
+            let request = try Self.buildRequest {
+                let audio = try Self.placeholderAudioRef(recordingId: recordingId)
+                let slice = try AudioSlice(source: audio, startMs: startMs, endMs: endMs)
+                return try EmbeddingRequest(slice: slice, model: embeddingModel)
+            }
             let jobId = EngineJobId(rawValue: UUID())
             let reply = try await roundTrip(
                 .embed(jobId, request), timeoutSeconds: Self.workTimeoutSeconds, progress: nil
@@ -172,6 +184,21 @@ public final class EngineXPCClient: TranscriptionServicePort, @unchecked Sendabl
         } catch {
             await modelCatalog.endUse(token)
             throw error
+        }
+    }
+
+    /// Возврат РП по MEE-431 (09:40 UTC), тотальность инв. 11: `TranscriptionRequest`/
+    /// `AudioSlice`/`EmbeddingRequest`/`AudioRef` — все throwing-конструкторы C-011, и
+    /// `DomainValidationError` из них раньше уходил наружу как есть, нарушая тотальность
+    /// порта (`TranscriptionServicePort` обязан бросать только `TranscriptionServiceError`).
+    /// Разобранный по значению отказ ДВИЖКА (`engineFailure`) — другое дело; здесь же запрос
+    /// не прошёл собственную проверку клиента ДО всякого обращения к транспорту, тот же
+    /// исход, что «сервис разобрал и не принял» (§3.2) — `invalidRequest`.
+    private static func buildRequest<Value>(_ body: () throws -> Value) throws -> Value {
+        do {
+            return try body()
+        } catch let validationError as DomainValidationError {
+            throw TranscriptionServiceError.invalidRequest(message: "\(validationError)")
         }
     }
 
