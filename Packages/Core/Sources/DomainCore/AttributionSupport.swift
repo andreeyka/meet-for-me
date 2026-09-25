@@ -68,7 +68,11 @@ enum AttributionSupport {
         let segmentRows = try await repositories.transcripts.segments(transcriptId: transcriptId)
         let segmentIds = segmentRows.map(\.id)
         let userEditedSegmentIds = segmentRows
-            .filter { $0.isUserEdited && $0.segment.speakerCluster != excludedCluster }
+            .filter { row in
+                guard row.isUserEdited else { return false }
+                guard let excludedCluster else { return true }
+                return row.segment.speakerCluster != excludedCluster
+            }
             .map(\.id)
         let embeddingModelVersion = try embeddingModelVersion(transcript: transcript, transcriptId: transcriptId)
 

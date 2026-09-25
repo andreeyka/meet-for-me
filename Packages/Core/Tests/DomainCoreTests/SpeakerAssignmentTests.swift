@@ -34,9 +34,20 @@ final class SpeakerAssignmentTests: XCTestCase {
             startMs: 800, endMs: 1600, channel: .system, speakerCluster: 1,
             text: "слова кластера Б", textOriginal: nil, textConfidence: nil, words: []
         )
+        // Инв. 9: каждый speakerCluster сегмента обязан присутствовать среди speakers.
+        // embeddingModelVersion непуст хотя бы у одного — иначе AttributionSupport.buildInput
+        // считает вход испорченным (§7 «embeddingModelVersion»); инв. 10 требует embedding
+        // и embeddingModelVersion только парой, поэтому оба заданы вместе.
+        let speakerA = try Transcript.Speaker(
+            cluster: 0, embedding: [0.1, 0.2], embeddingModelVersion: "v1", totalMs: 800
+        )
+        let speakerB = try Transcript.Speaker(
+            cluster: 1, embedding: [0.3, 0.4], embeddingModelVersion: "v1", totalMs: 800
+        )
         let transcript = try Transcript(
             recordingId: recordingId, language: "ru", engine: "engine", modelVersion: "1.0",
-            createdAt: Date(timeIntervalSince1970: 0), segments: [segmentA, segmentB], speakers: []
+            createdAt: Date(timeIntervalSince1970: 0), segments: [segmentA, segmentB],
+            speakers: [speakerA, speakerB]
         )
         let header = try await repositories.transcripts.save(transcript)
         let rows = try await repositories.transcripts.segments(transcriptId: header.id)
