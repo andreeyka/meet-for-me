@@ -88,4 +88,18 @@ final class EditSegmentTextTests: XCTestCase {
             fixture.repositories.log.count(port: "TranscriptRepository", method: Self.applyTextCorrectionsMethod), 0
         )
     }
+
+    // MARK: - Приёмка РП 10:35 UTC: неизвестный сегмент → storage.notFound
+
+    func test_editSegmentTextOnUnknownSegmentThrowsStorageNotFound() async throws {
+        let fixture = try await makeFixture()
+        let unknownSegmentId: Int64 = fixture.segmentId + 1
+
+        do {
+            try await fixture.facade.editSegmentText(segmentId: unknownSegmentId, text: "неважно")
+            XCTFail("ожидался AppFacadeError.underlying(storage.notFound)")
+        } catch AppFacadeError.underlying(let view) {
+            XCTAssertEqual(view.code, "storage.notFound")
+        }
+    }
 }
