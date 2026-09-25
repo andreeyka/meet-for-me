@@ -37,6 +37,7 @@ public enum TranscriptRepositoryMethod: String, Sendable, CaseIterable {
     case segments
     case updateAttribution
     case updateSegmentText
+    case markSegmentsUserEdited
     case applyTextCorrections
     case search
 }
@@ -234,13 +235,15 @@ extension InMemoryTranscriptRepository {
         }
     }
 
-    /// Инвариант 17 дословно: строка с `isUserEdited == true` пропускается МОЛЧА.
-    /// Зовётся под замком.
+    /// Инвариант 17: строка с `isUserEdited == true` пропускается МОЛЧА — кроме
+    /// исключения C-010 v25 (IR-135, MEE-421): `attributionSource == .user` записывается
+    /// всегда. `isUserEdited` эта запись не трогает — он остаётся тем, чем был. Зовётся
+    /// под замком.
     private func applyAttribution(_ update: SegmentAttributionUpdate) {
         for (transcriptId, rows) in rowsByTranscript {
             guard let index = rows.firstIndex(where: { $0.id == update.segmentId }) else { continue }
             let row = rows[index]
-            guard !row.isUserEdited else { return }
+            guard !row.isUserEdited || update.attributionSource == .user else { return }
             rowsByTranscript[transcriptId]?[index] = SegmentRow(
                 id: row.id,
                 transcriptId: row.transcriptId,

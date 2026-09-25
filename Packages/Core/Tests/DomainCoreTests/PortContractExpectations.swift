@@ -74,6 +74,7 @@ extension PortDeclarationTests {
         "func segments(transcriptId: UUID) async throws -> [SegmentRow]",
         "func updateAttribution(_ updates: [SegmentAttributionUpdate]) async throws",
         "func updateSegmentText(segmentId: Int64, text: String, isUserEdited: Bool) async throws",
+        "func markSegmentsUserEdited(segmentIds: [Int64]) async throws",
         "func applyTextCorrections(segmentId: Int64, text: String, corrections: [TextCorrection]) async throws",
         "func search(query: String, limit: Int, offset: Int) async throws -> [SearchHit]"
     ]

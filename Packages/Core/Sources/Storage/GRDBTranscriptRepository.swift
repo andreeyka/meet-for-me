@@ -53,16 +53,27 @@ final class GRDBTranscriptRepository: TranscriptRepository {
         }
     }
 
-    /// К22, инвариант 17: пропускает молча строки с `is_user_edited = 1`.
+    /// К22, инвариант 17: автоматические источники пропускают молча строки с
+    /// `is_user_edited = 1`. Исключение (C-010 v25, IR-135, MEE-421): `attributionSource
+    /// == .user` записывается всегда, независимо от `is_user_edited` — решение человека
+    /// по кластеру не должно отклоняться собственной же пометкой правки. `is_user_edited`
+    /// эта запись не трогает — он остаётся тем, чем был (обычно 1, выставлен заранее
+    /// `markSegmentsUserEdited`).
     func updateAttribution(_ updates: [SegmentAttributionUpdate]) async throws {
         do {
             try await database.dbPool.write { db in
                 for update in updates {
+                    let sql = update.attributionSource == .user
+                        ? """
+                          UPDATE segments SET person_id = ?, speaker_confidence = ?, attribution_source = ?
+                          WHERE id = ?
+                          """
+                        : """
+                          UPDATE segments SET person_id = ?, speaker_confidence = ?, attribution_source = ?
+                          WHERE id = ? AND is_user_edited = 0
+                          """
                     try db.execute(
-                        sql: """
-                        UPDATE segments SET person_id = ?, speaker_confidence = ?, attribution_source = ?
-                        WHERE id = ? AND is_user_edited = 0
-                        """,
+                        sql: sql,
                         arguments: [
                             update.personId?.uuidString, update.speakerConfidence,
                             update.attributionSource.rawValue, update.segmentId
@@ -86,6 +97,32 @@ final class GRDBTranscriptRepository: TranscriptRepository {
             }
             guard changed > 0 else {
                 throw StorageError.notFound(entity: StorageEntity.segment, id: String(segmentId))
+            }
+        } catch {
+            throw StorageErrorMapping.mapWrite(error)
+        }
+    }
+
+    /// C-010 v25, инвариант 34 (IR-135, MEE-421): ставит только `is_user_edited = 1` —
+    /// `text`/`text_original`/`words_json`/атрибуцию не трогает. Пустой список — ничего не
+    /// делает без обращения к базе. Повтор id в списке безвреден: `UPDATE ... WHERE id = ?`
+    /// идемпотентен сам по себе, `Set` лишь исключает лишний проход. Чужой id —
+    /// `constraintViolation`, не `notFound`: контракт называет именно этот случай дословно.
+    /// Транзакция одна на весь список — брошенная ошибка откатывает уже применённые правки.
+    func markSegmentsUserEdited(segmentIds: [Int64]) async throws {
+        guard !segmentIds.isEmpty else { return }
+        do {
+            try await database.dbPool.write { db in
+                for segmentId in Set(segmentIds) {
+                    try db.execute(
+                        sql: "UPDATE segments SET is_user_edited = 1 WHERE id = ?", arguments: [segmentId]
+                    )
+                    guard db.changesCount > 0 else {
+                        throw StorageError.constraintViolation(
+                            message: "markSegmentsUserEdited: сегмент \(segmentId) не найден"
+                        )
+                    }
+                }
             }
         } catch {
             throw StorageErrorMapping.mapWrite(error)

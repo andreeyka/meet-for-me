@@ -138,4 +138,41 @@ final class TranscriptRepositoryFileTests: StorageAsyncTestCase {
             XCTAssertEqual(row.attributionSource, .oneOnOne, "остальные обновлены")
         }
     }
+
+    /// C-010 v25, инвариант 34/17-исключение (IR-135, MEE-421): `attributionSource == .user`
+    /// пишется на строку с `isUserEdited = true` — прямая противоположность К22 выше,
+    /// потому что решение человека по кластеру само уже прошло через
+    /// `markSegmentsUserEdited`, и не должно отклоняться собственной же пометкой.
+    func testMEE421_updateAttributionWithUserSourceWritesDespiteIsUserEdited() async throws {
+        let temp = try StorageTestSupport.makeDatabase()
+        defer { StorageTestSupport.cleanup(temp) }
+        let layout = FileLayout(root: temp.directory)
+        let recordingRepository = temp.database.recordingRepository(fileLayout: layout)
+        let transcripts = temp.database.transcriptRepository()
+        let persons = temp.database.personRepository()
+
+        let recordingId = UUID()
+        try await recordingRepository.save(RecordingRecord(
+            manifest: try TestFixtures.recordingManifest(recordingId: recordingId), status: .recording
+        ))
+        let segments = try TestFixtures.threeDistinctSegments(prefix: "user-src")
+        let header = try await transcripts.save(
+            try TestFixtures.transcript(recordingId: recordingId, segments: segments)
+        )
+        let rows = try await transcripts.segments(transcriptId: header.id)
+        let personId = try await persons.upsert(displayName: "User Source Person", emails: ["user-src@example.com"])
+
+        try await transcripts.markSegmentsUserEdited(segmentIds: [rows[0].id])
+        try await transcripts.updateAttribution([
+            SegmentAttributionUpdate(
+                segmentId: rows[0].id, personId: personId, speakerConfidence: 1.0, attributionSource: .user
+            )
+        ])
+
+        let after = try await transcripts.segments(transcriptId: header.id)
+        let updated = try XCTUnwrap(after.first { $0.id == rows[0].id })
+        XCTAssertEqual(updated.personId, personId, "запись прошла, несмотря на isUserEdited")
+        XCTAssertEqual(updated.attributionSource, .user)
+        XCTAssertTrue(updated.isUserEdited, "остаётся true — метод не трогает этот столбец")
+    }
 }
