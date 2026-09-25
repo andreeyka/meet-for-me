@@ -264,7 +264,8 @@ final class SpeakerAssignmentTests: XCTestCase {
         XCTAssertEqual(
             fixture.repositories.log.count(port: "TranscriptRepository", method: "updateAttribution(_:)"), 1
         )
-        let row = try XCTUnwrap(try await segmentRows(fixture).first { $0.id == segmentId })
+        let rows = try await segmentRows(fixture)
+        let row = try XCTUnwrap(rows.first { $0.id == segmentId })
         XCTAssertEqual(row.personId, personId)
         XCTAssertTrue(row.isUserEdited)
     }
