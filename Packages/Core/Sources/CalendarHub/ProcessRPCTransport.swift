@@ -100,12 +100,18 @@ public actor ProcessRPCTransport: RPCTransport {
         let stdoutStream = AsyncStream<Data> { continuation in
             capturedStdoutContinuation = continuation
         }
-        stdoutContinuation = capturedStdoutContinuation
+        // `let`, не `var` — тот же класс ошибки, что уже дважды встречался в этом файле
+        // («reference to captured var в конкурентно исполняющемся коде»): `var` выше нужен
+        // только чтобы выбраться из замыкания `AsyncStream.init`, дальше замыкания
+        // `readabilityHandler` обязаны захватывать уже неизменяемое значение.
+        let stdoutContinuationForHandler = capturedStdoutContinuation!
+        stdoutContinuation = stdoutContinuationForHandler
 
         var capturedStderrContinuation: AsyncStream<Data>.Continuation!
         let stderrStream = AsyncStream<Data> { continuation in
             capturedStderrContinuation = continuation
         }
+        let stderrContinuationForHandler = capturedStderrContinuation!
 
         try process.run()
 
@@ -116,12 +122,12 @@ public actor ProcessRPCTransport: RPCTransport {
         stdoutHandle.readabilityHandler = { handle in
             let data = handle.availableData
             if data.isEmpty { handle.readabilityHandler = nil }
-            capturedStdoutContinuation.yield(data)
+            stdoutContinuationForHandler.yield(data)
         }
         stderrHandle.readabilityHandler = { handle in
             let data = handle.availableData
             if data.isEmpty { handle.readabilityHandler = nil }
-            capturedStderrContinuation.yield(data)
+            stderrContinuationForHandler.yield(data)
         }
         process.terminationHandler = { [weak self] proc in
             Task { [weak self] in await self?.handleTermination(status: proc.terminationStatus) }
