@@ -49,6 +49,12 @@ final class DedupCollisionTests: XCTestCase {
     /// проигравшую запись без следа (собственная СТРОКА `CalendarPortImplMerge.swift` до
     /// этой правки). Доказательство: `save(_:absorbing:)` настроен на отказ — ни проигравшая,
     /// ни выигравшая запись не изменились ни на йоту, слияние не состоялось частично.
+    ///
+    /// Возврат РП (приёмка #137, голова 689f312): двух проверок хранилища недостаточно —
+    /// добавлены (1) `assertNoChangeArrives` на `hub.changes()`, доказывающее, что `.deleted`
+    /// не публикуется при отказе (без неё тест остался бы зелёным, даже переедь `emit(.deleted)`
+    /// раньше `save`), и (2) проверка по `callLog`, что вызван именно `save(_:absorbing:)`
+    /// с `[loserId]`, а не какой-то другой метод/аргумент.
     func test_k19_saveAbsorbingFailureLeavesBothRecordsUntouched() async throws {
         let harness = Harness.mergeReady(sourceIds: ["src-1", "src-2"])
         let sharedStart = Date(timeIntervalSince1970: 1_700_000_000)
@@ -59,6 +65,7 @@ final class DedupCollisionTests: XCTestCase {
         try seedCollisionCandidateY(harness, id: loserId, start: sharedStart.addingTimeInterval(3_600))
         harness.meetingRepository.fail(with: .io(message: "диск недоступен"), on: .save, id: winnerId.uuidString)
 
+        let iterator = StreamIteratorBox(harness.hub.changes())
         let colliding = try mergeTestPayload(
             connectorId: "src-2", externalId: "evt-2", lastModified: sharedStart.addingTimeInterval(20),
             location: "Room-New"
@@ -69,6 +76,15 @@ final class DedupCollisionTests: XCTestCase {
         } catch {
             // ожидаемо — StorageError.io, настроенный выше.
         }
+
+        await assertNoChangeArrives(iterator, "отказ save(_:absorbing:) не должен публиковать .deleted")
+
+        let absorbingCall = harness.meetingRepository.callLog.calls(port: "MeetingRepository")
+            .last { $0.method == "save(_:absorbing:)" }
+        XCTAssertEqual(
+            absorbingCall?.arguments, [winnerId.uuidString, loserId.uuidString],
+            "mergeIncoming обязан звать save(_:absorbing:) с победителем и [loserId], не delete()+save()"
+        )
 
         let stored = harness.meetingRepository.storedRecords
         XCTAssertEqual(stored.count, 2, "отказ save(_:absorbing:) не удалил ни одной записи")
