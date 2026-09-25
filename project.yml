@@ -138,3 +138,19 @@ targets:
       # (см. правку выше и приёмку РП, #163). Само содержимое подключения — задача MEE-431.
       - package: Core
         product: GigaAM
+      # MEE-438: механическое следствие правки Packages/Mac/Package.swift, которую РП
+      # разрешил заранее (логика стороны сервиса вынесена туда библиотечным таргетом ради
+      # SwiftPM-тестируемости) — без этой строки `main.swift` не мог бы импортировать её.
+      # Правка ЭТОГО файла отдельно РП не называла (только Package.swift) — раскрыто явно в
+      # PR/Linear как interface-request архитектору, не тихая правка «раз уж всё равно
+      # трогаю каркас».
+      - package: Mac
+        product: EngineXPCService
+      # Та же правка: `ServiceConnectionDelegate.swift` (обвязка NSXPCConnection этого
+      # таргета, не EngineXPCService — символьный граф CI не видит этот каталог, но публично
+      # нести NSObject/NSXPCConnection сам EngineXPCService без allowed-types-файла, не
+      # разрешённого этой задачей, не может, см. заголовок EngineXPCRequestHandler.swift)
+      # использует протоколы EngineXPCServiceProtocol/EngineXPCClientProtocol, которые
+      # объявлены в этом продукте (MEE-431), не дублирует их здесь заново.
+      - package: Mac
+        product: EngineXPCClient
