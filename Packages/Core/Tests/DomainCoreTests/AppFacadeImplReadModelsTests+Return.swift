@@ -162,7 +162,8 @@ extension AppFacadeImplReadModelsTests {
             calendar: FakeCalendarPort(),
             sessionCoordinator: NoOpSessionCoordinator(),
             attribution: FakeAttributionPort(),
-            settings: repositories.settings
+            settings: repositories.settings,
+            connectors: repositories.connectors
         )
 
         do {

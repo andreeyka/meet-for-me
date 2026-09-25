@@ -60,6 +60,30 @@ extension AppFacadeImpl {
         }
     }
 
+    /// К47 (группа Х плана MEE-410, MEE-441; возврат РП, приёмка 12:00 UTC, находка 1):
+    /// `SessionCoordinator.swift` называет `startRecording`/`stopRecording`/`skip` прямо —
+    /// «Команды; их зовёт фасад C-016 §4» (§3.1) — тем же классом вызовов, что уже даёт
+    /// `startRecording`/`stopRecording` выше. Первая редакция писала статус напрямую через
+    /// `MeetingRepository.setStatus(.skipped, meetingId:)`, в обход машины сессий, — машина
+    /// не узнавала о пропуске и продолжала бы взводить/записывать встречу. Симметрично
+    /// `startRecording`/`stopRecording`: вызов `sessionCoordinator.skip`, отказ —
+    /// `wrap(_:SessionError)`.
+    ///
+    /// Событие — инв. 15 (не К47: критерий его не называет). `.meetingsChanged` — пропуск
+    /// меняет статус встречи, `.statusChanged` — то же поле участвует в `AppStatus.upcoming`,
+    /// тем же доводом, что `syncCalendars()`/К33 выше.
+    public func skipMeeting(meetingId: UUID) async throws {
+        do {
+            try await sessionCoordinator.skip(meetingId: meetingId, now: clock())
+            publish(.meetingsChanged)
+            publish(.statusChanged(await status()))
+        } catch let error as SessionError {
+            throw wrap(error)
+        } catch {
+            throw wrapUnexpected(error)
+        }
+    }
+
     func wrap(_ error: SessionError) -> AppFacadeError {
         switch error {
         case .noSuchMeeting(let meetingId):

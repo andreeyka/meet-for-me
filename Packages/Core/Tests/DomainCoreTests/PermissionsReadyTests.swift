@@ -41,6 +41,7 @@ final class PermissionsReadyTests: XCTestCase {
             sessionCoordinator: NoOpSessionCoordinator(),
             attribution: FakeAttributionPort(),
             settings: repositories.settings,
+            connectors: repositories.connectors,
             clock: { Date(timeIntervalSince1970: 0) }
         )
         return Fixture(facade: facade, permissions: permissions)

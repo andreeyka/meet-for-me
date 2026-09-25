@@ -51,6 +51,7 @@ final class EditSegmentTextTests: XCTestCase {
             sessionCoordinator: NoOpSessionCoordinator(),
             attribution: FakeAttributionPort(),
             settings: repositories.settings,
+            connectors: repositories.connectors,
             clock: { Date() }
         )
         return Fixture(facade: facade, repositories: repositories, transcriptId: header.id, segmentId: segmentId)
