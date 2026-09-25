@@ -84,15 +84,19 @@ extension StdioProtocolTests {
         // Возврат РП (приёмка #135, п. 3), хвост: следующая синхронизация начинается с
         // `fetchChanges(cursor: nil)` — не запоминает полное окно как новый режим работы.
         // `initialize` не повторяется (capabilities уже в кэше источника), поэтому четвёртый
-        // исходящий кадр — сразу `fetchChanges` этого второго цикла.
+        // исходящий кадр — сразу `fetchChanges` этого второго цикла. Курсор был nil к началу
+        // цикла — тот же Р9, что и в `test_firstDeltaStepCursorInvalidTreatedAsEmptyBatchThen
+        // StepTwoFullWindowRuns`: шаг 2 (полное окно, `fetchEvents`) выполняется ЭТИМ ЖЕ циклом
+        // независимо от исхода шага 1 — отсюда пятый кадр, не только четвёртый.
         transport.enqueue(
             #"{"schemaVersion":1,"id":4,"result":"#
                 + #"{"events":[],"deletedExternalIds":[],"cursor":"c2","resetRequired":false}}"#
         )
+        transport.enqueue(#"{"schemaVersion":1,"id":5,"result":{"events":[]}}"#)
         let secondResults = await hub.sync(trigger: .manual)
 
         XCTAssertNil(secondResults.first?.failure)
-        XCTAssertEqual(transport.sent.count, 4)
+        XCTAssertEqual(transport.sent.count, 5, "fetchChanges (шаг 1) + fetchEvents (шаг 2, Р9)")
         XCTAssertTrue(transport.sent[3].contains(#""method":"fetchChanges""#))
         // `nil` при записи опускается (C-006 §2/C-001 §0.4) — ключа "cursor" в кадре нет
         // вовсе, не `"cursor":null`; отсутствие ключа здесь и есть доказательство «начал с nil».
