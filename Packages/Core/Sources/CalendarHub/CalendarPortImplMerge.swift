@@ -109,29 +109,19 @@ extension CalendarPortImpl {
 
         let id = winner?.event.id ?? UUID()
         let merged = try Self.merge(sources: sources, id: id)
-        // Проигравшая запись обязана уйти ДО save() победителя — иначе её всё ещё живая
-        // строка той же пары (sourceConnectorId, externalId) столкнётся с только что
-        // унаследованной инв. 30 C-010 ("пара уже занята другой записью").
-        //
-        // СТРОКА (возврат РП, 24.09 23:12 UTC, п. 1): delete()+save() не атомарны — бросит
-        // save() ПОСЛЕ того, как delete() уже прошёл, проигравшая запись потеряется без
-        // следа (не восстановится следующим циклом: её источники уже нигде не значатся).
-        // `MeetingRepository` (C-010, DomainCore/Repositories.swift) не даёт ни
-        // транзакции, ни объединённого метода «удалить+сохранить одной операцией» — обратный
-        // порядок (save() до delete()) не чинит это, а меняет отказ на другой (инв. 30
-        // выше): настоящая атомарность требует новой операции репозитория, зона C-010,
-        // владелец DEV-2 — не мой код-путь; вынесено в MEE-386 на IR архитектору.
-        if let absorbedId = absorbed?.event.id {
-            try await meetingRepository.delete(meetingIds: [absorbedId])
-        }
-        try await meetingRepository.save(
-            MeetingRecord(
-                event: merged, dedupKey: DedupKey.make(from: merged),
-                status: winner?.status ?? .ready, sources: sources
-            )
+        let record = MeetingRecord(
+            event: merged, dedupKey: DedupKey.make(from: merged), status: winner?.status ?? .ready, sources: sources
         )
+        // Раньше здесь стояли раздельные delete()+save() (не атомарны — отказ save() ПОСЛЕ
+        // уже прошедшего delete() терял бы проигравшую запись без следа) — закрыто
+        // MEE-407 (C-010 v21/v22, инв. 33): save(_:absorbing:) одной транзакцией переносит
+        // recordings/meeting_outputs проигравшего на победителя, удаляет его и сохраняет
+        // запись — тем же вызовом, что решает и инв. 30 (пара уже занята удаляемой записью).
         if let absorbedId = absorbed?.event.id {
+            try await meetingRepository.save(record, absorbing: [absorbedId])
             emit(.deleted([absorbedId]))
+        } else {
+            try await meetingRepository.save(record)
         }
         emit(.upserted([merged]))
         return true
