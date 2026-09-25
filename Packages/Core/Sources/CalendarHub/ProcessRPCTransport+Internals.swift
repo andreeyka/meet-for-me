@@ -115,14 +115,16 @@ extension ProcessRPCTransport {
         continuation.resume(throwing: error)
     }
 
-    /// Сторож на 5 секунд — конечная подстраховка на случай, если ни EOF `stdout`, ни
-    /// `terminationHandler` не сработают на конкретной платформе (не политика тайм-аутов
-    /// «Поведения», см. докстринг `close()`): без него `close()` рисковал бы зависнуть
-    /// навсегда, если оба сигнала почему-то молчат.
-    func waitForExit() async {
+    /// Сторож — конечная подстраховка на случай, если ни EOF `stdout`, ни `terminationHandler`
+    /// не сработают на конкретной платформе (не политика тайм-аутов «Поведения», см. докстринг
+    /// `close()`): без него `close()` рисковал бы зависнуть навсегда, если оба сигнала
+    /// почему-то молчат. `timeoutSeconds` короче для грейс-периода после EOF `stdin` (`close()`
+    /// даёт процессу шанс выйти самому, не по сигналу, прежде чем переходить к SIGTERM) — 5с
+    /// там был бы просто потраченным временем, если процесс не собирается выходить по EOF.
+    func waitForExit(timeoutSeconds: Double = 5) async {
         if !process.isRunning { return }
         let watchdog = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(5))
+            try? await Task.sleep(for: .seconds(timeoutSeconds))
             // `try?` глотает `CancellationError` молча — без проверки `isCancelled` эта задача
             // звала бы `forceResolveExits()` СРАЗУ после отмены (`watchdog.cancel()` ниже), даже
             // если реальный сигнал разрешил ожидание за миллисекунды: безобидно само по себе
@@ -140,5 +142,30 @@ extension ProcessRPCTransport {
     func forceResolveExits() {
         for continuation in pendingExits { continuation.resume() }
         pendingExits.removeAll()
+    }
+
+    /// DEBUG-TEMP (возврат РП 07:05 UTC — последняя попытка перед документированием, снять
+    /// после диагностики): печатает в stderr раннера `State`/`SigBlk`/`SigIgn`/`SigCgt` из
+    /// `/proc/<pid>/status` и список открытых `/proc/<pid>/fd` — САМОГО ребёнка неудачного
+    /// теста (не отдельного диагностического теста, как в предыдущей попытке), прямо перед
+    /// `terminate()`, то есть после того, как грейс-период по EOF `stdin` уже истёк и процесс
+    /// всё ещё жив. На платформах без `/proc` (macOS) оба чтения молча проваливаются — только
+    /// для диагностики CI на Linux.
+    func debugDumpProcState() {
+        let pid = process.processIdentifier
+        if let status = try? String(contentsOfFile: "/proc/\(pid)/status", encoding: .utf8) {
+            for line in status.split(separator: "\n") where
+                line.hasPrefix("State:") || line.hasPrefix("SigBlk:")
+                    || line.hasPrefix("SigIgn:") || line.hasPrefix("SigCgt:") {
+                FileHandle.standardError.write(Data("[PRT-PROC-DEBUG pid=\(pid)] \(line)\n".utf8))
+            }
+        } else {
+            let line = "[PRT-PROC-DEBUG pid=\(pid)] /proc/\(pid)/status unavailable\n"
+            FileHandle.standardError.write(Data(line.utf8))
+        }
+        if let fds = try? FileManager.default.contentsOfDirectory(atPath: "/proc/\(pid)/fd") {
+            let line = "[PRT-PROC-DEBUG pid=\(pid)] fds: \(fds.sorted())\n"
+            FileHandle.standardError.write(Data(line.utf8))
+        }
     }
 }
