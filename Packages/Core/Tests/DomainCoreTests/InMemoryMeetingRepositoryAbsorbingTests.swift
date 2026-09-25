@@ -1,8 +1,13 @@
-//  InMemoryMeetingRepositoryAbsorbingTests — `save(_:absorbing:)` фейка, C-010 v21
+//  InMemoryMeetingRepositoryAbsorbingTests — `save(_:absorbing:)` фейка, C-010 v22
 //  инвариант 33 (IR-133, MEE-405, MEE-407) — те же векторы, что
 //  `MeetingRepositoryAbsorbingTests.swift` (StorageTests, GRDB), на
 //  `InMemoryMeetingRepository`: контракт требует, чтобы тест на фейке ловил те же
 //  ошибки, что тест на настоящей базе (§«Фейк для тестов» C-010).
+//
+//  Базовые векторы здесь: пустой meetingIds, самопоглощение, перенос recordings/outputs,
+//  наследование dedup_key. Векторы пары источника, атомарности и v22 (победитель обязан
+//  существовать) — в `InMemoryMeetingRepositoryAbsorbingTests+EdgeCases.swift`, тем же
+//  классом через `extension`: одним телом класс превышал `type_body_length` SwiftLint.
 
 import XCTest
 import DomainCore
@@ -96,70 +101,6 @@ final class InMemoryMeetingRepositoryAbsorbingTests: XCTestCase {
         XCTAssertEqual(winnerRead?.dedupKey, sharedKey)
     }
 
-    /// Атомарность: искусственный отказ на шаге (3) (`fail(with:on:.save)`, тот же адрес,
-    /// что проверяет `save(_:absorbing:)` до первой мутации) не переносит и не удаляет.
-    func test_atomicRollbackOnStep3FailureTransfersNothingDeletesNothing() async throws {
-        let repositories = InMemoryRepositories()
-        let winnerEvent = MeetingEventFixtures.oneOnOneZoom
-        try await repositories.meetings.save(
-            MeetingRecord(event: winnerEvent, dedupKey: nil, status: .scheduled, sources: [])
-        )
-        let loserEvent = MeetingEventFixtures.withoutConference
-        try await repositories.meetings.save(
-            MeetingRecord(event: loserEvent, dedupKey: nil, status: .scheduled, sources: [])
-        )
-        let recordingId = UUID()
-        let manifest = try Self.manifest(recordingId: recordingId, meetingId: loserEvent.id)
-        repositories.recordings.seed([RecordingRecord(manifest: manifest, status: .recording)])
-
-        let failure = StorageError.constraintViolation(message: "искусственный отказ шага (3)")
-        repositories.meetings.fail(with: failure, on: .save, id: winnerEvent.id.uuidString)
-
-        do {
-            try await repositories.meetings.save(
-                MeetingRecord(event: winnerEvent, dedupKey: nil, status: .scheduled, sources: []),
-                absorbing: [loserEvent.id]
-            )
-            XCTFail("ожидался constraintViolation")
-        } catch StorageError.constraintViolation {
-            // ожидаемо
-        }
-
-        let loserStillThere = try await repositories.meetings.meeting(id: loserEvent.id)
-        XCTAssertNotNil(loserStillThere, "откат — проигравший на месте")
-        let stillBoundToLoser = try await repositories.recordings.recordings(meetingId: loserEvent.id)
-        XCTAssertTrue(
-            stillBoundToLoser.contains { $0.manifest.recordingId == recordingId }, "перенос откачен"
-        )
-    }
-
-    /// СТРОКА (открытый вопрос v22 у GRDB, шапка `GRDBMeetingRepositoryWrite.swift`):
-    /// победитель — ещё не сохранённая встреча, у проигравшего есть привязанная запись —
-    /// фейк не слабее GRDB, воспроизводит тот же `constraintViolation`.
-    func test_winnerNotYetExistingWithAttachedRecordingThrowsConstraintViolation() async throws {
-        let repositories = InMemoryRepositories()
-        let loserEvent = MeetingEventFixtures.oneOnOneZoom
-        try await repositories.meetings.save(
-            MeetingRecord(event: loserEvent, dedupKey: nil, status: .scheduled, sources: [])
-        )
-        let recordingId = UUID()
-        let manifest = try Self.manifest(recordingId: recordingId, meetingId: loserEvent.id)
-        repositories.recordings.seed([RecordingRecord(manifest: manifest, status: .recording)])
-
-        let newWinnerEvent = MeetingEventFixtures.withoutConference
-        do {
-            try await repositories.meetings.save(
-                MeetingRecord(event: newWinnerEvent, dedupKey: nil, status: .scheduled, sources: []),
-                absorbing: [loserEvent.id]
-            )
-            XCTFail("ожидался constraintViolation")
-        } catch StorageError.constraintViolation {
-            // ожидаемо
-        }
-        let loserRead = try await repositories.meetings.meeting(id: loserEvent.id)
-        XCTAssertNotNil(loserRead, "откат — проигравший на месте")
-    }
-
     /// «id, не встречающийся ни у одной строки recordings/meeting_outputs — не ошибка».
     func test_absentMeetingIdIsNotAnError() async throws {
         let repositories = InMemoryRepositories()
@@ -175,7 +116,7 @@ final class InMemoryMeetingRepositoryAbsorbingTests: XCTestCase {
         XCTAssertEqual(read?.status, .armed, "не ошибка — обычный save прошёл")
     }
 
-    private static func manifest(recordingId: UUID, meetingId: UUID) throws -> RecordingManifest {
+    static func manifest(recordingId: UUID, meetingId: UUID) throws -> RecordingManifest {
         try RecordingManifest(
             recordingId: recordingId,
             meetingId: meetingId,

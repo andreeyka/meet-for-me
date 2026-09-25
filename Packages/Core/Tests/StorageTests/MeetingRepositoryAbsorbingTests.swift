@@ -1,6 +1,11 @@
-//  MeetingRepositoryAbsorbingTests — `save(_:absorbing:)`, C-010 v21 инвариант 33
+//  MeetingRepositoryAbsorbingTests — `save(_:absorbing:)`, C-010 v22 инвариант 33
 //  (IR-133, MEE-405, MEE-407), владелец: DEV-2. Отдельный файл от `MeetingRepositoryTests
 //  .swift` — тот уже держит К9/К91/К92/инв. 31 и близок к порогу `file_length`.
+//
+//  Базовые векторы здесь: пустой meetingIds, самопоглощение, перенос recordings/outputs,
+//  наследование dedup_key. Векторы пары источника, атомарности и v22 (победитель обязан
+//  существовать) — в `MeetingRepositoryAbsorbingTests+EdgeCases.swift`, тем же классом
+//  через `extension`: одним телом класс превышал `type_body_length` SwiftLint.
 
 import XCTest
 import DomainCore
@@ -117,83 +122,6 @@ final class MeetingRepositoryAbsorbingTests: StorageAsyncTestCase {
         XCTAssertNil(loserRead)
     }
 
-    /// Атомарность: отказ на шаге (3) (`dedup_key`, занятый ТРЕТЬЕЙ встречей — шаги (1)/(2)
-    /// сами по себе ничего не нарушают) откатывает всю транзакцию целиком.
-    func testAbsorbing_atomicRollbackOnStep3FailureTransfersNothingDeletesNothing() async throws {
-        let temp = try StorageTestSupport.makeDatabase()
-        defer { StorageTestSupport.cleanup(temp) }
-        let layout = FileLayout(root: temp.directory)
-        let meetingRepository = temp.database.meetingRepository()
-        let recordingRepository = temp.database.recordingRepository(fileLayout: layout)
-
-        let winnerEvent = try TestFixtures.meetingEvent(externalId: "ext-abs-atomic-winner")
-        try await meetingRepository.save(
-            MeetingRecord(event: winnerEvent, dedupKey: nil, status: .scheduled, sources: [])
-        )
-        let loserEvent = try TestFixtures.meetingEvent(externalId: "ext-abs-atomic-loser")
-        try await meetingRepository.save(
-            MeetingRecord(event: loserEvent, dedupKey: nil, status: .scheduled, sources: [])
-        )
-        let recordingId = try await Self.seedRecording(
-            meetingId: loserEvent.id, layout: layout, repository: recordingRepository
-        )
-        let clashingKey = DedupKey.icalUid("uid-atomic-clash", startEpochSeconds: 100)
-        let thirdEvent = try TestFixtures.meetingEvent(externalId: "ext-abs-atomic-third")
-        try await meetingRepository.save(
-            MeetingRecord(event: thirdEvent, dedupKey: clashingKey, status: .scheduled, sources: [])
-        )
-
-        do {
-            try await meetingRepository.save(
-                MeetingRecord(event: winnerEvent, dedupKey: clashingKey, status: .scheduled, sources: []),
-                absorbing: [loserEvent.id]
-            )
-            XCTFail("ожидался constraintViolation на шаге (3)")
-        } catch StorageError.constraintViolation {
-            // ожидаемо
-        }
-
-        let loserStillThere = try await meetingRepository.meeting(id: loserEvent.id)
-        XCTAssertNotNil(loserStillThere, "откат — проигравший на месте")
-        let stillBoundToLoser = try await recordingRepository.recordings(meetingId: loserEvent.id)
-        XCTAssertTrue(
-            stillBoundToLoser.contains { $0.manifest.recordingId == recordingId }, "перенос откачен"
-        )
-        let winnerRead = try await meetingRepository.meeting(id: winnerEvent.id)
-        XCTAssertNil(winnerRead?.dedupKey, "победитель не переписан новым dedup_key")
-    }
-
-    /// СТРОКА (открытый вопрос v22, `GRDBMeetingRepositoryWrite.swift`): победитель — ещё
-    /// не сохранённая встреча, у проигравшего есть привязанная запись — внешний ключ
-    /// `recordings.meeting_id` немедленно откатывает шаг (1).
-    func testAbsorbing_winnerNotYetExistingWithAttachedRecordingThrowsConstraintViolation() async throws {
-        let temp = try StorageTestSupport.makeDatabase()
-        defer { StorageTestSupport.cleanup(temp) }
-        let layout = FileLayout(root: temp.directory)
-        let meetingRepository = temp.database.meetingRepository()
-        let recordingRepository = temp.database.recordingRepository(fileLayout: layout)
-
-        let loserEvent = try TestFixtures.meetingEvent(externalId: "ext-abs-newwinner-loser")
-        try await meetingRepository.save(
-            MeetingRecord(event: loserEvent, dedupKey: nil, status: .scheduled, sources: [])
-        )
-        _ = try await Self.seedRecording(meetingId: loserEvent.id, layout: layout, repository: recordingRepository)
-
-        let newWinnerEvent = try TestFixtures.meetingEvent(externalId: "ext-abs-newwinner-winner")
-        do {
-            try await meetingRepository.save(
-                MeetingRecord(event: newWinnerEvent, dedupKey: nil, status: .scheduled, sources: []),
-                absorbing: [loserEvent.id]
-            )
-            XCTFail("ожидался constraintViolation — внешний ключ recordings.meeting_id")
-        } catch StorageError.constraintViolation {
-            // ожидаемо
-        }
-
-        let loserRead = try await meetingRepository.meeting(id: loserEvent.id)
-        XCTAssertNotNil(loserRead, "откат — проигравший на месте")
-    }
-
     /// «id, не встречающийся ни у одной строки recordings/meeting_outputs — не ошибка».
     func testAbsorbing_absentMeetingIdIsNotAnError() async throws {
         let temp = try StorageTestSupport.makeDatabase()
@@ -214,7 +142,7 @@ final class MeetingRepositoryAbsorbingTests: StorageAsyncTestCase {
         XCTAssertEqual(read?.status, .armed, "не ошибка — обычный save прошёл")
     }
 
-    private static func seedRecording(
+    static func seedRecording(
         meetingId: UUID, layout: FileLayout, repository: RecordingRepository
     ) async throws -> UUID {
         let recordingId = UUID()

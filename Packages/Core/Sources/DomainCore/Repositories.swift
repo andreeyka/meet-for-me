@@ -219,7 +219,7 @@ public enum StorageError: Error, Codable, Equatable, Sendable {
 public protocol MeetingRepository: Sendable {
     func save(_ record: MeetingRecord) async throws
 
-    /// C-010 v20, правка v21, IR-133 (MEE-405). Одной транзакцией переносит
+    /// C-010 v20, правки v21/v22, IR-133 (MEE-405). Одной транзакцией переносит
     /// recordings/meeting_outputs проигравших на record, удаляет meetingIds и сохраняет
     /// record — тем же телом, что save(_:), после удаления. Решает коллизию признаков
     /// (а)/(б) правила слияния C-005 (инвариант 12 C-005 v15) без риска потерять

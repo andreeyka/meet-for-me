@@ -1,4 +1,4 @@
-//  InMemoryMeetingRepository+Absorbing — `save(_:absorbing:)`, C-010 v20, правка v21,
+//  InMemoryMeetingRepository+Absorbing — `save(_:absorbing:)`, C-010 v20, правка v22,
 //  IR-133 (MEE-405), инвариант 33. Деление по объёму, не по смыслу — тот же приём, что
 //  `GRDBMeetingRepositoryWrite.swift`/`SpeakerAttribution+*.swift`: тело класса в одном
 //  файле превышало `type_body_length`/`file_length` SwiftLint (--strict, «Core + Mac»).
@@ -17,14 +17,14 @@
 //  применённых изменений, как у настоящей БД. Наблюдаемый исход тот же: отказ на любом
 //  условии не переносит ни одной привязки и не меняет ни одной записи.
 //
-//  СТРОКА (открытый вопрос v22, возврат РП на постановку, шапка
-//  `GRDBMeetingRepositoryWrite.swift`): если `record.event.id` ещё не встречается среди
-//  сохранённых встреч, а у кого-то из `meetingIds` есть привязанные `recordings`/
-//  `meeting_outputs`, GRDB упирается во внешний ключ (немедленный, `PRAGMA foreign_keys =
-//  ON`, §2 контракта) раньше, чем шаг (3) вставит строку победителя. Фейк не эталон
-//  поведения БД, но не должен быть слабее его — тот же исход воспроизведён здесь явно
-//  через `isBound(toAnyOf:)` обоих каскадных фейков, тем же `constraintViolation`.
-//  Архитектор решает окончательное поведение в v22, не эта задача.
+//  C-010 v22, инвариант 33 (возврат РП на приёмку #134): при непустом `meetingIds`
+//  `record.event.id` ОБЯЗАН уже существовать среди сохранённых встреч — `constraintViolation`
+//  иначе, ВСЕГДА, независимо от того, есть ли у кого-то из `meetingIds` привязанные
+//  `recordings`/`meeting_outputs`. Раньше (v21, до приёмки) отказ здесь срабатывал только
+//  когда были такие привязки — так GRDB вело себя естественно, потому что немедленный
+//  внешний ключ `meeting_outputs.meeting_id` иначе просто не на что было проверять: без
+//  дочерних строк UPDATE в шаге (1) не менял ни одной строки, и вставка отсутствующего
+//  победителя на шаге (3) молча создавала бы новую встречу — этого v22 больше не допускает.
 
 import Foundation
 import DomainCore
@@ -32,12 +32,18 @@ import DomainCore
 extension InMemoryMeetingRepository {
 
     /// Подключить каскад инвариантов 7 и 33 (`meeting_outputs`). Зовёт контейнер
-    /// `InMemoryRepositories`.
-    public func attachCascade(meetingOutputs: InMemoryMeetingOutputRepository) {
+    /// `InMemoryRepositories` — единственный вызывающий, наружу поверхности не несёт.
+    func attachCascade(meetingOutputs: InMemoryMeetingOutputRepository) {
         self.meetingOutputs = meetingOutputs
     }
 
     public func save(_ record: MeetingRecord, absorbing meetingIds: [UUID]) async throws {
+        // Пустой meetingIds — эквивалент обычного save(_:) не только поведением, но и
+        // журналом вызовов: одна запись "save(_:)", не две (возврат РП, приёмка #134).
+        guard !meetingIds.isEmpty else {
+            try await save(record)
+            return
+        }
         log.record(
             port: Self.portName,
             method: "save(_:absorbing:)",
@@ -48,13 +54,9 @@ extension InMemoryMeetingRepository {
         if let error = failureIfAny(.save, id: record.event.id.uuidString) {
             throw error
         }
-        guard !meetingIds.isEmpty else {
-            try await save(record)
-            return
-        }
         guard !meetingIds.contains(record.event.id) else {
             throw StorageError.constraintViolation(
-                message: "save(_:absorbing:): meetingIds не может содержать record.event.id (инвариант 33 C-010 v21)"
+                message: "save(_:absorbing:): meetingIds не может содержать record.event.id (инвариант 33 C-010 v22)"
             )
         }
         let losing = Set(meetingIds)
@@ -67,13 +69,14 @@ extension InMemoryMeetingRepository {
     /// Все условия отказа шагов (1)-(3), проверенные ДО первой мутации состояния —
     /// возвращает источники победителя (инвариант 31), готовые к записи `commitAbsorbing`.
     private func validateAbsorbing(record: MeetingRecord, losing: Set<UUID>) throws -> [MeetingSource] {
+        // C-010 v22, инвариант 33: при непустом meetingIds победитель обязан уже
+        // существовать — безусловно, не только когда есть привязанные recordings/
+        // meeting_outputs (возврат РП, приёмка #134).
         let winnerAlreadyExists = locked { records[record.event.id] != nil }
-        let hasAttachedChildRows = (recordings?.isBound(toAnyOf: losing) ?? false)
-            || (meetingOutputs?.isBound(toAnyOf: losing) ?? false)
-        guard winnerAlreadyExists || !hasAttachedChildRows else {
+        guard winnerAlreadyExists else {
             throw StorageError.constraintViolation(
-                message: "recordings/meeting_outputs: перенос на ещё не существующую встречу " +
-                    "нарушает внешний ключ (тот же отказ, что у GRDB при немедленных внешних ключах)"
+                message: "save(_:absorbing:): record.event.id должен существовать среди сохранённых " +
+                    "встреч при непустом meetingIds (инвариант 33 C-010 v22)"
             )
         }
         let sources = try Self.sourcesIncludingOwnIdentity(of: record.event, declared: record.sources)

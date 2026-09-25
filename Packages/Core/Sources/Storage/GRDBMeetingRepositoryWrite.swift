@@ -31,23 +31,21 @@ extension GRDBMeetingRepository {
         }
     }
 
-    /// C-010 v20, правка v21, IR-133 (MEE-405), инвариант 33: одной транзакцией — перенос
+    /// C-010 v20, правка v22, IR-133 (MEE-405), инвариант 33: одной транзакцией — перенос
     /// `recordings`/`meeting_outputs` проигравших на `record`, удаление `meetingIds` (тот же
     /// каскад, что `delete(meetingIds:)`, инвариант 7), и тело `save(_:)` — уникальность
     /// `dedup_key`/пары источника проверяется на шаге (3), ПОСЛЕ удаления (2): это то, что
-    /// позволяет победителю унаследовать `dedup_key` проигравшего без ложной коллизии с
-    /// самим собой — ровно случай слияния, ради которого метод заведён.
+    /// позволяет победителю унаследовать `dedup_key`/пару проигравшего без ложной коллизии
+    /// с самим собой — ровно случай слияния, ради которого метод заведён.
     ///
-    /// СТРОКА (открытый вопрос v22, возврат РП на постановку): если `record.event.id` ещё
-    /// не встречается в `meetings`, а у кого-то из `meetingIds` есть привязанные
-    /// `recordings`/`meeting_outputs`, шаг (1) упирается во внешний ключ раньше, чем шаг (3)
-    /// вставит строку победителя — внешние ключи включены и НЕМЕДЛЕННЫ (§2 контракта:
-    /// «PRAGMA foreign_keys = ON на каждом соединении»), отложенных здесь нет, а
-    /// `meeting_outputs.meeting_id` — `NOT NULL REFERENCES meetings(id)`. Порядок шагов
-    /// контракт называет буквально и отложенных внешних ключей не упоминает: решение
-    /// архитектора для v22, не этой задачи. Здесь оставлено как есть, а не обойдено
-    /// переупорядочиванием шагов — SQLite откатывает всю транзакцию, `StorageErrorMapping
-    /// .mapWrite` сводит `SQLITE_CONSTRAINT` в `constraintViolation` с текстом ограничения.
+    /// v22 (возврат РП, приёмка #134): при непустом `meetingIds` `record.event.id` ОБЯЗАН
+    /// уже существовать в `meetings` — проверено явно, ДО шага (1), а не оставлено на откуп
+    /// внешнему ключу `meeting_outputs.meeting_id` (`NOT NULL REFERENCES meetings(id)`,
+    /// немедленный — §2 контракта, «PRAGMA foreign_keys = ON на каждом соединении»): без
+    /// явной проверки отказ срабатывал только когда у кого-то из `meetingIds` были
+    /// привязанные дочерние строки — без них UPDATE не менял ни одной строки, и шаг (3)
+    /// молча создавал бы нового победителя. Явная проверка не отменяет внешний ключ
+    /// (он остаётся страховкой), но делает отказ безусловным, как требует v22.
     func save(_ record: MeetingRecord, absorbing meetingIds: [UUID]) async throws {
         guard !meetingIds.isEmpty else {
             try await save(record)
@@ -55,12 +53,21 @@ extension GRDBMeetingRepository {
         }
         guard !meetingIds.contains(record.event.id) else {
             throw StorageError.constraintViolation(
-                message: "save(_:absorbing:): meetingIds не может содержать record.event.id (инвариант 33 C-010 v21)"
+                message: "save(_:absorbing:): meetingIds не может содержать record.event.id (инвариант 33 C-010 v22)"
             )
         }
         let winnerIdText = record.event.id.uuidString
         do {
             try await database.dbPool.write { db in
+                let winnerExists = try Row.fetchOne(
+                    db, sql: "SELECT 1 FROM meetings WHERE id = ?", arguments: [winnerIdText]
+                ) != nil
+                guard winnerExists else {
+                    throw StorageError.constraintViolation(
+                        message: "save(_:absorbing:): record.event.id должен существовать в meetings " +
+                            "при непустом meetingIds (инвариант 33 C-010 v22)"
+                    )
+                }
                 for id in meetingIds {
                     let idText = id.uuidString
                     try db.execute(

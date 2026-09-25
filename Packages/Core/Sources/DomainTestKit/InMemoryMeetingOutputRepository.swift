@@ -77,10 +77,10 @@ public final class InMemoryMeetingOutputRepository: MeetingOutputRepository, @un
     }
 
     /// Каскад инварианта 7 (C-010 v7): удаление встречи уносит её `meeting_outputs`
-    /// (`ON DELETE CASCADE`, в отличие от `recordings` — та лишь теряет привязку).
-    /// Зовёт `InMemoryMeetingRepository.delete(meetingIds:)` через
-    /// `attachCascade(meetingOutputs:)`.
-    public func cascadeDelete(meetingIds: Set<UUID>) {
+    /// (`ON DELETE CASCADE`, в отличие от `recordings` — та лишь теряет привязку). Зовёт
+    /// `InMemoryMeetingRepository.delete(meetingIds:)` через `attachCascade(meetingOutputs:)` —
+    /// единственный вызывающий, наружу поверхности не несёт (возврат РП, приёмка #134).
+    func cascadeDelete(meetingIds: Set<UUID>) {
         locked {
             for identifier in order {
                 guard let existing = records[identifier], meetingIds.contains(existing.meetingId) else { continue }
@@ -92,8 +92,8 @@ public final class InMemoryMeetingOutputRepository: MeetingOutputRepository, @un
 
     /// C-010 v21, инвариант 33: переносит `meeting_id` выдач с проигравших на победителя —
     /// шаг (1) `save(_:absorbing:)`, до удаления проигравших. Зовёт
-    /// `InMemoryMeetingRepository.save(_:absorbing:)`.
-    public func reassignFromDeletedMeetings(_ losingIds: Set<UUID>, to winnerId: UUID) {
+    /// `InMemoryMeetingRepository.save(_:absorbing:)` — единственный вызывающий.
+    func reassignFromDeletedMeetings(_ losingIds: Set<UUID>, to winnerId: UUID) {
         locked {
             for identifier in order {
                 guard let existing = records[identifier], losingIds.contains(existing.meetingId) else { continue }
@@ -105,14 +105,6 @@ public final class InMemoryMeetingOutputRepository: MeetingOutputRepository, @un
                 )
             }
         }
-    }
-
-    /// СТРОКА (открытый вопрос v22 у `save(_:absorbing:)`, шапка `GRDBMeetingRepositoryWrite
-    /// .swift`): есть ли хоть одна выдача, привязанная к любому из перечисленных id — тот же
-    /// вопрос, что немедленный внешний ключ `meeting_outputs.meeting_id` задаёт в GRDB. Фейк
-    /// не эталон поведения БД, но не должен быть слабее его: воспроизводит тот же отказ явно.
-    public func isBound(toAnyOf meetingIds: Set<UUID>) -> Bool {
-        locked { records.values.contains { meetingIds.contains($0.meetingId) } }
     }
 
     // MARK: - Оснастка

@@ -32,7 +32,7 @@
 //      разных факта — прежняя дыра была отсутствием этой привязки, а не ошибкой довода.
 //      MEE-407 дописала сюда каскад `meeting_outputs` (см. `attachCascade(meetingOutputs:)`
 //      ниже) — до этой задачи он отсутствовал;
-//    * инвариант 33 (C-010 v21, IR-133, MEE-405) — ДЕРЖИТСЯ, `save(_:absorbing:)` —
+//    * инвариант 33 (C-010 v22, IR-133, MEE-405) — ДЕРЖИТСЯ, `save(_:absorbing:)` —
 //      `InMemoryMeetingRepository+Absorbing.swift` (деление по объёму, не по смыслу —
 //      тот же приём, что у `SpeakerAttribution`/`GRDBMeetingRepository`).
 //
@@ -171,8 +171,9 @@ public final class InMemoryMeetingRepository: MeetingRepository, @unchecked Send
         locked { order.compactMap { records[$0] } }
     }
 
-    /// Подключить каскад инварианта 7 (`recordings`). Зовёт контейнер `InMemoryRepositories`.
-    public func attachCascade(recordings: InMemoryRecordingRepository) {
+    /// Подключить каскад инварианта 7 (`recordings`). Зовёт контейнер `InMemoryRepositories` —
+    /// единственный вызывающий, наружу поверхности не несёт (возврат РП, приёмка #134).
+    func attachCascade(recordings: InMemoryRecordingRepository) {
         self.recordings = recordings
     }
 

@@ -147,22 +147,14 @@ public final class InMemoryRecordingRepository: RecordingRepository, @unchecked 
     /// C-010 v21, инвариант 33: переносит привязку «запись → встреча» с проигравших на
     /// победителя — шаг (1) `save(_:absorbing:)`, до удаления проигравших (в отличие от
     /// `detachFromDeletedMeetings`, которая её снимает). Зовёт
-    /// `InMemoryMeetingRepository.save(_:absorbing:)`.
-    public func reassignFromDeletedMeetings(_ losingIds: Set<UUID>, to winnerId: UUID) {
+    /// `InMemoryMeetingRepository.save(_:absorbing:)` — единственный вызывающий, наружу
+    /// поверхности не несёт (возврат РП, приёмка #134).
+    func reassignFromDeletedMeetings(_ losingIds: Set<UUID>, to winnerId: UUID) {
         locked {
             for (recordingId, boundMeetingId) in meetingBinding where losingIds.contains(boundMeetingId) {
                 meetingBinding[recordingId] = winnerId
             }
         }
-    }
-
-    /// СТРОКА (открытый вопрос v22 у `save(_:absorbing:)`, шапка `GRDBMeetingRepositoryWrite
-    /// .swift`): есть ли хоть одна запись, привязанная к любому из перечисленных id — тот же
-    /// вопрос, что задаёт внешний ключ `recordings.meeting_id` в GRDB (пусть и `SET NULL`,
-    /// а не `NOT NULL`: перенос на ещё не существующего победителя всё равно нарушает его,
-    /// а не обнуляет). Фейк не эталон поведения БД, но не должен быть слабее его.
-    public func isBound(toAnyOf meetingIds: Set<UUID>) -> Bool {
-        locked { meetingBinding.values.contains { meetingIds.contains($0) } }
     }
 
     // MARK: - Оснастка
