@@ -13,10 +13,19 @@ import DomainTestKit
 
 final class DedupCollisionTests: XCTestCase {
 
+    /// UUID фиксированы, не случайны (возврат РП, 24.09 23:12 UTC, п. 3) — со случайными
+    /// `UUID()` какая из двух ветвей тернарника `mergeIncoming` (X меньше / Y меньше)
+    /// сработает, решает монетка каждого запуска; `idLow`/`idHigh` детерминируют это, и оба
+    /// теста ниже вместе гарантированно упражняют ОБЕ ветви на каждом прогоне CI.
+    private static let idLow = UUID(uuidString: "00000000-0000-0000-0000-000000000001")!
+    private static let idHigh = UUID(uuidString: "00000000-0000-0000-0000-000000000002")!
+
     /// Признак (а) (по вычисленному `DedupKey` входящего payload'а) находит X, признак (б)
     /// (по паре ТОГО ЖЕ payload'а) — Y, X ≠ Y: два разных существующих кандидата. Ответ:
     /// побеждает запись с лексикографически меньшим `id.uuidString`; источники проигравшей
-    /// переходят победителю, её `id` публикуется `.deleted` (К39 вход А).
+    /// переходят победителю, её `id` публикуется `.deleted` (К39 вход А), СРАЗУ ЗА КОТОРЫМ
+    /// (возврат РП, п. 3) идёт `.upserted` слитой записи — не наоборот, не вперемешку с
+    /// другими событиями потока.
     ///
     /// СТРОКА (буквальное прочтение, возврат РП 24.09 22:57 UTC — см. докстринг
     /// `mergeIncoming`, `CalendarPortImplMerge.swift`): X и Y здесь заведены СЕМАНТИЧЕСКИ
@@ -24,19 +33,28 @@ final class DedupCollisionTests: XCTestCase {
     /// коллизии тот, где входящий payload сам указывает на Y своей парой
     /// (`sourceConnectorId`/`externalId`), но вычисляет `DedupKey`, совпадающий с уже
     /// сохранённым `dedupKey` X.
-    func test_k19_twoCandidatesByPairMergeLexicographicallySmallerWins() async throws {
+    func test_k19_xWinsByLexicographicallySmallerId() async throws {
+        try await Self.runCollision(idX: Self.idLow, idY: Self.idHigh)
+    }
+
+    /// Тот же сценарий, `id` у X/Y поменяны местами — упражняет ВТОРУЮ ветвь тернарника
+    /// (`byPair` меньше `byKey`), не покрытую соседним тестом.
+    func test_k19_yWinsByLexicographicallySmallerId() async throws {
+        try await Self.runCollision(idX: Self.idHigh, idY: Self.idLow)
+    }
+
+    private static func runCollision(idX: UUID, idY: UUID) async throws {
         let harness = Harness.mergeReady(sourceIds: ["src-1", "src-2"])
         let sharedStart = Date(timeIntervalSince1970: 1_700_000_000)
+        let winnerId = idX.uuidString < idY.uuidString ? idX : idY
+        let loserId = idX.uuidString < idY.uuidString ? idY : idX
 
-        let idX = UUID()
         try seedCollisionCandidateX(harness, id: idX, start: sharedStart)
-        let idY = UUID()
         try seedCollisionCandidateY(harness, id: idY, start: sharedStart.addingTimeInterval(3_600))
 
         // Входящий payload сообщает пару Y (src-2/evt-2), но с icalUid и стартом X — признак
         // (а) находит X (по dedupKey), признак (б) — Y (по паре этого же payload'а).
-        let stream = harness.hub.changes()
-        let iterator = StreamIteratorBox(stream)
+        let iterator = StreamIteratorBox(harness.hub.changes())
         let colliding = try mergeTestPayload(
             connectorId: "src-2", externalId: "evt-2", lastModified: sharedStart.addingTimeInterval(20),
             location: "Room-New"
@@ -44,15 +62,19 @@ final class DedupCollisionTests: XCTestCase {
         let saved = try await harness.hub.applyIncoming(payload: colliding)
         XCTAssertTrue(saved)
 
-        let winnerId = idX.uuidString < idY.uuidString ? idX : idY
-        let loserId = idX.uuidString < idY.uuidString ? idY : idX
-
-        let change = await nextOrTimeout(iterator)
-        guard case .deleted(let ids) = change else {
+        let deleted = await nextOrTimeout(iterator)
+        guard case .deleted(let ids) = deleted else {
             XCTFail(".deleted обязан публиковаться для поглощённой (проигравшей) записи — К39 вход А")
             return
         }
         XCTAssertEqual(ids, [loserId])
+
+        let upserted = await nextOrTimeout(iterator)
+        guard case .upserted(let events) = upserted else {
+            XCTFail(".deleted обязан сопровождаться .upserted слитой записи сразу следующим элементом потока")
+            return
+        }
+        XCTAssertEqual(events.first?.id, winnerId, ".upserted идёт СРАЗУ за .deleted, не вперемешку")
 
         let stored = harness.meetingRepository.storedRecords
         XCTAssertEqual(stored.count, 1, "проигравшая запись поглощена — осталась одна")

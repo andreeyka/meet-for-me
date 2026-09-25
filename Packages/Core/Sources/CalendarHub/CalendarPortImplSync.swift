@@ -1,9 +1,12 @@
 //  CalendarPortImpl+Sync — синхронизация источников (К30-К39, К42-К43, К71-К72), дедуп по
 //  признакам (а)/(б) правила слияния C-005 п.4 (реализует К17-К19, К29, К31 — возврат РП,
 //  приёмка #85, дефект 6: заявление «покрыты» здесь раньше значило «есть тесты», тестов не
-//  было ни строки). Тесты на К17/К18/К29 — `DedupAndMergeTests.swift`/
-//  `DedupAndMergeStepsTests.swift`, добавлены позже. К19 (коллизия двух кандидатов) и К31 —
-//  по-прежнему без теста (К19 — открытый дизайн-вопрос слияния коллизии, MEE-386).
+//  было ни строки). Тесты на К17/К18/К20-К24/К27-К29 — `DedupAndMergeTests.swift`/
+//  `DedupAndMergeStepsTests.swift`; К19 (коллизия двух кандидатов) —
+//  `DedupCollisionTests.swift`; К30-К39/К42-К45 (эта часть, МЕЕ-386) —
+//  `SyncFailureIsolationTests.swift`/`SyncWindowAndFanoutTests.swift`/
+//  `SyncReentrancyTests.swift`/`SyncDeletionSemanticsTests.swift`/
+//  `SyncErrorSurfaceAndScheduleTests.swift`.
 //
 //  Модуль: calendar-hub · Владелец: DEV-1 · Слой: домен
 //

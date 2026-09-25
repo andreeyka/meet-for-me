@@ -12,8 +12,8 @@
 //  функции; здесь доказывается только то, что `calendar-hub` реально ЗОВЁТ эту функцию, а
 //  не обходит её и не реализует дедуп сам. К18 (fallback на пару sourceConnectorId/
 //  externalId при несовпадающем dedupKey) закрыт «частью 3е» (#123). К19 (коллизия двух
-//  кандидатов по признаку (б) через два разных источника) остаётся открытым — требует новой
-//  логики слияния коллизии в `CalendarPortImplMerge.swift`, не только теста (разбор — MEE-386).
+//  кандидатов признаков (а)/(б)) закрыт «частью 3ж» (#126) — новая логика слияния коллизии в
+//  `CalendarPortImplMerge.swift`, тест — `DedupCollisionTests.swift`.
 //
 //  Оснастка (`mergeTestPayload`, `mergeTestAttendee`, `Harness.mergeReady`) — общая,
 //  `TestSupport.swift`.
