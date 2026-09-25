@@ -37,16 +37,19 @@ import tempfile
 ALLOWED_IMPORTS = {"Foundation", "DomainCore"}
 
 # Допускает необязательные атрибуты (`@preconcurrency`, `@testable`,
-# `@_exported`, ...) перед `import`, необязательное ключевое слово вида
-# импорта (`import struct EventKit.EKEvent` и т.п.) и хвостовой комментарий
-# (`import EventKit // комментарий`) — находка РП по PR #133 (MEE-412):
-# исходная `^\s*import\s+(\S+)\s*$` не прощала ни одной из этих трёх форм.
+# `@_exported`, `@_spi(SomeModule)`, ...) перед `import`, необязательное
+# ключевое слово вида импорта (`import struct EventKit.EKEvent` и т.п.),
+# хвостовой `;`, хвостовой комментарий строчный (`// ...`) или блочный
+# (`/* ... */`) — находка РП по PR #133 (MEE-412): исходная
+# `^\s*import\s+(\S+)\s*$` не прощала ни одной из этих форм; атрибут с
+# аргументом в скобках (`@_spi(...)`) и хвостовой `;`/`/* */` добавлены
+# отдельным возвратом РП по тому же PR.
 IMPORT_RE = re.compile(
-    r"^\s*(?:@\w+\s+)*"
+    r"^\s*(?:@\w+(?:\([^)]*\))?\s+)*"
     r"import\s+"
     r"(?:(?:struct|class|enum|protocol|func|var|let|typealias)\s+)?"
-    r"(\S+)"
-    r"\s*(?://.*)?$"
+    r"([A-Za-z0-9_.]+)"
+    r"\s*;?\s*(?:(?://.*)|(?:/\*.*?\*/\s*))?$"
 )
 
 # Литералы имени коннектора — точное совпадение "eventkit"/"graph", либо
@@ -180,6 +183,11 @@ def self_test():
         ("import EventKit // комментарий\n", ["import EventKit"]),  # РП, PR #133
         ("import Foundation.NSDate\n", []),  # РП, PR #133: ложный отказ до фикса
         ("import struct Foundation.Date\n", []),  # РП, PR #133
+        ("@_spi(SomeModule) import EventKit\n", ["import EventKit"]),  # РП, возврат по PR #133
+        ("import EventKit;\n", ["import EventKit"]),  # РП, возврат по PR #133: хвостовой `;`
+        ("import EventKit; // комментарий\n", ["import EventKit"]),  # `;` и `//` вместе
+        ("import EventKit /* комментарий */\n", ["import EventKit"]),  # РП: хвостовой `/* */`
+        ("import EventKit; /* комментарий */\n", ["import EventKit"]),  # `;` и `/* */` вместе
     ]
     failures = 0
     for line, expected_modules in import_cases:
