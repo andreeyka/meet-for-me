@@ -194,6 +194,17 @@ final class HostServicesTests: XCTestCase {
     /// Отдельный вход: `notify(.authExpired)`/`notify(.configInvalid)` — не вызывают ни
     /// `syncOne`, ни `sync`; фиксируются тем же перехватчиком, что К14 (`recordedNotifications`
     /// рядом с `loggedEntries`), для последующего чтения хостом.
+    ///
+    /// Возврат РП (найдено main-ом красным после слияния #129, приёмка, 00:35 UTC):
+    /// прежняя версия сравнивала `entries.map(\.kind)` С ПОРЯДКОМ — `[.authExpired,
+    /// .configInvalid]`. `HostServicesImpl.notify(_:detail:)` заводит СВОЙ независимый
+    /// `Task { await hub.handleNotify(...) } на каждый вызов (см. его шапку — так и
+    /// задумано, «не блокирует вызывающего», К14) — порядок доставки между ДВУМЯ
+    /// независимыми `Task` ничем не гарантирован, это не дефект реализации: ни C-006, ни
+    /// К14/К61 не обещают последовательную доставку notify() между разными вызовами (в
+    /// отличие, например, от К62/К63, где порядок потока `changes()` — прямая цитата
+    /// контракта). Правильная проверка — оба уведомления присутствуют с верным `detail`,
+    /// не в каком порядке.
     func test_k61_authExpiredAndConfigInvalidAreRecordedNotSynced() async throws {
         let harness = Harness(sourceIds: ["src-1"])
         harness.connectorRepository.seed([Harness.record(id: "src-1")])
@@ -211,7 +222,9 @@ final class HostServicesTests: XCTestCase {
         await pollUntil { await harness.hub.recordedNotifications(for: source).count == 2 }
 
         let entries = await harness.hub.recordedNotifications(for: source)
-        XCTAssertEqual(entries.map(\.kind), [.authExpired, .configInvalid])
+        XCTAssertEqual(Set(entries.map(\.kind)), [.authExpired, .configInvalid], "оба уведомления записаны")
+        XCTAssertTrue(entries.contains { $0.kind == .authExpired && $0.detail == nil })
+        XCTAssertTrue(entries.contains { $0.kind == .configInvalid && $0.detail == "bad config" })
         XCTAssertEqual(harness.connector("src-1").callCount(.fetchEvents), 0, "не вызывают ни syncOne, ни sync")
     }
 }
