@@ -3,6 +3,11 @@
 DerivedData/
 *.xcodeproj
 *.xcworkspace
+# XcodeGen пишет их на диск при каждой генерации из project.yml (ProjectSpec.md, «Plist»:
+# «created on disk on every generation») — производные файлы, а не исходники.
+App/Info.plist
+App/MeetForMe.entitlements
+Services/TranscriptionEngineXPC/Info.plist
 .DS_Store
 __pycache__/
 *.pyc

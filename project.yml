@@ -1,0 +1,140 @@
+# project.yml — каркас Xcode-проекта (XcodeGen), MEE-430.
+#
+# Владелец файла — архитектор (docs/module-map.md, §2: «Файлы сборки принадлежат
+# архитектору... их правка разработчиком — это interface-request, а не коммит»).
+# Бинарный .xcodeproj в репозиторий не коммитится (module-map.md, §3, «раскладка
+# репозитория»): CI и разработчик генерируют его этим файлом заново, `xcodegen
+# generate` — детерминированная функция от него же.
+#
+# Два таргета — оба пока каркасом, по постановке MEE-430:
+#   MeetForMe         — App-таргет модуля app-ui (владелец DEV-1 — module-map.md v1.21).
+#   TranscriptionEngine — точка входа XPC-сервиса модуля engine-xpc (каталог —
+#                         Services/TranscriptionEngineXPC/, продукт — TranscriptionEngine.xpc,
+#                         имя таргета совпадает с продуктом, не с каталогом; владелец
+#                         содержимого — DEV-2, задача MEE-431; сам этот файл — не её зона).
+#
+# Оба таргета зависят на все публичные продукты обоих SPM-пакетов сразу, а не только на то,
+# что нужно сегодняшнему каркасу: правка этого файла — сама по себе interface-request
+# (владение архитектора), и заводить его заново под каждый новый порт, который добавит
+# composition root, дороже, чем объявить полный список один раз. Тот же приём уже действует
+# в Packages/Mac/Package.swift и Packages/Core/Package.swift — там тоже перечислены все
+# модули сразу, а не по мере необходимости. Исключение — `GigaAM`: по C-012 она живёт только
+# внутри процесса `TranscriptionEngine.xpc`, App с ней не работает напрямую ни на одном
+# этапе (приёмка РП, #163) — зависимость только у таргета `TranscriptionEngine`, не у `MeetForMe`.
+name: MeetForMe
+
+options:
+  bundleIdPrefix: com.andreeyka.meetforme
+  deploymentTarget:
+    macOS: "14.4"
+  # Явно, не значение XcodeGen по умолчанию (`xcode16_0`, ProjectSpec.md): CI job «Core + Mac»
+  # на macos-14 запускает Xcode 15.4 (лог первого прогона PR #163 сам её и назвал), а
+  # `xcode16_0` — формат проекта 77, который она читать не умеет («cannot be opened because
+  # it is in a future Xcode project file format»). `xcode15_3` — последний формат по списку
+  # ProjectSpec.md не новее самой 15.4.
+  projectFormat: xcode15_3
+
+packages:
+  Core:
+    path: Packages/Core
+  Mac:
+    path: Packages/Mac
+
+targets:
+  MeetForMe:
+    type: application
+    platform: macOS
+    sources:
+      - path: App/Sources
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.andreeyka.meetforme
+        MARKETING_VERSION: "0.1"
+        CURRENT_PROJECT_VERSION: "1"
+        # Hardened runtime — да, App Sandbox — нет (A1 architecture.md, §9.3: «Developer ID,
+        # hardened runtime, без sandbox»; App Store-сборка решается отдельно, если
+        # понадобится). Sandbox выключается самим отсутствием ключа
+        # `com.apple.security.app-sandbox` в entitlements ниже — отдельного build setting
+        # для этого нет, в отличие от hardened runtime.
+        ENABLE_HARDENED_RUNTIME: YES
+    info:
+      path: App/Info.plist
+      properties:
+        # Menu-bar-приложение (architecture.md, §9.2): без Dock-иконки, окна по требованию.
+        LSUIElement: true
+        # Ключи прав TCC — то же имя ключа, что уже проверено на живом Mac харнессами
+        # (Packages/Mac/Sources/CaptureManualHarness, CalendarEventKitManualHarness):
+        # architecture.md §9.1 называет предмет права, харнессы — точный ключ Info.plist.
+        NSMicrophoneUsageDescription: >-
+          Meet for Me распознаёт речь только на встречах, которые вы записываете сами.
+        NSAudioCaptureUsageDescription: >-
+          Meet for Me захватывает системный звук (голоса собеседников в звонке), чтобы
+          расшифровать встречу целиком, а не только ваш микрофон.
+        NSCalendarsUsageDescription: >-
+          Meet for Me читает календарь, чтобы предложить начать запись на текущей встрече.
+        NSCalendarsFullAccessUsageDescription: >-
+          Meet for Me читает календарь, чтобы предложить начать запись на текущей встрече.
+    entitlements:
+      path: App/MeetForMe.entitlements
+      properties:
+        # Hardened runtime: без этого права доступ к микрофону запрещён (тот же приём,
+        # что у CaptureManualHarness/Bundle/entitlements.plist и spikes/capture-cli).
+        com.apple.security.device.audio-input: true
+    dependencies:
+      - package: Core
+        product: DomainCore
+      - package: Core
+        product: Storage
+      - package: Core
+        product: CalendarHub
+      - package: Core
+        product: EngineKit
+      - package: Core
+        product: ModelManager
+      - package: Core
+        product: Attribution
+      - package: Mac
+        product: Capture
+      - package: Mac
+        product: Permissions
+      - package: Mac
+        product: Detector
+      - package: Mac
+        product: CalendarEventKit
+      - package: Mac
+        product: EngineXPCClient
+      - package: Mac
+        product: SecretStoreKeychain
+      # embed=true по умолчанию для application-таргета (ProjectSpec.md, Dependency):
+      # .xpc ложится в MeetForMe.app/Contents/XPCServices/ этой же сборкой.
+      - target: TranscriptionEngine
+
+  # Имя таргета — TranscriptionEngine (не TranscriptionEngineXPC, как каталог): продукт
+  # берёт имя таргета плюс расширение продукта, а Services/TranscriptionEngineXPC/README.md
+  # уже называет бандл сервиса `TranscriptionEngine.xpc` — так и остаётся.
+  TranscriptionEngine:
+    type: xpc-service
+    platform: macOS
+    sources:
+      - path: Services/TranscriptionEngineXPC/Sources
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.andreeyka.meetforme.TranscriptionEngine
+        ENABLE_HARDENED_RUNTIME: YES
+    info:
+      path: Services/TranscriptionEngineXPC/Info.plist
+      properties:
+        # Шаблон Apple для встроенного XPC-сервиса, вызываемого `NSXPCConnection(serviceName:)`
+        # (приёмка РП, #163): `CFBundlePackageType` для `xpc-service` XcodeGen уже подставляет
+        # сам («generated automatically if appropriate», ProjectSpec.md, «Plist») — но не
+        # словарь `XPCService`, это чистый Info.plist-контент, не build setting, и его нужно
+        # назвать явно.
+        XPCService:
+          ServiceType: Application
+    dependencies:
+      - package: Core
+        product: EngineKit
+      # По C-012 (Q10 architecture.md) GigaAM работает только внутри этого процесса — не App
+      # (см. правку выше и приёмку РП, #163). Само содержимое подключения — задача MEE-431.
+      - package: Core
+        product: GigaAM

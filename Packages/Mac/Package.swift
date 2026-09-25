@@ -1,7 +1,7 @@
 // swift-tools-version: 5.9
 //
 //  MeetMac — модули, которым нужны macOS-фреймворки (CoreAudio, AVFoundation, EventKit, XPC).
-//  Собираются только на macOS: локально у DEV-1 и DEV-3 и на раннере macos-14 в CI.
+//  Собираются только на macOS: локально у DEV-1 и на раннере macos-14 в CI.
 //
 //  Владелец файла — архитектор (см. комментарий в Packages/Core/Package.swift).
 //
