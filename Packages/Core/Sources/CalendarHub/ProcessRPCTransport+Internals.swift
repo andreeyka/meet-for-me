@@ -143,29 +143,4 @@ extension ProcessRPCTransport {
         for continuation in pendingExits { continuation.resume() }
         pendingExits.removeAll()
     }
-
-    /// DEBUG-TEMP (возврат РП 07:05 UTC — последняя попытка перед документированием, снять
-    /// после диагностики): печатает в stderr раннера `State`/`SigBlk`/`SigIgn`/`SigCgt` из
-    /// `/proc/<pid>/status` и список открытых `/proc/<pid>/fd` — САМОГО ребёнка неудачного
-    /// теста (не отдельного диагностического теста, как в предыдущей попытке), прямо перед
-    /// `terminate()`, то есть после того, как грейс-период по EOF `stdin` уже истёк и процесс
-    /// всё ещё жив. На платформах без `/proc` (macOS) оба чтения молча проваливаются — только
-    /// для диагностики CI на Linux.
-    func debugDumpProcState() {
-        let pid = process.processIdentifier
-        if let status = try? String(contentsOfFile: "/proc/\(pid)/status", encoding: .utf8) {
-            for line in status.split(separator: "\n") where
-                line.hasPrefix("State:") || line.hasPrefix("SigBlk:")
-                    || line.hasPrefix("SigIgn:") || line.hasPrefix("SigCgt:") {
-                FileHandle.standardError.write(Data("[PRT-PROC-DEBUG pid=\(pid)] \(line)\n".utf8))
-            }
-        } else {
-            let line = "[PRT-PROC-DEBUG pid=\(pid)] /proc/\(pid)/status unavailable\n"
-            FileHandle.standardError.write(Data(line.utf8))
-        }
-        if let fds = try? FileManager.default.contentsOfDirectory(atPath: "/proc/\(pid)/fd") {
-            let line = "[PRT-PROC-DEBUG pid=\(pid)] fds: \(fds.sorted())\n"
-            FileHandle.standardError.write(Data(line.utf8))
-        }
-    }
 }
