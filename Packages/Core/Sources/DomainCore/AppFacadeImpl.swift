@@ -197,6 +197,16 @@ public actor AppFacadeImpl: AppFacade {
     /// пишет `is_user_edited = 0` — см. `Repositories.swift` — для правок распознавания,
     /// не для ручного редактирования целиком). К14: повторная правка того же сегмента идёт
     /// тем же путём, не переключается на `applyTextCorrections`.
+    // К33 (МЕЕ-437, группа Л, инв. 15; возврат РП, приёмка 10:15 UTC, «мелочи»): эта команда
+    // ДОЛЖНА публиковать `.transcriptChanged(transcriptId:)` (сама меняет текст сегмента),
+    // но принимает только `segmentId` (C-016 §4, дословно) — резолвинг `segmentId →
+    // transcriptId` не входит ни в один метод `TranscriptRepository` C-010 (сверено
+    // `PortContractExpectations.swift` — `transcriptRepository`, десять методов, ни один не
+    // даёт этого). Заведённый было `transcriptId(forSegmentId:)` красил `PortDeclarationTests.
+    // test_mee289_everyPortDeclaresExactlyTheRequirementsOfItsContract` — протокол обязан
+    // зеркалить контракт дословно, не шире. Нужен новый метод в САМОМ контракте C-010 (не
+    // только в Swift) — решение архитектора/РП, не эта задача; публикация здесь остаётся
+    // дырой сознательно, не по недосмотру.
     public func editSegmentText(segmentId: Int64, text: String) async throws {
         do {
             try await transcripts.updateSegmentText(segmentId: segmentId, text: text, isUserEdited: true)
@@ -204,13 +214,6 @@ public actor AppFacadeImpl: AppFacade {
             throw wrap(error)
         } catch {
             throw wrapUnexpected(error)
-        }
-        // К33 (МЕЕ-437, группа Л, инв. 15; возврат РП, приёмка 10:15 UTC, «мелочи»): правка
-        // уже применена — отказ `transcriptId(forSegmentId:)` здесь не откатывает её (тот
-        // же класс решения, что у `best-effort` частей файла); просто нет публикации, если
-        // транскрипт не нашёлся, — сам текст уже правда изменён.
-        if let transcriptId = try? await transcripts.transcriptId(forSegmentId: segmentId) {
-            publish(.transcriptChanged(transcriptId: transcriptId))
         }
     }
 

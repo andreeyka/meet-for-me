@@ -15,18 +15,20 @@ import Foundation
 extension AppFacadeImpl {
 
     /// Цикл на весь срок жизни актора — подписка регистрируется в `init` (см. докстринг там),
-    /// это тело просто читает уже гарантированно не потерянные снимки. Первым шагом снимает
-    /// СВОЮ базовую готовность через `permissionsPort.snapshot()` (не через сам поток
-    /// `changes()` — независимый вызов, не потребляет ни одного элемента буфера) — без этого
-    /// самое первое пришедшее в `changes()` событие сравнивать было бы не с чем, и
-    /// `.statusChanged` на нём никогда не ушёл бы, даже если право действительно сменилось
-    /// относительно состояния на момент запуска.
+    /// это тело просто читает уже гарантированно не потерянные снимки.
+    ///
+    /// НАМЕРЕННО НЕТ отдельного шага «снять базовую готовность до цикла» — ранняя редакция
+    /// делала это через `permissionsPort.snapshot()`/`settings()` СРАЗУ при запуске, для
+    /// КАЖДОГО построенного `AppFacadeImpl`, включая те тысячи тестовых фикстур по всему
+    /// таргету, что вообще не касаются прав. Это гонка с любым тестом, что сам считает
+    /// обращения к `SettingsRepository`/`PermissionsPort` (общий `PortCallLog` в
+    /// `InMemoryRepositories`) — находка CI после первого варианта этого файла: он добавлял
+    /// седьмую строку в журнал `SettingsTests.test_k22_...`, читавший ровно шесть. Тело ниже
+    /// не трогает ни один порт, пока `changes()` действительно не пришлёт снимок, — молчаливый
+    /// подписчик без единого вызова не даёт побочных эффектов. Цена: самое первое пришедшее
+    /// событие только заводит базу (`lastKnownPermissionsReadiness == nil`), `.statusChanged`
+    /// на нём не публикуется — сравнивать было бы не с чем.
     func observePermissionsChanges(_ stream: AsyncStream<PermissionSnapshot>) async {
-        if lastKnownPermissionsReadiness == nil {
-            let initialSnapshot = await permissionsPort.snapshot()
-            let initialSettings = (try? await settings()) ?? AppSettings.slice1Defaults
-            lastKnownPermissionsReadiness = permissionsReady(snapshot: initialSnapshot, settings: initialSettings)
-        }
         for await snapshot in stream {
             let currentSettings = (try? await settings()) ?? AppSettings.slice1Defaults
             let newReadiness = permissionsReady(snapshot: snapshot, settings: currentSettings)

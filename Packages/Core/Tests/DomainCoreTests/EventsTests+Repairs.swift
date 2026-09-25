@@ -1,8 +1,12 @@
-//  EventsTests — три вектора из возврата РП (приёмка 10:15 UTC): stopRecording (публикация
-//  была, теста не было), editSegmentText → transcriptChanged (инв. 15, пропущено), ремонт
-//  нечитаемой строки настроек (находка 1). Разведено из `EventsTests.swift` по объёму
-//  (`file_length`), не по смыслу — тот же приём, что `EventsTests+PermissionsObservation.
-//  swift`. Общие `Fixture`/`makeFixture()`/`collectEvents` — там же, не `private`.
+//  EventsTests — два вектора из возврата РП (приёмка 10:15 UTC): stopRecording (публикация
+//  была, теста не было), ремонт нечитаемой строки настроек (находка 1). Разведено из
+//  `EventsTests.swift` по объёму (`file_length`), не по смыслу — тот же приём, что
+//  `EventsTests+PermissionsObservation.swift`. Общие `Fixture`/`makeFixture()`/
+//  `collectEvents` — там же, не `private`.
+//
+//  editSegmentText → transcriptChanged (инв. 15) — НЕ здесь: требует новый метод
+//  `TranscriptRepository` (резолвинг segmentId → transcriptId), которого нет в контракте
+//  C-010 — см. докстринг `AppFacadeImpl.editSegmentText` в `AppFacadeImpl.swift`.
 
 import XCTest
 @testable import DomainCore
@@ -26,40 +30,6 @@ extension EventsTests {
         guard case .statusChanged = events.first else {
             return XCTFail("ожидался .statusChanged, получено \(String(describing: events.first))")
         }
-    }
-
-    // MARK: - editSegmentText → transcriptChanged (возврат РП, «мелочи»: инв. 15, пропущено)
-
-    /// `editSegmentText` принимает только `segmentId` (контракт §4) — транскрипт находится
-    /// через новый `TranscriptRepository.transcriptId(forSegmentId:)` (МЕЕ-437,
-    /// `Repositories.swift`), заведённый именно для этой публикации.
-    func test_editSegmentText_publishesTranscriptChanged() async throws {
-        let fixture = makeFixture()
-        let word = try Transcript.Word(startMs: 0, endMs: 800, text: "слово", confidence: nil, original: nil)
-        let segment = try Transcript.Segment(
-            startMs: 0, endMs: 800, channel: .system, speakerCluster: 0,
-            text: "текст", textOriginal: nil, textConfidence: nil, words: [word]
-        )
-        let speaker = try Transcript.Speaker(
-            cluster: 0, embedding: [0.1, 0.2], embeddingModelVersion: "v1", totalMs: 800
-        )
-        let transcript = try Transcript(
-            recordingId: UUID(), language: "ru", engine: "engine", modelVersion: "1.0",
-            createdAt: Date(timeIntervalSince1970: 0), segments: [segment], speakers: [speaker]
-        )
-        let header = try await fixture.repositories.transcripts.save(transcript)
-        let rows = try await fixture.repositories.transcripts.segments(transcriptId: header.id)
-        let segmentId = try XCTUnwrap(rows.first?.id)
-
-        let stream = fixture.facade.events()
-        try await fixture.facade.editSegmentText(segmentId: segmentId, text: "поправленный текст")
-
-        let events = await collectEvents(stream, count: 1)
-        XCTAssertEqual(events.count, 1)
-        guard case .transcriptChanged(let transcriptId) = events.first else {
-            return XCTFail("ожидался .transcriptChanged, получено \(String(describing: events.first))")
-        }
-        XCTAssertEqual(transcriptId, header.id)
     }
 
     // MARK: - updateSettings — ремонт нечитаемой строки (возврат РП, находка 1)

@@ -94,30 +94,6 @@ final class TranscriptRepositoryTests: StorageAsyncTestCase {
         XCTAssertEqual(try Self.ftsCount(temp.database), 0)
     }
 
-    // MARK: - МЕЕ-437 (возврат РП, «мелочи»): transcriptId(forSegmentId:)
-
-    /// `editSegmentText` (`AppFacadeImpl.swift`) публикует `AppEvent.transcriptChanged(
-    /// transcriptId:)` через этот метод — реальная СУБД, не `InMemoryTranscriptRepository`,
-    /// проверяет саму SQL-выборку (`segments.transcript_id`, `Migrations.swift`).
-    func testMEE437_transcriptIdForSegmentIdResolvesRealColumn() async throws {
-        let temp = try StorageTestSupport.makeDatabase()
-        defer { StorageTestSupport.cleanup(temp) }
-        let layout = FileLayout(root: temp.directory)
-        let recordingRepository = temp.database.recordingRepository(fileLayout: layout)
-        let transcripts = temp.database.transcriptRepository()
-
-        let recordingId = try await Self.makeRecording(repository: recordingRepository, layout: layout)
-        let header = try await Self.saveThreeSegments(recordingId, "mee437", transcripts)
-        let rows = try await transcripts.segments(transcriptId: header.id)
-        let segmentId = try XCTUnwrap(rows.first).id
-
-        let resolved = try await transcripts.transcriptId(forSegmentId: segmentId)
-        XCTAssertEqual(resolved, header.id)
-
-        let unknown = try await transcripts.transcriptId(forSegmentId: -1)
-        XCTAssertNil(unknown, "сегмента с таким id нет — nil, не отказ")
-    }
-
     // MARK: - Оснастка
 
     private static func makeRecording(repository: RecordingRepository, layout: FileLayout) async throws -> UUID {
