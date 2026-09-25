@@ -41,4 +41,37 @@ final class SessionMachineJobQueueSignalTests: XCTestCase {
         XCTAssertEqual(staged.stand.queue.recordingDidStopCallCount, 1, "вызван даже когда capture.stop() бросил")
         await staged.stand.machine.stop()
     }
+
+    // MARK: - MEE-423 (IR-137, C-018 v11 инв. 25): строка 11 (`recording → failed`)
+
+    /// `applyArrivedRows` зовёт `queue.recordingDidStop()` на строке 11, тем же приёмом, что
+    /// `enterStopping` на строке 10 — прежде отсутствовавший вызов, флаг висел до перезапуска.
+    func test_mee423_recordingDidStopIsCalledOnceEnteringFailedViaRow11() async throws {
+        let staged = try await SessionMachineStand.recording(from: moment)
+        await staged.stand.deliver(CaptureEvent.failed(.systemUnavailable(message: "отказ")))
+        await staged.stand.machine.tick(now: moment.addingTimeInterval(80))
+
+        let live = try unwrap(await staged.stand.machine.session(id: staged.sessionId))
+        XCTAssertEqual(live.state, .failed, "строка 11: recording → failed")
+        XCTAssertEqual(staged.stand.queue.recordingDidStartCallCount, 1, "старт не задвоился")
+        XCTAssertEqual(staged.stand.queue.recordingDidStopCallCount, 1, "ровно один вызов на строку 11")
+        await staged.stand.machine.stop()
+    }
+
+    /// `recordingDidStop()` зовётся ДО записи перехода и независимо от её исхода — запись
+    /// уже остановилась сама (`CaptureEvent.failed`), и отказ записи это не меняет.
+    func test_mee423_recordingDidStopIsCalledEvenWhenRow11TransitionWriteFails() async throws {
+        let staged = try await SessionMachineStand.recording(from: moment)
+        staged.stand.meetings.fail(with: .io(message: "запись перехода не удалась"), on: .setStatus)
+
+        await staged.stand.deliver(CaptureEvent.failed(.systemUnavailable(message: "отказ")))
+        await staged.stand.machine.tick(now: moment.addingTimeInterval(80))
+
+        let live = try unwrap(await staged.stand.machine.session(id: staged.sessionId))
+        XCTAssertEqual(live.state, .recording, "переход не записан (инвариант 18) — состояние осталось прежним")
+        XCTAssertEqual(
+            staged.stand.queue.recordingDidStopCallCount, 1, "recordingDidStop зовётся даже при отказе записи"
+        )
+        await staged.stand.machine.stop()
+    }
 }

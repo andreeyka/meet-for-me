@@ -222,6 +222,90 @@ final class SessionMachineEntryTests: XCTestCase {
         await processing.stand.machine.stop()
     }
 
+    // MARK: - MEE-423 (IR-137, C-018 v11 инв. 25): откат на входе в `recording`
+
+    /// Переход не записан — `capture.stop()` зван, `recordingDidStop()` зван (независимо от
+    /// исхода `.stop()`), токен отпущен, `recordingId`/`target` сброшены в `store` (инвариант
+    /// 5), и наружу идёт исходная ошибка перехода, а не какая-либо ещё.
+    func test_mee423_enterRecordingRollsBackAndRethrowsOriginalTransitionErrorWhenWriteFails() async throws {
+        let (stand, _) = try await standing(policy: .auto, at: -60)
+        stand.allowCaptureStart()
+        let failure = StorageError.io(message: "запись перехода не удалась")
+        stand.meetings.fail(with: failure, on: .setStatus)
+        let live = try unwrap(await stand.machine.sessions().first)
+        let target = ProcessGroup(appKey: "us.zoom.xos", pids: [501], observedAt: moment.addingTimeInterval(-60))
+
+        do {
+            _ = try await stand.machine.enterRecording(
+                live.sessionId, target: target, observedAt: moment.addingTimeInterval(-60),
+                now: moment.addingTimeInterval(-60)
+            )
+            XCTFail("ожидался отказ записи перехода")
+        } catch let error as StorageError {
+            XCTAssertEqual(error, failure, "наружу — исходная ошибка перехода, не какая-либо ещё")
+        }
+
+        XCTAssertEqual(stand.queue.recordingDidStartCallCount, 1, "capture.start() удался — старт зван")
+        XCTAssertEqual(stand.queue.recordingDidStopCallCount, 1, "откат зовёт recordingDidStop")
+        XCTAssertEqual(
+            stand.capture.callCount(of: { if case .stop = $0 { return true }; return false }), 1,
+            "capture.stop() зван при откате"
+        )
+        XCTAssertTrue(stand.power.liveActivities.isEmpty, "токен отпущен при откате")
+        XCTAssertEqual(
+            stand.power.beginActivityCallCount, stand.power.endActivityCallCount, "взятых и отпущенных поровну"
+        )
+
+        let after = try unwrap(await stand.machine.session(id: live.sessionId))
+        XCTAssertNil(after.recordingId, "инвариант 5: до `recording` `recordingId == nil`")
+        XCTAssertNil(after.target, "цель сброшена вместе со входом")
+        await stand.machine.stop()
+    }
+
+    /// `capture.stop()` вправе отказать сам при откате — это не меняет исход:
+    /// `recordingDidStop()` зовётся всё равно, ровно один раз.
+    func test_mee423_enterRecordingRollbackCallsRecordingDidStopEvenWhenCaptureStopFails() async throws {
+        let (stand, _) = try await standing(policy: .auto, at: -60)
+        stand.allowCaptureStart()
+        stand.capture.failStop(with: .notRunning)
+        stand.meetings.fail(with: .io(message: "запись перехода не удалась"), on: .setStatus)
+        let live = try unwrap(await stand.machine.sessions().first)
+        let target = ProcessGroup(appKey: "us.zoom.xos", pids: [501], observedAt: moment.addingTimeInterval(-60))
+
+        do {
+            _ = try await stand.machine.enterRecording(
+                live.sessionId, target: target, observedAt: moment.addingTimeInterval(-60),
+                now: moment.addingTimeInterval(-60)
+            )
+            XCTFail("ожидался отказ записи перехода")
+        } catch {
+            // ожидаемо — исходная ошибка перехода, проверена отдельным тестом выше.
+        }
+
+        XCTAssertEqual(
+            stand.queue.recordingDidStopCallCount, 1, "вызван даже когда capture.stop() бросил"
+        )
+        await stand.machine.stop()
+    }
+
+    // MARK: - К102 (перечня MEE-277): отказ `capture.start()`
+
+    /// `capture.start()` отказал — `recordingDidStart()` не зовётся ни разу: домен ещё не
+    /// знает о начале записи, которой не случилось.
+    func test_k102_captureStartFailureMeansRecordingDidStartIsNeverCalled() async throws {
+        let (stand, _) = try await standing(policy: .auto, at: -60)
+        stand.capture.failStart(with: .alreadyRunning)
+        await stand.deliver(SessionMachineFixtures.audioOutput(
+            appKey: "us.zoom.xos", observedAt: moment.addingTimeInterval(-60)
+        ))
+        await stand.machine.tick(now: moment.addingTimeInterval(-60))
+
+        XCTAssertEqual(stand.queue.recordingDidStartCallCount, 0, "capture.start() отказал — старт не звался")
+        let live = try unwrap(await stand.machine.sessions().first)
+        XCTAssertEqual(live.state, .armed, "переход в `recording` не наступил")
+        await stand.machine.stop()
+    }
+
     // MARK: - Оснастка
 
     /// Вектор строки 8: политика, наличие цели и ожидаемое состояние. Значением, а не

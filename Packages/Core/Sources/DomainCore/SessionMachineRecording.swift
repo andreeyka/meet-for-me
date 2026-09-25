@@ -68,10 +68,20 @@ extension SessionMachine {
         do {
             try await transition(identifier, to: .recording, now: now)
         } catch {
-            // Исход не записан — значит перехода не было (инвариант 18). Токен при этом
-            // взят, и держать его нечему: состояние осталось прежним.
+            // MEE-423 (IR-137, C-018 v11 инв. 25): переход не записан (инвариант 18), но
+            // захват уже шёл и очередь уже узнала о нём — оба отменяются тем же путём,
+            // каким запись обычно останавливается. `capture.stop()` вправе отказать сам:
+            // это не меняет исход входа, `recordingDidStop()` зовётся независимо от него,
+            // и наружу идёт исходная ошибка перехода, а не эта.
+            _ = try? await capture.stop()
+            await queue.recordingDidStop()
             token.end()
             store[identifier]?.powerToken = nil
+            // Инвариант 5: до `recording` `recordingId == nil` — переход не состоялся,
+            // сессия обязана вернуться в это же условие.
+            store[identifier]?.recordingId = nil
+            store[identifier]?.target = nil
+            store[identifier]?.lastTargetObservedAt = nil
             throw error
         }
         return recordingId
