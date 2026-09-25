@@ -31,13 +31,21 @@ enum PermissionsSources {
 
     static func sources() throws -> [SourceFile] { try swiftFiles(in: "Sources/Permissions") }
 
+    /// Имя каталога объектников таргета `Permissions` РАЗНОЕ у двух систем сборки (возврат РП,
+    /// локальный прогон на Swift 6.4, MEE-432): нативная зовёт его `Permissions.build`, новая —
+    /// `Permissions-t.build`. Соседние каталоги `PermissionsTests-p.build` (объектники самих
+    /// ТЕСТОВ — не таргета) и `Permissions-product-p.build` названы намеренно похоже и не
+    /// входят в это множество: сравнение ниже — точное равенство компонента пути, не подстрока
+    /// и не префикс, так что ни один из них не совпадёт ни с одним именем отсюда.
+    private static let targetDirectoryNames: Set<String> = ["Permissions.build", "Permissions-t.build"]
+
     /// Объектные файлы таргета `Permissions`: продукт `swift build`, устойчиво к обеим системам
     /// сборки (MEE-432). Нативная кладёт `.o` рядом с бандлом тестов
     /// (`<products>/Permissions.build/*.o`); Swift 6.4 по умолчанию — глубже, в
     /// `.build/out/Intermediates.noindex/…`, путь внутри которого нигде не назван дословно.
     /// Быстрый путь (стоимость обхода всего `.build` на CI заметна) пробуется первым;
-    /// рекурсивный поиск каталога `Permissions.build` от корня `.build` — только когда его не
-    /// нашлось. Ни там, ни там — явный отказ (`ObjectFilesNotFoundError`), а не холостой
+    /// рекурсивный поиск каталога из `targetDirectoryNames` от корня `.build` — только когда
+    /// его не нашлось. Ни там, ни там — явный отказ (`ObjectFilesNotFoundError`), а не холостой
     /// зелёный и не невнятная системная ошибка `FileManager`.
     static func objectFiles() throws -> [URL] {
         let bundleURL = Bundle(for: FakeHoldHandle.self).bundleURL
@@ -48,7 +56,7 @@ enum PermissionsSources {
         guard let buildRoot = buildRoot(from: bundleURL) else {
             throw ObjectFilesNotFoundError(bundleURL: bundleURL, nativeTarget: nativeTarget, buildRoot: nil)
         }
-        let found = objectFiles(recursivelyUnder: buildRoot, targetDirectoryName: "Permissions.build")
+        let found = objectFiles(recursivelyUnder: buildRoot, targetDirectoryNames: targetDirectoryNames)
         guard !found.isEmpty else {
             throw ObjectFilesNotFoundError(bundleURL: bundleURL, nativeTarget: nativeTarget, buildRoot: buildRoot)
         }
@@ -73,10 +81,11 @@ enum PermissionsSources {
         return nil
     }
 
-    /// Рекурсивный обход `.build` в поисках `.o` внутри каталога `targetDirectoryName` — Swift
-    /// 6.4 вкладывает его глубже нативной раскладки (`Objects-normal/<arch>/` и промежуточные
-    /// `Intermediates.noindex`), но имя каталога самого таргета в обеих раскладках одно.
-    private static func objectFiles(recursivelyUnder root: URL, targetDirectoryName: String) -> [URL] {
+    /// Рекурсивный обход `.build` в поисках `.o` внутри каталога, чьё имя — ОДНО ИЗ
+    /// `targetDirectoryNames` (точным равенством компонента пути, см. докстринг множества) —
+    /// Swift 6.4 вкладывает такой каталог глубже нативной раскладки (`Objects-normal/<arch>/` и
+    /// промежуточные `Intermediates.noindex`), но само имя каталога зависит от системы сборки.
+    private static func objectFiles(recursivelyUnder root: URL, targetDirectoryNames: Set<String>) -> [URL] {
         guard let enumerator = FileManager.default.enumerator(
             at: root, includingPropertiesForKeys: [.isRegularFileKey], options: [.skipsHiddenFiles]
         ) else {
@@ -84,7 +93,8 @@ enum PermissionsSources {
         }
         var found: [URL] = []
         for case let url as URL in enumerator where url.pathExtension == "o" {
-            if url.deletingLastPathComponent().pathComponents.contains(targetDirectoryName) {
+            let components = url.deletingLastPathComponent().pathComponents
+            if components.contains(where: { targetDirectoryNames.contains($0) }) {
                 found.append(url)
             }
         }
@@ -106,6 +116,7 @@ struct ObjectFilesNotFoundError: LocalizedError {
                 + "не удаётся определить корень сборки"
         }
         return "объектные файлы таргета Permissions не найдены ни в \(nativeTarget.path) (нативная раскладка), "
-            + "ни рекурсивно под \(buildRoot.path) по имени каталога Permissions.build (раскладка Swift 6.4)"
+            + "ни рекурсивно под \(buildRoot.path) по именам каталога Permissions.build/Permissions-t.build "
+            + "(раскладки нативная/Swift 6.4)"
     }
 }
