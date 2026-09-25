@@ -158,7 +158,8 @@ extension AppFacadeImplReadModelsTests {
             persons: repositories.persons,
             permissions: ThrowingOpenSettingsPermissionsPort(inner: permissions),
             modelCatalog: FakeModelCatalogPort(),
-            calendar: FakeCalendarPort()
+            calendar: FakeCalendarPort(),
+            sessionCoordinator: NoOpSessionCoordinator()
         )
 
         do {
