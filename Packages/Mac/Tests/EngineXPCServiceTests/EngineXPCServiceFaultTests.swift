@@ -15,6 +15,17 @@
 //  обязанность стороны сервиса — завернуть тот же брошенный `DomainValidationError`/
 //  `DecodingError` в `NSError(EngineTransportFault.errorDomain, code: invalidRequest)` с
 //  правильным префиксом, доставленную по НАСТОЯЩЕМУ `NSXPCConnection`.
+//
+//  РАСКРЫТИЕ по возврату РП (MEE-438, 11:50 UTC):
+//  * проверки текста ниже — `.contains(...)` над структурными полями (`invariant`/`contract`/
+//    `type`/путь), не равенство целой строки: `DomainValidationError.message` контрактом прямо
+//    назван нестабильным и сравнению не подлежит (`DomainValidationError.swift`, §0.1) — тот же
+//    выбор, что уже стоял в `LoopbackTransportMalformedRequestTests` (Core/EngineKitTests) для
+//    этих же четырёх векторов;
+//  * вектор (iii) использует `1e400` (буквально непредставимое `Double`, отсекается
+//    `decodeFinite` до `validate()`), а не `NaN` — `PropertyListEncoder`/XML не несёт литерала
+//    NaN уместно для текстовой правки этого приёма (`PlistSurgery`), `1e400` — тот же самый
+//    вход, каким уже доказан этот путь на EngineKit/Linux-половине (см. файл выше).
 
 import XCTest
 import DomainCore

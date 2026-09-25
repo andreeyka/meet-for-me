@@ -130,12 +130,23 @@ public final class EngineXPCRequestHandler: @unchecked Sendable {
         }
     }
 
+    /// Возврат РП по MEE-438 (11:50 UTC): регистрация `jobs[jobId]` обязана произойти под
+    /// ТЕМ ЖЕ удержанием замка, что и создание `Task` — не после него. `Task { … }` начинает
+    /// исполняться немедленно (возможно, на другом потоке); если бы запись в словарь шла
+    /// отдельным `lock.locked` уже ПОСЛЕ конструирования задачи, синхронно и очень быстро
+    /// завершившаяся операция могла бы вызвать `finish` (снимающий `jobs[jobId] = nil`) РАНЬШЕ,
+    /// чем сама регистрация — тогда запись снаружи перезаписала бы словарь уже мёртвой задачей
+    /// НАВСЕГДА (снять её больше некому). Здесь `finish` берёт тот же `lock` для своего
+    /// собственного снятия — пока замок удерживается здесь, `finish` заблокирован и не может
+    /// снять запись раньше, чем она появится (тот же приём, что `LoopbackEngineTransport.start`
+    /// и `EngineXPCClient+Transport.swift`, `roundTrip`).
     private func start<Value>(
         _ jobId: EngineJobId,
         completion: @escaping (Data?, Error?) -> Void,
         operation: @escaping (@Sendable @escaping (EngineProgress) -> Void) async throws -> Value,
         wrap: @escaping (Value) -> EngineReply
     ) {
+        lock.lock()
         let task = Task { [weak self] in
             guard let self else { return }
             let outcome: EngineReply
@@ -155,14 +166,29 @@ public final class EngineXPCRequestHandler: @unchecked Sendable {
             }
             self.finish(jobId, outcome: outcome, completion: completion)
         }
-        lock.locked { jobs[jobId] = task }
+        jobs[jobId] = task
+        lock.unlock()
     }
 
+    /// Возврат РП по MEE-438 (11:50 UTC): отказ `normalizingDates`/`encode` над УЖЕ построенным
+    /// (валидным) `outcome` — падение при кодировании готового ответа, не при разборе входа —
+    /// заворачивается в `EngineReply.failed(jobId, .runtimeFailure)`, а не в транспортный
+    /// `NSError`: у клиента это тогда законный отказ ДВИЖКА (`engineFailure`), а не «сервис не
+    /// смог собрать ответ» на уровне протокола. `.runtimeFailure(message:)` несёт только
+    /// `String` — кодируется всегда, второго отказа на этом пути не бывает; отдельный
+    /// `NSError`-фолбэк ниже — чисто оборонительный, недостижимый на практике (раскрыто, не
+    /// проверяется тестом: заставить `normalizingDates`/`encode` упасть над уже валидным
+    /// значением легитимными входами нечем).
     private func finish(_ jobId: EngineJobId, outcome: EngineReply, completion: (Data?, Error?) -> Void) {
         lock.locked { jobs[jobId] = nil }
+        let toEncode: EngineReply
         do {
-            let normalized = try EngineWire.normalizingDates(outcome)
-            completion(try EngineWire.encode(normalized), nil)
+            toEncode = try EngineWire.normalizingDates(outcome)
+        } catch {
+            toEncode = .failed(jobId, .runtimeFailure(message: "нормализация ответа: \(error)"))
+        }
+        do {
+            completion(try EngineWire.encode(toEncode), nil)
         } catch {
             completion(nil, Self.transportFault(.invalidRequest, [
                 NSLocalizedDescriptionKey: "кодирование ответа: \(error)"

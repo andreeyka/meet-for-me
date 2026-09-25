@@ -77,4 +77,31 @@ final class EngineXPCServiceEndToEndTests: XCTestCase {
         XCTAssertEqual(actualMs, expectedMs)
         XCTAssertNotEqual(transcript.createdAt, unrounded, "сырое значение не должно было дойти как есть")
     }
+
+    /// Возврат РП по MEE-438 (11:50 UTC): обратный канал прогресса до сих пор проверялся
+    /// только `rawServiceProxy` (`didReceiveProgress` напрямую, без настоящего клиентского
+    /// приёмника) — здесь тот же прогресс идёт ЦЕЛИКОМ настоящим путём: сервис
+    /// (`EngineXPCRequestHandler.pushProgress`) → настоящий `NSXPCConnection` → настоящий
+    /// `EngineXPCClient.ProgressReceiver` → замыкание прогресса `transcribe(_:progress:)`.
+    /// Инв. 3 (§2): прогресс идёт только между приёмом запроса и его финальным ответом — здесь
+    /// проверяется хвост инварианта: ПОСЛЕ того, как `transcribe` уже вернула значение (финальный
+    /// ответ клиентом получен и разобран), новых событий прогресса больше не приходит.
+    func test_progressFlowsFromRealServiceThroughRealClientAndStopsAfterFinalReply() async throws {
+        let fixture = RealServiceFixture()
+        configureReadyServiceProfile(fixture.modelCatalog)
+        fixture.transcription.progressScript = [
+            .started(stage: .asr), .advanced(stage: .asr, fraction: 0.5), .finished(stage: .asr)
+        ]
+        let collector = TranscriptionProgressCollector()
+
+        _ = try await fixture.client.transcribe(makeSpec()) { progress in collector.append(progress) }
+
+        let countAtCompletion = collector.all.count
+        XCTAssertEqual(countAtCompletion, 3, "все три события сценария обязаны дойти")
+        XCTAssertEqual(collector.all.map(\.stage), [EngineStage.asr, .asr, .asr].map(\.rawValue))
+        // Даём событийному циклу шанс — если бы сервис (ошибочно) продолжал слать прогресс
+        // после финального ответа, лишнее событие успело бы дойти за этот срок.
+        try await Task.sleep(nanoseconds: 200_000_000)
+        XCTAssertEqual(collector.all.count, countAtCompletion, "прогресс не должен приходить после финального ответа")
+    }
 }

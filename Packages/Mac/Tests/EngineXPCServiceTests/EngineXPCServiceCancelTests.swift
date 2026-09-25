@@ -10,6 +10,10 @@
 //  резолвит `.cancelled` СРАЗУ по отправке кадра `cancel`, не дожидаясь настоящего ответа
 //  сервиса, — так что понаблюдать за реакцией именно СЕРВИСА можно только минуя эту его
 //  оптимизацию.
+//
+//  Каждое тело обёрнуто `withDeadline` (`TestSupport.swift`, тот же приём, что MEE-374):
+//  настоящий `NSXPCConnection` — не управляемое время фейка, и висящий круговой обмен обязан
+//  падать `XCTFail` за конечное время, а не вешать CI до её собственного сторожа.
 
 import XCTest
 import DomainCore
@@ -18,7 +22,9 @@ import EngineKit
 
 final class EngineXPCServiceCancelTests: XCTestCase {
 
-    private func makeTranscribeRequest() throws -> (jobId: EngineJobId, request: EngineRequest) {
+    /// Не метод экземпляра: тело `withDeadline` — `@Sendable`-замыкание, а `XCTestCase` не
+    /// `Sendable` — захват `self` только ради этой чистой функции того не стоил бы.
+    private static func makeTranscribeRequest() throws -> (jobId: EngineJobId, request: EngineRequest) {
         let audio = try ServiceFixtures.audioRef()
         let request = try TranscriptionRequest(
             audio: [audio], language: nil, wantWordTimestamps: false,
@@ -30,55 +36,82 @@ final class EngineXPCServiceCancelTests: XCTestCase {
 
     // MARK: - Инв. 6: неизвестный jobId — успешный no-op
 
-    func test_cancelUnknownJobIdIsSuccessfulNoOp() async throws {
-        let fixture = RealServiceFixture()
-        let (proxy, connection) = fixture.rawServiceProxy()
-        defer { connection.invalidate() }
+    func test_cancelUnknownJobIdIsSuccessfulNoOp() async {
+        await withDeadline {
+            let fixture = RealServiceFixture()
+            let (proxy, connection) = fixture.rawServiceProxy()
+            defer { connection.invalidate() }
 
-        let cancelData = try EngineWire.encode(EngineRequest.cancel(EngineJobId(rawValue: UUID())))
-        let (data, error) = await send(proxy, cancelData)
+            guard let cancelData = try? EngineWire.encode(EngineRequest.cancel(EngineJobId(rawValue: UUID()))) else {
+                return XCTFail("не удалось закодировать cancel")
+            }
+            let (data, error) = await send(proxy, cancelData)
 
-        XCTAssertNil(data)
-        XCTAssertNil(error)
+            XCTAssertNil(data)
+            XCTAssertNil(error)
+        }
     }
 
     // MARK: - Инв. 7: настоящая отмена прерывает движок и завершает ИСХОДНЫЙ запрос .cancelled
 
-    func test_genuineCancelStopsFakeEngineAndRepliesCancelledOnOriginalCall() async throws {
-        let fixture = RealServiceFixture()
-        fixture.transcription.simulatedWorkNanoseconds = 5_000_000_000   // 5с — заведомо дольше отмены
-        let (proxy, connection) = fixture.rawServiceProxy()
-        defer { connection.invalidate() }
-        let (jobId, request) = try makeTranscribeRequest()
+    func test_genuineCancelStopsFakeEngineAndRepliesCancelledOnOriginalCall() async {
+        await withDeadline {
+            let fixture = RealServiceFixture()
+            fixture.transcription.simulatedWorkNanoseconds = 5_000_000_000   // 5с — заведомо дольше отмены
+            let (proxy, connection) = fixture.rawServiceProxy()
+            defer { connection.invalidate() }
+            guard let (jobId, request) = try? Self.makeTranscribeRequest() else {
+                return XCTFail("не удалось построить запрос")
+            }
+            guard let requestData = try? EngineWire.encode(request) else {
+                return XCTFail("не удалось закодировать запрос")
+            }
 
-        async let originalReply: (Data?, NSError?) = send(proxy, try EngineWire.encode(request))
-        // Даём исходному запросу время дойти до движка (started-прогресс) прежде, чем отменять —
-        // без этого гонка могла бы отменить `Task` до того, как он вообще начал `Task.sleep`.
-        try await Task.sleep(nanoseconds: 100_000_000)
-        let (cancelData, cancelError) = await send(proxy, try EngineWire.encode(EngineRequest.cancel(jobId)))
-        XCTAssertNil(cancelData)
-        XCTAssertNil(cancelError)
+            async let originalReply: (Data?, NSError?) = send(proxy, requestData)
+            // Даём исходному запросу время дойти до движка (started-прогресс) прежде, чем
+            // отменять — без этого гонка могла бы отменить `Task` до того, как он вообще
+            // начал `Task.sleep`.
+            try? await Task.sleep(nanoseconds: 100_000_000)
+            guard let cancelFrameData = try? EngineWire.encode(EngineRequest.cancel(jobId)) else {
+                return XCTFail("не удалось закодировать cancel")
+            }
+            let (cancelData, cancelError) = await send(proxy, cancelFrameData)
+            XCTAssertNil(cancelData)
+            XCTAssertNil(cancelError)
 
-        let (data, error) = try await originalReply
-        XCTAssertNil(error)
-        let reply = try EngineWire.decode(EngineReply.self, from: try XCTUnwrap(data))
-        XCTAssertEqual(reply, .cancelled(jobId))
+            let (data, error) = await originalReply
+            XCTAssertNil(error)
+            guard let data, let reply = try? EngineWire.decode(EngineReply.self, from: data) else {
+                return XCTFail("исходный ответ не разобран")
+            }
+            XCTAssertEqual(reply, .cancelled(jobId))
+        }
     }
 
     /// Инв. 6 (вторая половина): jobId уже завершённого (не только никогда не виденного)
     /// запроса — тоже no-op, не отказ.
-    func test_cancelAlreadyFinishedJobIdIsSuccessfulNoOp() async throws {
-        let fixture = RealServiceFixture()
-        let (proxy, connection) = fixture.rawServiceProxy()
-        defer { connection.invalidate() }
-        let (jobId, request) = try makeTranscribeRequest()
+    func test_cancelAlreadyFinishedJobIdIsSuccessfulNoOp() async {
+        await withDeadline {
+            let fixture = RealServiceFixture()
+            let (proxy, connection) = fixture.rawServiceProxy()
+            defer { connection.invalidate() }
+            guard let (jobId, request) = try? Self.makeTranscribeRequest() else {
+                return XCTFail("не удалось построить запрос")
+            }
+            guard let requestData = try? EngineWire.encode(request) else {
+                return XCTFail("не удалось закодировать запрос")
+            }
 
-        let (data, error) = await send(proxy, try EngineWire.encode(request))
-        XCTAssertNil(error)
-        XCTAssertNotNil(data)
+            let (data, error) = await send(proxy, requestData)
+            XCTAssertNil(error)
+            XCTAssertNotNil(data)
 
-        let (cancelData, cancelError) = await send(proxy, try EngineWire.encode(EngineRequest.cancel(jobId)))
-        XCTAssertNil(cancelData)
-        XCTAssertNil(cancelError)
+            guard let cancelFrameData = try? EngineWire.encode(EngineRequest.cancel(jobId)) else {
+                return XCTFail("не удалось закодировать cancel")
+            }
+            let (cancelData, cancelError) = await send(proxy, cancelFrameData)
+            XCTAssertNil(cancelData)
+            XCTAssertNil(cancelError)
+        }
     }
 }

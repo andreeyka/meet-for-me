@@ -110,15 +110,105 @@ final class RealServiceFixture: NSObject {
     /// Прокси `EngineXPCServiceProtocol` НАПРЯМУЮ, в обход `EngineXPCClient` — соединение
     /// живёт, пока вызывающая сторона держит возвращённый `NSXPCConnection` (`invalidate()`
     /// по завершении теста — тот же приём, что `defer` у прочих сырых соединений этого плана).
+    /// Возврат РП по MEE-438 (11:50 UTC): раньше это соединение НЕ экспортировало
+    /// `EngineXPCClientProtocol` вовсе — сервис (`pushProgress` в делегате) пытался толкнуть
+    /// прогресс в несуществующий приёмник; сам круговой обмен `send(_:reply:)` от этого не
+    /// виснет (прогресс и реплай — разные вызовы), но соединение было несимметричным
+    /// продакшену без явной причины. Теперь экспортирует заглушку-приёмник (`onProgress`
+    /// по умолчанию отбрасывает) — тот же приём, что настоящий `EngineXPCClient`
+    /// (`ProgressReceiver`, `EngineXPCClient+Transport.swift`).
     func rawServiceProxy(
-        errorHandler: @escaping (Error) -> Void = { _ in }
+        errorHandler: @escaping (Error) -> Void = { _ in },
+        onProgress: @escaping @Sendable (Data) -> Void = { _ in }
     ) -> (EngineXPCServiceProtocol, NSXPCConnection) {
         let connection = NSXPCConnection(listenerEndpoint: listener.endpoint)
         connection.remoteObjectInterface = NSXPCInterface(with: EngineXPCServiceProtocol.self)
+        connection.exportedInterface = NSXPCInterface(with: EngineXPCClientProtocol.self)
+        connection.exportedObject = TestRawProgressReceiver(onProgress: onProgress)
         connection.resume()
         // swiftlint:disable:next force_cast
         let proxy = connection.remoteObjectProxyWithErrorHandler(errorHandler) as! EngineXPCServiceProtocol
         return (proxy, connection)
+    }
+}
+
+/// Заглушка `EngineXPCClientProtocol` для сырых соединений `rawServiceProxy` — тот же приём,
+/// что `EngineXPCClient.ProgressReceiver` (`EngineXPCClient+Transport.swift`), нужен отдельный
+/// `NSObject`, потому что тестовый код здесь `EngineXPCClient` не наследует.
+final class TestRawProgressReceiver: NSObject, EngineXPCClientProtocol {
+    private let onProgress: @Sendable (Data) -> Void
+    init(onProgress: @escaping @Sendable (Data) -> Void) { self.onProgress = onProgress }
+    func didReceiveProgress(_ progressData: Data) { onProgress(progressData) }
+}
+
+/// Резюмирует continuation ровно один раз — второй вызов молча игнорируется (тот же приём,
+/// что `DeadlineOutcome`, `CaptureTests/DeadlineTestSupport.swift`).
+private final class DeadlineOutcome: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<Bool, Never>?
+
+    init(_ continuation: CheckedContinuation<Bool, Never>) {
+        self.continuation = continuation
+    }
+
+    func resume(completed: Bool) {
+        lock.lock()
+        let pending = continuation
+        continuation = nil
+        lock.unlock()
+        pending?.resume(returning: completed)
+    }
+}
+
+/// Ограничивает `operation` пределом `seconds` — продублировано из `CaptureTests/
+/// DeadlineTestSupport.swift` (MEE-374, возврат РП 24.09 18:05: «новые сигналы `await*` этого
+/// дерева обязаны падать `XCTFail`, а не висеть до сторожа CI»); тестовые цели разных пакетов
+/// друг друга не импортируют, тот же довод, что у `PlistSurgery` в этом же файле. Возврат РП по
+/// MEE-438 (11:50 UTC): круговой обмен через настоящий `NSXPCConnection` — тот случай, для
+/// которого этот приём и заведён (гонка кооперативной отмены с реальным сервисом, не
+/// симулированная фейком с управляемым временем).
+func withDeadline(
+    _ seconds: TimeInterval = 5, file: StaticString = #filePath, line: UInt = #line,
+    _ operation: @escaping @Sendable () async -> Void
+) async {
+    let operationTask = Task<Void, Never> { await operation() }
+    let timeoutTask = Task<Void, Never> {
+        try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+    }
+    defer {
+        operationTask.cancel()
+        timeoutTask.cancel()
+    }
+    let completed = await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
+        let once = DeadlineOutcome(continuation)
+        Task {
+            await operationTask.value
+            once.resume(completed: true)
+        }
+        Task {
+            await timeoutTask.value
+            once.resume(completed: false)
+        }
+    }
+    if !completed {
+        XCTFail("превышен предел ожидания \(seconds) с", file: file, line: line)
+    }
+}
+
+/// Тот же приём, что `ProgressCollector` (`Core/EngineKitTests/EngineTestSupport.swift`), но
+/// над `TranscriptionProgress` (DomainCore) — снятым с настоящего `EngineXPCClient.transcribe`,
+/// а не с фейкового движка напрямую.
+final class TranscriptionProgressCollector: @unchecked Sendable {
+    private let lock = NSLock()
+    private var items: [TranscriptionProgress] = []
+
+    func append(_ item: TranscriptionProgress) {
+        lock.lock(); items.append(item); lock.unlock()
+    }
+
+    var all: [TranscriptionProgress] {
+        lock.lock(); defer { lock.unlock() }
+        return items
     }
 }
 
