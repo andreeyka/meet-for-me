@@ -205,6 +205,10 @@ private final class ReversedOrderTranscriptRepository: TranscriptRepository, @un
         return Array(rows.reversed())
     }
 
+    func transcriptId(forSegmentId segmentId: Int64) async throws -> UUID? {
+        try await inner.transcriptId(forSegmentId: segmentId)
+    }
+
     func updateAttribution(_ updates: [SegmentAttributionUpdate]) async throws {
         try await inner.updateAttribution(updates)
     }

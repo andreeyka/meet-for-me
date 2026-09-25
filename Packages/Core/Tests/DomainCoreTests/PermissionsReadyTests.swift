@@ -100,6 +100,58 @@ final class PermissionsReadyTests: XCTestCase {
         XCTAssertEqual(readiness, .notReady)
     }
 
+    /// (а), возврат РП (приёмка 10:15 UTC, «мелочи»): `.denied` — не единственный блокирующий
+    /// статус — `readinessBucket` относит к нему все четыре (`.notDetermined`/`.denied`/
+    /// `.restricted`/`.unavailable`), а тест выше проверял только один из четырёх.
+    func test_k32_vectorA_everyBlockingStatus_notReady() async {
+        for status in [PermissionStatus.notDetermined, .denied, .restricted, .unavailable] {
+            let fixture = makeFixture(startingStatus: .granted)
+            fixture.permissions.setStatus(status, for: .microphone)
+            let settings = settingsWith(recordingPolicy: .ask)
+            let snapshot = await fixture.permissions.snapshot()
+            let readiness = await fixture.facade.permissionsReady(snapshot: snapshot, settings: settings)
+            XCTAssertEqual(readiness, .notReady, "\(status)")
+        }
+    }
+
+    /// (а), возврат РП: блокирующее перевешивает «неизвестное» на РАЗНЫХ правах одного и
+    /// того же снимка — К31/К32 сами называют это порядком ступеней, отдельно от того, что
+    /// каждая ступень достижима в одиночку.
+    func test_k32_vectorA_blockingOutweighsUnknownAcrossDifferentPermissions_notReady() async {
+        let fixture = makeFixture(startingStatus: .granted)
+        fixture.permissions.setStatus(.denied, for: .microphone)
+        fixture.permissions.setStatus(.unknown, for: .systemAudioRecording)
+        let settings = settingsWith(recordingPolicy: .ask)
+        let snapshot = await fixture.permissions.snapshot()
+        let readiness = await fixture.facade.permissionsReady(snapshot: snapshot, settings: settings)
+        XCTAssertEqual(readiness, .notReady)
+    }
+
+    /// Необязательное право (`screenRecording`) — `.denied` его не блокирует: `.ready`
+    /// остаётся `.ready`, потому что это право не входит ни в один обязательный набор
+    /// (К31), какое бы состояние оно ни несло.
+    func test_k32_deniedNonRequiredPermission_stillReady() async {
+        let fixture = makeFixture(startingStatus: .granted)
+        fixture.permissions.setStatus(.denied, for: .screenRecording)
+        let settings = settingsWith(recordingPolicy: .auto)
+        let snapshot = await fixture.permissions.snapshot()
+        let readiness = await fixture.facade.permissionsReady(snapshot: snapshot, settings: settings)
+        XCTAssertEqual(readiness, .ready)
+    }
+
+    /// Возврат РП (приёмка 10:15 UTC, находка 2): связка `status()` → `permissionsReady`
+    /// (`AppFacadeImpl.swift`) — а не только сам расчёт, который зовут остальные тесты этого
+    /// файла напрямую (`fixture.facade.permissionsReady(snapshot:settings:)`, минуя
+    /// `status()` вовсе). Подделка «`status()` всегда отдаёт `.ready`» эту проверку уже не
+    /// пройдёт.
+    func test_k32_statusPermissionsReady_reflectsComputation() async {
+        let fixture = makeFixture(startingStatus: .granted)
+        fixture.permissions.setStatus(.denied, for: .microphone)
+
+        let status = await fixture.facade.status()
+        XCTAssertEqual(status.permissionsReady, .notReady)
+    }
+
     /// (б): все обязательные выданы, хотя бы одно `.unknown` — `.unknownUntilFirstUse`.
     func test_k32_vectorB_requiredGrantedExceptUnknown_unknownUntilFirstUse() async {
         let fixture = makeFixture(startingStatus: .granted)

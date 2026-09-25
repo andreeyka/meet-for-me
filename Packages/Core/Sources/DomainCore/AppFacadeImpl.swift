@@ -63,6 +63,12 @@ public actor AppFacadeImpl: AppFacade {
 
     nonisolated let broadcaster = AppEventBroadcaster()
 
+    /// Возврат РП (приёмка 10:15 UTC, находка 4): снимок готовности «на данный момент» —
+    /// сравнивается с ним при каждом новом `PermissionsPort.changes()` в
+    /// `AppFacadeImpl+PermissionsObservation.swift`. Живёт весь срок жизни актора — тот же
+    /// класс долгоживущего состояния, что `AppEventBroadcaster.continuations`.
+    var lastKnownPermissionsReadiness: PermissionsReadiness?
+
     public init(
         meetings: MeetingRepository,
         recordings: RecordingRepository,
@@ -89,6 +95,15 @@ public actor AppFacadeImpl: AppFacade {
         self.attribution = attribution
         self.settingsRepository = settings
         self.clock = clock
+        // Возврат РП (находка 4): подписка на смену прав живёт весь срок жизни фасада —
+        // `permissions.changes()` вызван ЗДЕСЬ, синхронно, до возврата из `init` (`AsyncStream`
+        // регистрирует подписчика синхронно при построении — тот же приём, что `events()`/
+        // `AppEventBroadcaster.subscribe()`), поэтому ни один снимок, отправленный сразу после
+        // конструирования, не потеряется, даже если фоновая `Task` ниже ещё не дошла до
+        // `for await` (буфер `AsyncStream` по умолчанию не ограничен). См.
+        // `AppFacadeImpl+PermissionsObservation.swift` за телом цикла.
+        let permissionChanges = permissions.changes()
+        Task { await self.observePermissionsChanges(permissionChanges) }
     }
 
     /// Отказ методов, которых эта часть PR не реализует — см. заголовок файла.
@@ -120,9 +135,15 @@ public actor AppFacadeImpl: AppFacade {
     /// безусловна (`CalendarPort.sync` не throws, каждый `CalendarSyncResult` несёт свой
     /// отказ по коннектору отдельно), а не только когда список встреч правда изменился:
     /// подписчик не платит за лишний пересчёт дороже одного чтения.
+    ///
+    /// Возврат РП (приёмка 10:15 UTC, находка 4): `.statusChanged` — тоже безусловно и
+    /// тоже здесь, не только `.meetingsChanged`. `AppStatus.upcoming` строится из встреч
+    /// (`status()`, `meetingListItems`) — синхронизация меняет ИМЕННО его, значит меняет
+    /// и сам статус, независимо от того, различалось ли что-то в `permissionsReady`.
     public func syncCalendars() async -> [CalendarSyncResult] {
         let results = await calendar.sync(trigger: .manual)
         publish(.meetingsChanged)
+        publish(.statusChanged(await status()))
         return results
     }
 
@@ -183,6 +204,13 @@ public actor AppFacadeImpl: AppFacade {
             throw wrap(error)
         } catch {
             throw wrapUnexpected(error)
+        }
+        // К33 (МЕЕ-437, группа Л, инв. 15; возврат РП, приёмка 10:15 UTC, «мелочи»): правка
+        // уже применена — отказ `transcriptId(forSegmentId:)` здесь не откатывает её (тот
+        // же класс решения, что у `best-effort` частей файла); просто нет публикации, если
+        // транскрипт не нашёлся, — сам текст уже правда изменён.
+        if let transcriptId = try? await transcripts.transcriptId(forSegmentId: segmentId) {
+            publish(.transcriptChanged(transcriptId: transcriptId))
         }
     }
 

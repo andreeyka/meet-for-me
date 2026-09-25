@@ -59,6 +59,24 @@ final class GRDBTranscriptRepository: TranscriptRepository {
     /// по кластеру не должно отклоняться собственной же пометкой правки. `is_user_edited`
     /// эта запись не трогает — он остаётся тем, чем был (обычно 1, выставлен заранее
     /// `markSegmentsUserEdited`).
+    /// МЕЕ-437 — единственный столбец, который здесь нужен, `segments.transcript_id`
+    /// (`Migrations.swift`: `TEXT NOT NULL REFERENCES transcripts(id)`); нечитаемый текст
+    /// UUID в этом столбце был бы `dataCorrupted`, но столбец `NOT NULL REFERENCES` — того же
+    /// класса гарантия, что уже даёт схема остальным точечным чтениям этого файла.
+    func transcriptId(forSegmentId segmentId: Int64) async throws -> UUID? {
+        try await withDatabase(id: String(segmentId)) { db in
+            guard let idText = try String.fetchOne(
+                db, sql: "SELECT transcript_id FROM segments WHERE id = ?", arguments: [segmentId]
+            ) else { return nil }
+            guard let transcriptId = UUID(uuidString: idText) else {
+                throw StorageError.dataCorrupted(
+                    entity: StorageEntity.segment, id: String(segmentId), message: "transcript_id не UUID: \(idText)"
+                )
+            }
+            return transcriptId
+        }
+    }
+
     func updateAttribution(_ updates: [SegmentAttributionUpdate]) async throws {
         do {
             try await database.dbPool.write { db in

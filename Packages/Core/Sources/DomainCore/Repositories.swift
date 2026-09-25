@@ -253,6 +253,12 @@ public protocol TranscriptRepository: Sendable {
     func latest(recordingId: UUID) async throws -> TranscriptHeader?
     func transcript(id: UUID) async throws -> Transcript?
     func segments(transcriptId: UUID) async throws -> [SegmentRow]
+    /// МЕЕ-437 (возврат РП, приёмка 10:15 UTC, «мелочи»): единственный способ узнать, какой
+    /// транскрипт содержит сегмент, имея только `segmentId` — `editSegmentText` (C-016 §4)
+    /// принимает только его, но обязан опубликовать `AppEvent.transcriptChanged(transcriptId:)`
+    /// (инв. 15). `nil` — сегмента с таким id нет (не отказ, симметрично прочим точечным
+    /// поисковым методам этого файла).
+    func transcriptId(forSegmentId segmentId: Int64) async throws -> UUID?
     func updateAttribution(_ updates: [SegmentAttributionUpdate]) async throws
     func updateSegmentText(segmentId: Int64, text: String, isUserEdited: Bool) async throws
     /// C-010 v25, инвариант 34 (IR-135, MEE-421): ставит только `is_user_edited = 1` —

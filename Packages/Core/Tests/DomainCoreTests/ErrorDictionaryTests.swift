@@ -22,13 +22,14 @@
 //  `AppFacadeImpl.swift` уже даёт для `notImplemented`-заглушек.
 //
 //  К27 (табличный тест словаря): полные таблицы StorageError (6 случаев) и PermissionsError
-//  (2 случая) — ниже. CaptureError (11) и AttributionError (6) — уже полные таблицы в файлах,
-//  названных выше. `app.internalError` (заглушка на непойманный контрактом тип ошибки,
-//  `wrapUnexpected`) — БЕЗ таблицы: ни один существующий фейк порта в зоне этой задачи не
-//  даёт впрыснуть в живой вызывающий путь ошибку типа ВНЕ `StorageError`/`PermissionsError`/
-//  `CaptureError`/`SessionError`/`AttributionError` (все фейки типизированы на свой домен
-//  ошибок) — расширять `DomainTestKit` под это отдельной инъекцией родового `Error` здесь не
-//  заявлено (вне зоны, отдельная задача).
+//  (2 случая) — ниже, обе с колонкой `permissionKind` (возврат РП, приёмка 10:15 UTC,
+//  «мелочи» — у обоих источников он всегда `nil`, что сама таблица и проверяет, а не только
+//  документирует комментарием). CaptureError (11) и AttributionError (6) — уже полные
+//  таблицы в файлах, названных выше. `app.internalError` (заглушка на непойманный
+//  контрактом тип ошибки, `wrapUnexpected`) — уже покрыт `AppFacadeImplReadModelsTests+
+//  Return.test_inv19_unexpectedPortErrorIsWrappedAsAppInternalError` (через рукописную
+//  обёртку `ThrowingOpenSettingsPermissionsPort`, не типизированный фейк) — не дублируется
+//  здесь.
 //
 //  `PermissionsError.loginItemRegistrationFailed` — единственный случай источника внутри
 //  ДОСТИЖИМЫХ четырёх, у которого сегодня НЕТ реалистичного вызывающего пути: ни один метод
@@ -113,7 +114,9 @@ final class ErrorDictionaryTests: XCTestCase {
         }
     }
 
-    /// К27: все шесть случаев `StorageError` — код строится правилом `storage.<имя case>`.
+    /// К27: все шесть случаев `StorageError` — код строится правилом `storage.<имя case>`;
+    /// колонка `permissionKind` (возврат РП, «мелочи») — источник, не про права вовсе,
+    /// `nil` на каждой строке.
     func test_k27_storageError_codePerCase_viaForgetVoiceProfile() async throws {
         for row in storageErrorRows {
             let fixture = makeFixture()
@@ -125,6 +128,7 @@ final class ErrorDictionaryTests: XCTestCase {
                 XCTFail("\(row.error): ожидался отказ")
             } catch AppFacadeError.underlying(let view) {
                 XCTAssertEqual(view.code, row.expectedCode, "\(row.error)")
+                XCTAssertNil(view.permissionKind, "\(row.error)")
             }
         }
     }
@@ -167,7 +171,8 @@ final class ErrorDictionaryTests: XCTestCase {
         }
     }
 
-    /// К27: оба случая `PermissionsError`.
+    /// К27: оба случая `PermissionsError`; колонка `permissionKind` — `nil` на обеих строках
+    /// (сам `wrap(_:PermissionsError)` не заполняет его ни для одного из двух случаев).
     func test_k27_permissionsError_codePerCase_viaOpenPermissionSettings() async throws {
         for row in permissionsErrorRows {
             let fixture = makeFixture()
@@ -178,45 +183,23 @@ final class ErrorDictionaryTests: XCTestCase {
                 XCTFail("\(row.error): ожидался отказ")
             } catch AppFacadeError.underlying(let view) {
                 XCTAssertEqual(view.code, row.expectedCode, "\(row.error)")
+                XCTAssertNil(view.permissionKind, "\(row.error)")
             }
         }
     }
 
-    // MARK: - К29 (инв. 24): один и тот же код, синхронный и асинхронный путь
+    // MARK: - К29 (инв. 24): один и тот же код, синхронный и асинхронный путь — НЕ ПОКРЫТ
 
-    /// Синхронный путь — `openPermissionSettings` бросает, поймано как
-    /// `AppFacadeError.underlying`. Асинхронный — та же строка кода, собранная НЕЗАВИСИМО
-    /// (буквальным литералом §3.1, не переиспользованием значения из синхронного улова —
-    /// `wrap(_:PermissionsError)` `private` своему файлу, вызвать напрямую тестовая сторона
-    /// не может), протолкнута как `AppEvent.failure(AppErrorView)` тем же `publish(_:)`, что
-    /// использует любой производитель события внутри актора. Подписка — ДО обоих действий
-    /// (идиома МЕЕ-377/378).
-    func test_k29_sameCode_syncThrowAndAsyncFailureEvent() async throws {
-        let fixture = makeFixture()
-        let stream = fixture.facade.events()
-        fixture.permissions.failOpenSettings(with: .settingsPaneUnavailable(kind: .microphone), for: .microphone)
-
-        var syncCode: String?
-        do {
-            try await fixture.facade.openPermissionSettings(.microphone)
-            XCTFail("ожидался отказ")
-        } catch AppFacadeError.underlying(let view) {
-            syncCode = view.code
-        }
-        XCTAssertEqual(syncCode, "permissions.settingsPaneUnavailable")
-
-        let asyncView = AppErrorView(
-            code: "permissions.settingsPaneUnavailable", message: "асинхронная доставка того же отказа",
-            recoverySuggestion: nil, permissionKind: nil
-        )
-        await fixture.facade.publish(.failure(asyncView))
-
-        let events = await collectEvents(stream, count: 1)
-        guard case .failure(let deliveredView) = events.first else {
-            return XCTFail("ожидался .failure, получено \(String(describing: events.first))")
-        }
-        XCTAssertEqual(deliveredView.code, syncCode, "по логам нельзя определить путь доставки — код обязан совпасть")
-    }
+    // Возврат РП (приёмка 10:15 UTC, находка 3): первая версия этого файла публиковала
+    // `.failure(AppErrorView)` САМА (тестовая сторона строила `AppErrorView` литералом и
+    // сама же вызывала `publish(_:)`) и сравнивала код с самой собой — тавтология, а не
+    // проверка производственного кода. Честная причина отсутствия теста: сегодня НИ ОДИН
+    // производитель `.failure` не существует нигде в domain-core (сверено `grep`'ом по
+    // `.failure(...)` в `Packages/Core/Sources/DomainCore` — ноль совпадений, кроме объявления
+    // самого случая в `AppFacade.swift`) — асинхронный путь инв. 24 в принципе не с чем
+    // сравнивать, пока такого производителя не заведёт своя задача (естественные кандидаты —
+    // фоновая обработка ошибок job-очереди/захвата, группы Н/Р, вне зоны этой задачи).
+    // К29 остаётся непокрытым по этой причине, а не по недосмотру.
 
     // MARK: - К30 (инв. 23): permissionKind — признак, не перечень
 

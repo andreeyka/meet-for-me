@@ -102,14 +102,19 @@ extension AppFacadeImpl {
     /// с обеих сторон.
     public func updateSettings(_ settings: AppSettings) async throws {
         // К32(г)/К33 шестой вектор (МЕЕ-437, группа К/Л, инв. 26): снимок прав ОДИН и тот же
-        // для «было»/«стало» — меняются только настройки, не права. Читается ДО записи;
-        // отказ здесь (строка настроек повреждена) — тот же класс отказа, что и внутри
-        // самой записи, поэтому уходит тем же путём (catch ниже), не отдельным throw.
+        // для «было»/«стало» — меняются только настройки, не права. Читается ДО записи.
         let permissionSnapshot = await permissionsPort.snapshot()
+        // Возврат РП (приёмка 10:15 UTC, находка 1): раньше это был `try await self.settings()`
+        // внутри `do` — единственный путь ПОЧИНИТЬ нечитаемую строку настроек (§2.1,
+        // `settingsUnreadable`) сам отказывал бы здесь, до единственной попытки записи,
+        // которая эту строку и чинит. `try?`: `nil` — строка не читается — трактуется как
+        // «готовность точно изменилась» (сравнивать честно не с чем, и лишняя публикация
+        // `statusChanged` дешевле молчаливого «не изменилась» на самом деле изменившемся
+        // значении).
+        let previousReadiness = (try? await self.settings())
+            .map { permissionsReady(snapshot: permissionSnapshot, settings: $0) }
         var written: [(key: String, previous: Data?)] = []
-        var previousReadiness: PermissionsReadiness = .notReady
         do {
-            previousReadiness = permissionsReady(snapshot: permissionSnapshot, settings: try await self.settings())
             for (key, data) in try Self.settingsEntries(for: settings) {
                 let previous: Data?
                 do {
@@ -140,8 +145,17 @@ extension AppFacadeImpl {
         // прав (`recordingPolicy` → `notifications`, К31) — снимок прав тот же, что читался
         // выше, меняется только `settings`, поэтому сравнение честно показывает вклад именно
         // этого вызова, а не гонку с параллельным изменением самих прав.
+        //
+        // Возврат РП (приёмка 10:15 UTC, «мелочи»): два ПАРАЛЛЕЛЬНЫХ вызова `updateSettings`
+        // читают один и тот же `permissionSnapshot`/«было» независимо — возможна лишняя
+        // (оба увидели одно и то же «было», хотя один уже успел его сменить) или пропущенная
+        // (оба увидели одно «было», а честное «стало» третьего наблюдателя лежит МЕЖДУ ними)
+        // публикация `statusChanged`. Контракт не даёт `SettingsRepository` транзакций шире
+        // одного `value(forKey:)`/`setValue(_:forKey:)` (докстринг файла выше) — та же
+        // гонка уже допущена самим `written`-откатом; здесь она лишь проявляется как
+        // избыточное или запоздалое событие, не как повреждённые данные.
         let newReadiness = permissionsReady(snapshot: permissionSnapshot, settings: settings)
-        if newReadiness != previousReadiness {
+        if previousReadiness == nil || newReadiness != previousReadiness {
             publish(.statusChanged(await status()))
         }
     }

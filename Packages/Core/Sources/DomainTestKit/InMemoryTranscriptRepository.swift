@@ -35,6 +35,7 @@ public enum TranscriptRepositoryMethod: String, Sendable, CaseIterable {
     case latest
     case transcriptById
     case segments
+    case transcriptId
     case updateAttribution
     case updateSegmentText
     case markSegmentsUserEdited
@@ -208,6 +209,17 @@ public final class InMemoryTranscriptRepository: TranscriptRepository, @unchecke
             throw error
         }
         return locked { rowsByTranscript[transcriptId] ?? [] }
+    }
+
+    /// МЕЕ-437 — `SegmentRow.transcriptId` уже несёт то, что ищется; перебор держащихся в
+    /// памяти строк — тот же порядок затрат, что у настоящего хранилища (индекс по `id`),
+    /// просто без индекса, который фейку не нужен.
+    public func transcriptId(forSegmentId segmentId: Int64) async throws -> UUID? {
+        log.record(port: Self.portName, method: "transcriptId(forSegmentId:)", arguments: [String(segmentId)])
+        if let error = failureIfAny(.transcriptId, id: String(segmentId)) {
+            throw error
+        }
+        return locked { rowsByTranscript.values.flatMap { $0 }.first { $0.id == segmentId }?.transcriptId }
     }
 }
 

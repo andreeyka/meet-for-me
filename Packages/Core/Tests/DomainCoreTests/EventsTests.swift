@@ -10,7 +10,8 @@
 //
 //  ШЕСТЬ ВЕКТОРОВ К33, ДОСТИЖИМЫХ В ЗОНЕ ЭТОЙ ЗАДАЧИ (`AppFacadeImpl*`, группы М–Х не
 //  трогать) — ЧЕТЫРЕ ИЗ ШЕСТИ:
-//   1. startRecording → statusChanged.                    — test_k33_startRecording_publishesStatusChanged
+//   1. startRecording → statusChanged (и симметрично stopRecording).
+//      — test_k33_startRecording_publishesStatusChanged, test_k33_stopRecording_publishesStatusChanged
 //   2. updateSettings (поле вне permissionsReady) → settingsChanged, БЕЗ statusChanged.
 //      — test_k33_updateSettings_unrelatedField_publishesOnlySettingsChanged
 //   3. clearSpeaker → transcriptChanged(transcriptId:).    — test_k33_clearSpeaker_publishesTranscriptChanged
@@ -22,8 +23,16 @@
 //  DEV-2 после MEE-431/MEE-420) — не публикуют ничего, потому что не существуют телом.
 //  (5) setConnectorEnabled → meetingsChanged — метод группы О, тот же статус; ЗАМЕНА,
 //  дословно допустимая перечнем («или успешная syncCalendars») —
-//  test_k33_syncCalendars_publishesMeetingsChanged — уже реализованный, в зоне этой задачи
-//  метод, публикующий то же событие.
+//  test_k33_syncCalendars_publishesMeetingsChangedAndStatusChanged — уже реализованный, в
+//  зоне этой задачи метод, публикующий то же событие.
+//
+//  Возврат РП (приёмка 10:15 UTC, находка 4): «Поведение» требует `.statusChanged` везде,
+//  где меняется статус, — не только у команд фасада. Смена права ДРУГИМ путём (системные
+//  настройки, мимо любого вызова фасада) тоже меняет `permissionsReady` — фасад подписан на
+//  `PermissionsPort.changes()` (см. `AppFacadeImpl+PermissionsObservation.swift`) и публикует
+//  `.permissionsChanged` + `.statusChanged`, если готовность действительно поменялась —
+//  test_permissionsPortChange_publishesPermissionsChangedAndStatusChangedWhenReadinessDiffers,
+//  test_permissionsPortChange_readinessUnaffected_publishesOnlyPermissionsChanged.
 
 import XCTest
 @testable import DomainCore
@@ -106,22 +115,27 @@ func collectEvents(_ stream: AsyncStream<AppEvent>, count: Int, timeoutSeconds: 
 
 final class EventsTests: XCTestCase {
 
-    private struct Fixture {
+    /// Не `private` — companion-файл `EventsTests+PermissionsObservation.swift` (тот же
+    /// таргет, разведён по объёму, не по смыслу) пользуется той же фикстурой, тем же приёмом,
+    /// что `SpeakerAssignmentTests`/`SpeakerAssignmentTests+DeltaShch.swift`.
+    struct Fixture {
         let facade: AppFacadeImpl
         let repositories: InMemoryRepositories
         let attribution: FakeAttributionPort
+        let permissions: FakePermissionsPort
     }
 
-    private func makeFixture() -> Fixture {
+    func makeFixture() -> Fixture {
         let repositories = InMemoryRepositories()
         let attribution = FakeAttributionPort()
+        let permissions = FakePermissionsPort(startingStatus: .granted, startingOutcome: .granted, checkedAt: Date())
         let facade = AppFacadeImpl(
             meetings: repositories.meetings,
             recordings: repositories.recordings,
             transcripts: repositories.transcripts,
             persons: repositories.persons,
             speakerProfiles: repositories.speakerProfiles,
-            permissions: FakePermissionsPort(startingStatus: .granted, startingOutcome: .granted, checkedAt: Date()),
+            permissions: permissions,
             modelCatalog: FakeModelCatalogPort(),
             calendar: FakeCalendarPort(),
             sessionCoordinator: NoOpSessionCoordinator(),
@@ -129,7 +143,7 @@ final class EventsTests: XCTestCase {
             settings: repositories.settings,
             clock: { Date() }
         )
-        return Fixture(facade: facade, repositories: repositories, attribution: attribution)
+        return Fixture(facade: facade, repositories: repositories, attribution: attribution, permissions: permissions)
     }
 
     // MARK: - К33, вектор 1: startRecording → statusChanged
@@ -206,24 +220,34 @@ final class EventsTests: XCTestCase {
 
     // MARK: - К33, заместитель вектора 5 (`setConnectorEnabled` вне зоны): syncCalendars → meetingsChanged
 
-    func test_k33_syncCalendars_publishesMeetingsChanged() async {
+    /// Возврат РП (приёмка 10:15 UTC, находка 4): `syncCalendars` теперь публикует ДВА
+    /// события одним вызовом — `.meetingsChanged` (список встреч) и `.statusChanged`
+    /// (`AppStatus.upcoming` строится из тех же встреч) — в этом порядке.
+    func test_k33_syncCalendars_publishesMeetingsChangedAndStatusChanged() async {
         let fixture = makeFixture()
         let stream = fixture.facade.events()
         _ = await fixture.facade.syncCalendars()
 
-        let events = await collectEvents(stream, count: 1)
-        XCTAssertEqual(events.count, 1)
+        let events = await collectEvents(stream, count: 2)
+        XCTAssertEqual(events.count, 2, "\(events)")
         guard case .meetingsChanged = events.first else {
-            return XCTFail("ожидался .meetingsChanged, получено \(String(describing: events.first))")
+            return XCTFail("первым ожидался .meetingsChanged, получено \(String(describing: events.first))")
+        }
+        guard case .statusChanged = events.last else {
+            return XCTFail("вторым ожидался .statusChanged, получено \(String(describing: events.last))")
         }
     }
 
     // MARK: - К33, вектор 6 (инв. 26, возврат РП п.7): settingsChanged И statusChanged одним вызовом
 
-    /// Значение самой готовности (`.notReady`/`.ready`) — предмет `PermissionsReadyTests.
-    /// test_k32_vectorD_...`; здесь — что ОБА события уходят одним вызовом `updateSettings`,
-    /// в этом порядке (settingsChanged публикуется первым по тексту метода, до сравнения
-    /// готовности — см. `AppFacadeImpl+Settings.swift`).
+    /// Возврат РП (приёмка 10:15 UTC, находка 2): значение ВНУТРИ `.statusChanged` тоже
+    /// проверяется здесь (`.ready`, а не только сам факт «пришёл случай .statusChanged») —
+    /// раньше проверялся только вид события, и подделка «`.statusChanged` всегда несёт
+    /// `.notReady`» проходила бы. Детальные ступени (`.notReady`/`.unknownUntilFirstUse`/
+    /// `.ready`) самого расчёта — предмет `PermissionsReadyTests.test_k32_vectorD_...`; здесь
+    /// — что ОБА события уходят одним вызовом `updateSettings`, в этом порядке (settingsChanged
+    /// публикуется первым по тексту метода, до сравнения готовности — см.
+    /// `AppFacadeImpl+Settings.swift`), и что значение внутри второго отражает переход.
     func test_k33_updateSettings_policyChangingReadiness_publishesBothInOrder() async throws {
         // Своя фикстура, не `makeFixture()`: readiness-сравнение (инв. 26) требует явно
         // заданного блокирующего состояния `.notifications`, а не общего `startingStatus:
@@ -261,21 +285,29 @@ final class EventsTests: XCTestCase {
         guard case .settingsChanged = events.first else {
             return XCTFail("первым ожидался .settingsChanged, получено \(String(describing: events.first))")
         }
-        guard case .statusChanged = events.last else {
+        guard case .statusChanged(let status) = events.last else {
             return XCTFail("вторым ожидался .statusChanged, получено \(String(describing: events.last))")
         }
+        XCTAssertEqual(
+            status.permissionsReady, .ready, "переход .notReady → .ready — .auto больше не требует notifications"
+        )
     }
 
     // MARK: - К34 (инв. 16): два независимых подписчика, подписка после уже произошедшего события
 
-    func test_k34_twoSubscribers_missEventBeforeSubscription_thenSeeSameSequence() async {
+    /// Возврат РП (приёмка 10:15 UTC, «мелочи»): событие ДО подписки и событие ПОСЛЕ —
+    /// разных видов (`.meetingsChanged`/`.statusChanged`, не дважды одно и то же) — иначе
+    /// подделка «новому подписчику повторяется последнее событие» тоже давала бы
+    /// `.meetingsChanged` и проходила бы тест незамеченной.
+    func test_k34_twoSubscribers_missEventBeforeSubscription_thenSeeSameSequence() async throws {
         let fixture = makeFixture()
-        // Событие ДО подписки — ни одному будущему подписчику не достанется (не буферизуется).
+        // До подписки — ни одному будущему подписчику не достанется (не буферизуется).
+        // syncCalendars публикует .meetingsChanged + .statusChanged (оба вне зоны видимости).
         _ = await fixture.facade.syncCalendars()
 
         let streamA = fixture.facade.events()
         let streamB = fixture.facade.events()
-        _ = await fixture.facade.syncCalendars()
+        _ = try await fixture.facade.startRecording(meetingId: nil)
 
         async let eventsA = collectEvents(streamA, count: 1)
         async let eventsB = collectEvents(streamB, count: 1)
@@ -283,8 +315,11 @@ final class EventsTests: XCTestCase {
 
         XCTAssertEqual(resultA.count, 1, "подписчик A: \(resultA)")
         XCTAssertEqual(resultB.count, 1, "подписчик B: \(resultB)")
-        guard case .meetingsChanged = resultA.first, case .meetingsChanged = resultB.first else {
-            return XCTFail("оба подписчика ожидали ровно .meetingsChanged: A=\(resultA) B=\(resultB)")
+        guard case .statusChanged = resultA.first, case .statusChanged = resultB.first else {
+            return XCTFail(
+                "оба подписчика ожидали ровно .statusChanged (не .meetingsChanged до подписки): " +
+                "A=\(resultA) B=\(resultB)"
+            )
         }
     }
 }
