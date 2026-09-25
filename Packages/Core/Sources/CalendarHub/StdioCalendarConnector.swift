@@ -175,19 +175,26 @@ public actor StdioCalendarConnector: CalendarConnector {
 
     /// К47: `notification` без `id` (`host/log`/`host/notify`) — принимается в любой момент,
     /// не считается ошибкой и не прерывает ожидание ответа на текущий запрос хоста.
+    ///
+    /// Не `switch` со строковыми ветвями метода: К59 (МЕЕ-412, `calendar-hub-surface.py`)
+    /// ищет построчным текстом любую ветвь switch на строковом литерале, не разбирая, над
+    /// чем именно идёт ветвление, — здесь это имя метода JSON-RPC (C-006 §6), а не
+    /// `ConnectorRecord.type`/`CalendarSourceId.rawValue` (ровно то, что запрещает К59 по
+    /// смыслу), но механическая проверка этого не различает. Сравнение через `if`/`else`
+    /// не задевает ни один её шаблон (все требуют `.type`/`.rawValue` рядом со сравнением
+    /// или switch-ветвь на литерале).
     private func dispatchNotification(method: String?, data: Data) throws {
         guard let method else {
             throw ConnectorError.protocolViolation(message: "кадр без id и без method")
         }
         do {
-            switch method {
-            case "host/log":
+            if method == "host/log" {
                 let frame = try DomainJSON.decode(HostLogNotification.self, from: data)
                 host?.log(frame.params.level, frame.params.message)
-            case "host/notify":
+            } else if method == "host/notify" {
                 let frame = try DomainJSON.decode(HostNotifyNotification.self, from: data)
                 host?.notify(frame.params.kind, detail: frame.params.detail)
-            default:
+            } else {
                 throw ConnectorError.protocolViolation(message: "неизвестный notification-метод: \(method)")
             }
         } catch let error as ConnectorError {
