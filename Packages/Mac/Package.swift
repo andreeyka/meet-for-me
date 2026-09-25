@@ -20,6 +20,7 @@ let package = Package(
         .library(name: "Detector", targets: ["Detector"]),
         .library(name: "CalendarEventKit", targets: ["CalendarEventKit"]),
         .library(name: "EngineXPCClient", targets: ["EngineXPCClient"]),
+        .library(name: "EngineXPCService", targets: ["EngineXPCService"]),
         .library(name: "SecretStoreKeychain", targets: ["SecretStoreKeychain"]),
     ],
     dependencies: [
@@ -53,6 +54,25 @@ let package = Package(
         ),
         .target(
             name: "EngineXPCClient",
+            dependencies: [
+                .product(name: "DomainCore", package: "Core"),
+                .product(name: "EngineKit", package: "Core"),
+            ]
+        ),
+        // MEE-438: сторона сервиса Services/TranscriptionEngineXPC — диспетчерская логика
+        // (`EngineXPCRequestHandler`) вынесена сюда библиотечным таргетом ради SwiftPM-
+        // тестируемости (правка этого файла разрешена РП заранее, раскрыта в PR). Ни
+        // `NSObject`, ни `NSXPCConnection`, ни `@objc` здесь нет намеренно — заголовок
+        // `EngineXPCRequestHandler.swift` называет довод (символьный граф CI держит для
+        // таргетов без `allowed-types/<Target>.json` барьер по модулю объявления, а
+        // `<C/ObjC>` в него не входит; заводить такой файл эта задача не разрешала). Оттого
+        // и не зависит от `EngineXPCClient` — обвязка вокруг `EngineXPCServiceProtocol`/
+        // `EngineXPCClientProtocol` (двоичные сигнатуры провода, MEE-431) заведена отдельно
+        // в каждом потребителе (`Services/TranscriptionEngineXPC/Sources/
+        // ServiceConnectionDelegate.swift` — прод; `EngineXPCServiceTests/TestSupport.swift` —
+        // тесты), не в этом таргете.
+        .target(
+            name: "EngineXPCService",
             dependencies: [
                 .product(name: "DomainCore", package: "Core"),
                 .product(name: "EngineKit", package: "Core"),
@@ -93,6 +113,15 @@ let package = Package(
         .testTarget(
             name: "SecretStoreKeychainTests",
             dependencies: ["SecretStoreKeychain", .product(name: "CalendarHub", package: "Core")]
+        ),
+        .testTarget(
+            name: "EngineXPCServiceTests",
+            dependencies: [
+                "EngineXPCService",
+                "EngineXPCClient",
+                .product(name: "DomainTestKit", package: "Core"),
+                .product(name: "EngineKit", package: "Core"),
+            ]
         ),
     ]
 )
