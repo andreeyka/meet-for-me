@@ -79,6 +79,21 @@ final class ProcessRPCTransportTests: XCTestCase {
         )
     }
 
+    /// `extractLine()` использует падающий `String(bytes:encoding:)`, не лениво-заменяющий
+    /// `String(decoding:as:)` (возврат РП, SwiftLint `optional_data_string_conversion`) —
+    /// невалидный UTF-8 обязан выйти ошибкой транспорта, не тихой заменой байт на U+FFFD.
+    func test_invalidUTF8LineSurfacesAsTransportErrorNotSilentCorruption() async throws {
+        let transport = try ProcessRPCTransport(
+            executablePath: "/usr/bin/env", arguments: ["sh", "-c", "printf '\\xff\\xfe\\n'"]
+        )
+        do {
+            _ = try await transport.receive()
+            XCTFail("ожидалась транспортная ошибка на не-UTF8 кадре, не тихая порча байт")
+        } catch is ProcessRPCTransportError {
+            // ожидаемо
+        }
+    }
+
     /// МЕЕ-417: «запуск процесса плагина из манифеста» — `executable`/`args` манифеста, не
     /// голый путь напрямую, доходят до реального `Process`.
     func test_manifestBasedInitLaunchesExecutableAndArgsFromManifest() async throws {

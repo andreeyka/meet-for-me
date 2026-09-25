@@ -116,7 +116,7 @@ public actor ProcessRPCTransport: RPCTransport {
     }
 
     public func receive() async throws -> String {
-        if let line = extractLine() { return line }
+        if let line = try extractLine() { return line }
         if let terminated { throw terminated }
         return try await withCheckedThrowingContinuation { continuation in
             pendingReceive = continuation
@@ -143,10 +143,17 @@ public actor ProcessRPCTransport: RPCTransport {
 
     // MARK: - Внутреннее
 
-    private func extractLine() -> String? {
+    /// `String(bytes:encoding:)` — падающий инициализатор (SwiftLint
+    /// `optional_data_string_conversion`), не `String(decoding:as:)`: тот молча заменяет
+    /// невалидный UTF-8 символом-заменителем вместо отказа — «кадр не в UTF-8» стало бы
+    /// неотличимо от кадра, которого никогда не присылали.
+    private func extractLine() throws -> String? {
         guard let newlineIndex = buffer.firstIndex(of: 0x0A) else { return nil }
-        let line = String(decoding: buffer[..<newlineIndex], as: UTF8.self)
+        let lineBytes = buffer[..<newlineIndex]
         buffer.removeSubrange(buffer.startIndex...newlineIndex)
+        guard let line = String(bytes: lineBytes, encoding: .utf8) else {
+            throw ProcessRPCTransportError(description: "кадр не в UTF-8")
+        }
         return line
     }
 
@@ -155,10 +162,24 @@ public actor ProcessRPCTransport: RPCTransport {
             failPendingReceive(ProcessRPCTransportError(description: "плагин закрыл stdout"))
             return
         }
+        // `data.contains(0x0A)` — на самом ПРИШЕДШЕМ куске, до `append`, не на всём `buffer`
+        // (замер CI, macOS: 69.7с на одном тесте К48-подобного размера, 9 МиБ через `Pipe` —
+        // `FileHandle.readabilityHandler` там отдаёт кадр мелкими кусками по нескольку КиБ, и
+        // `extractLine()`, зовись он на КАЖДЫЙ такой кусок, пересканировал бы уже проверенное
+        // начало `buffer` заново — O(n·кусков), на практике квадратично от размера кадра.
+        // Перевод строки — однобайтовый разделитель, не может «размазаться» по границе двух
+        // кусков, поэтому его наличие в самом пришедшем куске — точный признак «искать в
+        // buffer есть смысл», без ложных пропусков.
+        let mayContainDelimiter = data.contains(0x0A)
         buffer.append(data)
-        guard let line = extractLine(), let continuation = pendingReceive else { return }
-        pendingReceive = nil
-        continuation.resume(returning: line)
+        guard mayContainDelimiter else { return }
+        do {
+            guard let line = try extractLine(), let continuation = pendingReceive else { return }
+            pendingReceive = nil
+            continuation.resume(returning: line)
+        } catch {
+            failPendingReceive(error)
+        }
     }
 
     private func handleTermination(status: Int32) {
