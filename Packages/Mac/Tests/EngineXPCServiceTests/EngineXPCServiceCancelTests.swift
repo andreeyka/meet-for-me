@@ -114,4 +114,54 @@ final class EngineXPCServiceCancelTests: XCTestCase {
             XCTAssertNil(cancelError)
         }
     }
+
+    /// Желательное из возврата РП (MEE-438, 12:15 UTC): три параллельных задачи, разные `jobId`
+    /// на ОДНОМ соединении/движке — `cancel` средней не задевает две другие. Доказывает, что
+    /// job-реестр (`EngineXPCRequestHandler.jobs`) изолирует по `jobId`, а не по «текущей
+    /// единственной задаче» — тот же класс гонки, что уже правился в самом реестре (регистрация
+    /// под общим `lock`, возврат РП 11:50 UTC), только теперь снаружи, наблюдаемо по трём
+    /// настоящим круговым обменам одновременно.
+    func test_concurrentJobsAreIsolatedByJobIdCancellingOneLeavesOthersUnaffected() async {
+        await withDeadline(10) {
+            let fixture = RealServiceFixture()
+            fixture.transcription.simulatedWorkNanoseconds = 1_000_000_000   // 1с — время отменить среднюю
+            let (proxy, connection) = fixture.rawServiceProxy()
+            defer { connection.invalidate() }
+
+            var requests: [(jobId: EngineJobId, data: Data)] = []
+            for _ in 0..<3 {
+                guard let (jobId, request) = try? Self.makeTranscribeRequest(),
+                      let data = try? EngineWire.encode(request)
+                else { return XCTFail("не удалось построить запрос") }
+                requests.append((jobId, data))
+            }
+
+            async let reply0 = send(proxy, requests[0].data)
+            async let reply1 = send(proxy, requests[1].data)
+            async let reply2 = send(proxy, requests[2].data)
+            // Даём всем трём дойти до движка (см. довод выше про started-прогресс) прежде, чем
+            // отменять только среднюю.
+            try? await Task.sleep(nanoseconds: 100_000_000)
+            guard let cancelData = try? EngineWire.encode(EngineRequest.cancel(requests[1].jobId)) else {
+                return XCTFail("не удалось закодировать cancel")
+            }
+            _ = await send(proxy, cancelData)
+
+            let (data0, error0) = await reply0
+            let (data1, error1) = await reply1
+            let (data2, error2) = await reply2
+            XCTAssertNil(error0); XCTAssertNil(error1); XCTAssertNil(error2)
+            guard let data0, let decoded0 = try? EngineWire.decode(EngineReply.self, from: data0),
+                  let data1, let decoded1 = try? EngineWire.decode(EngineReply.self, from: data1),
+                  let data2, let decoded2 = try? EngineWire.decode(EngineReply.self, from: data2)
+            else { return XCTFail("ответы не разобраны") }
+
+            XCTAssertEqual(decoded1, .cancelled(requests[1].jobId), "средняя задача обязана быть отменена")
+            guard case .transcript(let jobId0, _) = decoded0, case .transcript(let jobId2, _) = decoded2 else {
+                return XCTFail("крайние задачи обязаны завершиться транскриптом, получено \(decoded0), \(decoded2)")
+            }
+            XCTAssertEqual(jobId0, requests[0].jobId)
+            XCTAssertEqual(jobId2, requests[2].jobId)
+        }
+    }
 }

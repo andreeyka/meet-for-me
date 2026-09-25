@@ -212,12 +212,59 @@ final class TranscriptionProgressCollector: @unchecked Sendable {
     }
 }
 
+/// Резюмирует continuation ровно один раз — второй вызов молча игнорируется (тот же приём,
+/// что `DeadlineOutcome` выше, обобщённый по значению — здесь несёт результат, не только флаг).
+private final class RaceOnce<Value>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<Value, Never>?
+
+    init(_ continuation: CheckedContinuation<Value, Never>) {
+        self.continuation = continuation
+    }
+
+    func resume(_ value: Value) {
+        lock.lock()
+        let pending = continuation
+        continuation = nil
+        lock.unlock()
+        pending?.resume(returning: value)
+    }
+}
+
 /// `proxy.send(_:reply:)` как `async` — единственный способ ждать реплай-замыкание без
 /// вложенных `XCTestExpectation` на каждый вызов.
-func send(_ proxy: EngineXPCServiceProtocol, _ data: Data) async -> (Data?, NSError?) {
-    await withCheckedContinuation { continuation in
-        proxy.send(data) { replyData, error in
-            continuation.resume(returning: (replyData, error as NSError?))
+///
+/// Возврат РП по MEE-438 (12:15 UTC): ограничен `timeoutSeconds` (по умолчанию 5с) — тот же
+/// довод, что у `withDeadline`, но здесь встроен В САМ хелпер, а не в каждое место вызова:
+/// `remoteObjectProxyWithErrorHandler`'s `errorHandler` (`rawServiceProxy`) привязан к прокси
+/// на момент его создания, до того как существует конкретный вызов `send`, и не может напрямую
+/// резолвить continuation ЭТОГО вызова — гонка с отдельным сторожевым `Task.sleep` (`RaceOnce`,
+/// тот же приём, что `withDeadline`) защищает КАЖДЫЙ вызов `send`, не только обёрнутые
+/// `withDeadline` явно (`EngineXPCServiceCancelTests`), включая простые запрос-ответы
+/// `EngineXPCServiceFaultTests`, где гонка отмены не грозит, но отказавшее соединение —
+/// теоретически может.
+func send(
+    _ proxy: EngineXPCServiceProtocol, _ data: Data, timeoutSeconds: TimeInterval = 5
+) async -> (Data?, NSError?) {
+    let replyTask = Task<(Data?, NSError?), Never> {
+        await withCheckedContinuation { continuation in
+            proxy.send(data) { replyData, error in
+                continuation.resume(returning: (replyData, error as NSError?))
+            }
+        }
+    }
+    defer { replyTask.cancel() }
+    return await withCheckedContinuation { (continuation: CheckedContinuation<(Data?, NSError?), Never>) in
+        let once = RaceOnce(continuation)
+        Task {
+            once.resume(await replyTask.value)
+        }
+        Task {
+            try? await Task.sleep(nanoseconds: UInt64(timeoutSeconds * 1_000_000_000))
+            once.resume((nil, NSError(
+                domain: "EngineXPCServiceTests.send", code: -1,
+                userInfo: [NSLocalizedDescriptionKey: "send() не получил ответ за \(timeoutSeconds) с"]
+            )))
         }
     }
 }

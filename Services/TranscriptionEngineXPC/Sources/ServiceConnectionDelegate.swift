@@ -6,6 +6,21 @@
 //  (символьный граф CI `Packages/Core`/`Packages/Mac`; этот каталог им не покрыт).
 //
 //  Модуль: engine-xpc · Владелец: DEV-2 · Слой: движок
+//
+//  РАСКРЫТИЕ по возврату РП (MEE-438, 12:15 UTC): этот файл не покрыт автоматическим тестом —
+//  `swift build`/`swift test` не видят `Services/TranscriptionEngineXPC` вовсе (тот же довод,
+//  что и в заголовке `EngineXPCRequestHandler.swift`, только с обратным знаком: то, что спасает
+//  от символьного графа, здесь же закрывает путь к SwiftPM-тестам). Его почти буквальная копия
+//  (`TestServiceConnectionDelegate`/`TestExportedRequestHandler`,
+//  `Packages/Mac/Tests/EngineXPCServiceTests/TestSupport.swift`) тестируется целиком —
+//  но проверяет СЕБЯ, не этот файл. Вынести общий код в `EngineXPCService` нельзя тем же
+//  доводом, каким он оттуда изгнан (`NSObject`/`@objc` там неразрешённо публичны). Правильность
+//  этого файла опирается на его буквальное совпадение с тестовой копией — при правке одного
+//  обязательна такая же правка другого, вручную; альтернатива (файл `allowed-types/
+//  EngineXPCService.json`, тестируемый общий тип внутри пакета) не разрешена этой задачей.
+//  «Каркас app-ui» (XcodeGen + xcodebuild) в CI компилирует этот файл и доказывает, что он хотя
+//  бы СОБИРАЕТСЯ вместе с настоящим `TranscriptionEngine.xpc` — не то же самое, что тест
+//  поведения.
 
 import EngineXPCClient
 import EngineXPCService

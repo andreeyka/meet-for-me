@@ -124,9 +124,22 @@ public final class EngineXPCRequestHandler: @unchecked Sendable {
             cancelIfLive(jobId)
             reply(nil, nil)
         case .ping:
-            reply(try? EngineWire.encode(EngineReply.pong(
-                serviceVersion: serviceVersion, protocolVersion: EngineWire.protocolVersion
-            )), nil)
+            // Возврат РП по MEE-438 (12:15 UTC): раньше `try?` тихо превращал отказ кодирования
+            // `.pong` в `reply(nil, nil)` — то самое нарушение протокола ответа («ни данные, ни
+            // ошибка»), которое клиент (`complete(jobId:replyData:error:)`) обязан ловить как
+            // отказ, а не как молчаливую пустоту. `.ping` не несёт `EngineJobId` — обернуть в
+            // `EngineReply.failed(jobId, …)` здесь буквально нечем, поэтому фолбэк тот же, что у
+            // decode-отказов: транспортный `NSError`, не молчание.
+            do {
+                let data = try EngineWire.encode(EngineReply.pong(
+                    serviceVersion: serviceVersion, protocolVersion: EngineWire.protocolVersion
+                ))
+                reply(data, nil)
+            } catch {
+                reply(nil, Self.transportFault(.invalidRequest, [
+                    NSLocalizedDescriptionKey: "кодирование ответа: \(error)"
+                ]))
+            }
         }
     }
 
@@ -170,15 +183,17 @@ public final class EngineXPCRequestHandler: @unchecked Sendable {
         lock.unlock()
     }
 
-    /// Возврат РП по MEE-438 (11:50 UTC): отказ `normalizingDates`/`encode` над УЖЕ построенным
-    /// (валидным) `outcome` — падение при кодировании готового ответа, не при разборе входа —
-    /// заворачивается в `EngineReply.failed(jobId, .runtimeFailure)`, а не в транспортный
-    /// `NSError`: у клиента это тогда законный отказ ДВИЖКА (`engineFailure`), а не «сервис не
-    /// смог собрать ответ» на уровне протокола. `.runtimeFailure(message:)` несёт только
-    /// `String` — кодируется всегда, второго отказа на этом пути не бывает; отдельный
-    /// `NSError`-фолбэк ниже — чисто оборонительный, недостижимый на практике (раскрыто, не
-    /// проверяется тестом: заставить `normalizingDates`/`encode` упасть над уже валидным
-    /// значением легитимными входами нечем).
+    /// Возврат РП по MEE-438 (11:50 UTC, уточнено 12:15 UTC): отказ `normalizingDates`/`encode`
+    /// над УЖЕ построенным (валидным) `outcome` — падение при кодировании готового ответа, не
+    /// при разборе входа — заворачивается в `EngineReply.failed(jobId, .runtimeFailure)`, а не в
+    /// транспортный `NSError`: у клиента это тогда законный отказ ДВИЖКА (`engineFailure`), а не
+    /// «сервис не смог собрать ответ» на уровне протокола. Это же — и для повторного отказа
+    /// кодирования УЖЕ этого фолбэка: `.runtimeFailure(message:)` несёт только `String`,
+    /// кодируется всегда (простые `Codable`-поля, ни `Date`, ни `Float`, которым есть от чего
+    /// отказать), так что этот путь на практике недостижим (раскрыто, не проверяется тестом —
+    /// заставить `EngineWire.encode` упасть на этом значении легитимным входом нечем), но
+    /// оставлен последней подстраховкой на тот случай, если он всё же случится, — с тем же самым
+    /// кодом ответа, а не разными исходами по глубине отказа.
     private func finish(_ jobId: EngineJobId, outcome: EngineReply, completion: (Data?, Error?) -> Void) {
         lock.locked { jobs[jobId] = nil }
         let toEncode: EngineReply
@@ -187,13 +202,12 @@ public final class EngineXPCRequestHandler: @unchecked Sendable {
         } catch {
             toEncode = .failed(jobId, .runtimeFailure(message: "нормализация ответа: \(error)"))
         }
-        do {
-            completion(try EngineWire.encode(toEncode), nil)
-        } catch {
-            completion(nil, Self.transportFault(.invalidRequest, [
-                NSLocalizedDescriptionKey: "кодирование ответа: \(error)"
-            ]))
+        if let data = try? EngineWire.encode(toEncode) {
+            completion(data, nil)
+            return
         }
+        let fallback = EngineReply.failed(jobId, .runtimeFailure(message: "кодирование ответа не удалось"))
+        completion(try? EngineWire.encode(fallback), nil)
     }
 
     private func cancelIfLive(_ jobId: EngineJobId) {
