@@ -211,7 +211,7 @@ final class ProcessRPCTransportTests: XCTestCase {
                 executablePath: "/usr/bin/env",
                 arguments: [
                     "sh", "-c",
-                    "grep SigBlk /proc/self/status >&2; grep SigIgn /proc/self/status >&2; exec cat",
+                    "grep SigBlk /proc/self/status >&2; grep SigIgn /proc/self/status >&2; exec cat"
                 ],
                 onStderrLine: { line in
                     FileHandle.standardError.write(Data("[PRT-SIGMASK-DEBUG] \(line)\n".utf8))
