@@ -5,6 +5,9 @@
 //  и позволяет К46 буквально (сценарий отвечает «неверным» `id`, которого хост не посылал).
 //  `hangOnNextReceive()` (МЕЕ-386, К9 вход Б) — та же очередь, отдельный элемент: единственный
 //  способ смоделировать зависший вызов плагина на stdio-пути для `raceTimeout`.
+//  `resolvePendingHang(with:)` (МЕЕ-386, К12) — отпускает зависание настоящим кадром-ответом,
+//  не отменой задачи: держит первый вызов «без ответа» ровно до нужного момента теста, вместо
+//  того чтобы моделировать реальное зависание плагина.
 //
 //  Модуль: calendar-hub · Владелец: DEV-1 · Слой: домен (тестовая оснастка)
 
@@ -49,6 +52,21 @@ final class ScriptedRPCTransport: RPCTransport, @unchecked Sendable {
     /// пережил бы сам тест, вместо того чтобы быть снятым `group.cancelAll()`.
     func hangOnNextReceive() {
         locked { responses.append(.hang) }
+    }
+
+    /// Отпускает зависший `receive()` (см. `hangOnNextReceive()`) настоящим кадром-ответом —
+    /// в отличие от отмены задачи (К9 вход Б), здесь ожидающий вызов получает значение и
+    /// продолжает обычным путём (К12: второй вызов может отправить свой `request` только
+    /// ПОСЛЕ этого). `@discardableResult` — вызывающая сторона обычно уже знает, что зависание
+    /// было поставлено, и не обязана проверять факт отпускания.
+    @discardableResult
+    func resolvePendingHang(with frame: String) -> Bool {
+        let toResume = locked { () -> CheckedContinuation<String, Error>? in
+            defer { pendingHang = nil }
+            return pendingHang
+        }
+        toResume?.resume(returning: frame)
+        return toResume != nil
     }
 
     func send(_ frame: String) async throws {

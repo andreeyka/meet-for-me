@@ -3,9 +3,9 @@
 //  (уже написаны частями 3и/3з, некоторые уже упоминают Ш2 в MEE-361 не как новый тест, а как
 //  учёт: К64/К65 полностью проверены транспорт-независимой оснасткой `FakeCalendarConnector`
 //  ранее и здесь не повторяются). К1 (MAJOR-вектор рукопожатия `initialize`) — здесь же, ниже
-//  (MEE-386). К9 вход Б/К12 — по-прежнему НЕ здесь: требуют правки `CalendarPortImplCallWrapper`
-//  (кадр `shutdown` на таймауте, нужен зависающий сценарий транспорта) и `HostServicesTests.swift`
-//  — отдельные части MEE-386.
+//  (MEE-386). К9 вход Б (кадр `shutdown` на таймауте) и К12 (не более одного stdio-запроса в
+//  очереди) — отдельные файлы (`StdioProtocolTests+TimeoutShutdown.swift`,
+//  `StdioProtocolTests+RequestQueueing.swift`), но используют этот же `StdioHarness` (MEE-386).
 //
 //  К54 в этом файле — ТОЛЬКО таблица кодов JSON-RPC → ConnectorError → CalendarError (11
 //  различимых кодовых векторов из 19 строк §5.1): три строки без кода (таймаут — К9, отменённый
@@ -28,6 +28,7 @@ import DomainTestKit
 struct StdioHarnessBundle {
     let hub: CalendarPortImpl
     let transport: ScriptedRPCTransport
+    let connector: StdioCalendarConnector
     let connectorRepository: InMemoryConnectorRepository
     let waitSeam: FakeWaitSeam
 }
@@ -57,7 +58,8 @@ enum StdioHarness {
             waitSeam: waitSeam, secretStore: FakeSecretStore(), connectors: [source: connector]
         )
         return StdioHarnessBundle(
-            hub: hub, transport: transport, connectorRepository: connectorRepository, waitSeam: waitSeam
+            hub: hub, transport: transport, connector: connector,
+            connectorRepository: connectorRepository, waitSeam: waitSeam
         )
     }
 
