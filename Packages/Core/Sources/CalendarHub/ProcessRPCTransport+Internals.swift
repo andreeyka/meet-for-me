@@ -67,25 +67,45 @@ extension ProcessRPCTransport {
         }
     }
 
+    /// `terminationHandler` (ядерный сигнал о выходе процесса) сам по себе НЕ отказывает
+    /// `receive()` — только `recordTermination` (возврат РП, повторная приёмка PR #138, п. 3):
+    /// сигнал о смерти процесса и сигнал «весь stdout вычитан» независимы и могут прийти в
+    /// любом порядке. Если плагин успел записать ответ и выйти, а `terminationHandler` (на
+    /// Linux ненадёжный по ВРЕМЕНИ, не только по факту) обогнал ещё не разобранный
+    /// потребителем `AsyncStream` последний кусок stdout — при старом поведении (`markGone`
+    /// отсюда) `pendingReceive` был бы отказан ДО того, как этот кусок дойдёт до
+    /// `handleStdout`, и сам ответ был бы молча потерян (`handleStdout` просто отбрасывает
+    /// извлечённую строку, если `pendingReceive` уже `nil`).
     func handleTermination(status: Int32) {
-        markGone(ProcessRPCTransportError(description: "процесс плагина завершился, код \(status)"))
+        recordTermination(ProcessRPCTransportError(description: "процесс плагина завершился, код \(status)"))
     }
 
-    /// Общая точка «процесса больше нет» для обоих независимых сигналов (EOF `stdout` в
-    /// `handleStdout`, `terminationHandler` в `init`) — какой бы ни сработал первым, отказывает
-    /// ожидающий `receive()` и снимает `waitForExit()` в `close()`. Идемпотентна: второй сигнал
-    /// (обычно оба приходят почти одновременно) видит уже пустые `pendingExits`/`pendingReceive`.
-    func markGone(_ error: ProcessRPCTransportError) {
+    /// Часть «процесса больше нет», общая для ОБОИХ сигналов, — фиксирует `terminated` (быстрый
+    /// путь `send()`/`receive()` для уже известных вызовов) и снимает `waitForExit()` в
+    /// `close()`: тому важен только факт выхода процесса, не то, вычитан ли ещё stdout. Не
+    /// трогает `pendingReceive`/`stdoutContinuation` — этим двумя ведает только `markGone`,
+    /// вызываемый исключительно из настоящего EOF `stdout` (`handleStdout`), когда буфер
+    /// гарантированно вычитан весь. Смерть процесса БЕЗ EOF (на практике не должна случаться
+    /// после `closeParentSideOfPipes` — ребёнок держит единственную оставшуюся копию конца
+    /// канала) отказывает зависший `receive()` только через сторож `waitForExit`, не отсюда.
+    /// Идемпотентна: `markGone` тоже зовёт её первым делом, повторный вызов видит уже пустые
+    /// `pendingExits`/уже выставленный `terminated`.
+    func recordTermination(_ error: ProcessRPCTransportError) {
         if terminated == nil { terminated = error }
-        failPendingReceive(error)
         for continuation in pendingExits { continuation.resume() }
         pendingExits.removeAll()
+    }
+
+    /// Точка «процесса больше нет» ТОЛЬКО от настоящего EOF `stdout` (`handleStdout`) — здесь,
+    /// и только здесь, безопасно отказывать `pendingReceive`: буфер stdout к этому моменту
+    /// гарантированно вычитан весь, начиная с самого начала (порядок кусков — `AsyncStream` с
+    /// одним потребителем), так что никакой ещё не разобранный ответ потеряться не может.
+    func markGone(_ error: ProcessRPCTransportError) {
+        recordTermination(error)
+        failPendingReceive(error)
         // Без этого потребитель `stdoutStream` (единственный, `init`) навсегда завис бы на
         // следующей итерации `for await` — ни `readabilityHandler` (уже снят), ни что-либо
-        // ещё больше не даст ему элемент, а `finish()` никто до этого места не звал. Вызов
-        // безопасен повторно (документированно): какой бы из двух путей — EOF в
-        // `handleStdout` или `terminationHandler` — ни позвал `markGone` первым, второй
-        // застаёт уже завершённый поток.
+        // ещё больше не даст ему элемент, а `finish()` никто до этого места не звал.
         stdoutContinuation.finish()
     }
 

@@ -36,11 +36,18 @@ final class ProcessRPCTransportTests: XCTestCase {
 
     /// Кадр длиннее 8 МиБ туда-обратно, байт в байт — сам предел проверяет вызывающая
     /// сторона (`StdioCalendarConnector.awaitResponse`, §5.1), не транспорт; здесь важно
-    /// только то, что построчное чтение не режет и не повреждает кадр такого размера.
+    /// только то, что построчное чтение не режет и не повреждает кадр такого размера, И что
+    /// куски идут в правильном ПОРЯДКЕ.
+    ///
+    /// Содержимое — позиционно-зависимое (`makeNonRepeatingFrame`), не однородная строка из
+    /// одних `x` (возврат РП, повторная приёмка PR #138, п. 1): перестановка местами двух
+    /// кусков ОДИНАКОВОГО содержимого (все куски "x") дала бы БАЙТ-В-БАЙТ ТУ ЖЕ строку —
+    /// `XCTAssertEqual` не поймал бы её вовсе, и заявление PR «порядок кусков гарантирован»
+    /// оставалось неподтверждённым тестом.
     func test_frameLargerThan8MiBRoundTripsIntact() async throws {
         try await withHangGuard {
             let transport = try ProcessRPCTransport(executablePath: "/usr/bin/env", arguments: ["cat"])
-            let huge = String(repeating: "x", count: 9 * 1024 * 1024)
+            let huge = makeNonRepeatingFrame(totalBytes: 9 * 1024 * 1024)
             try await transport.send(huge)
             let received = try await transport.receive()
             XCTAssertEqual(received.count, huge.count)
@@ -191,6 +198,22 @@ final class ProcessRPCTransportTests: XCTestCase {
             await transport.close()
         }
     }
+}
+
+/// Строка из блоков по 4 КиБ, каждый начинается со своего десятичного индекса — соседние
+/// блоки заведомо различаются побайтово (возврат РП, повторная приёмка PR #138, п. 1), в
+/// отличие от однородной `String(repeating: "x", …)`, перестановку двух кусков которой
+/// байт-в-байт сравнение просто не может заметить. Без `\n` внутри (0x0A — разделитель
+/// кадров самого транспорта) — только цифры и `x`-заполнитель.
+private func makeNonRepeatingFrame(totalBytes: Int, blockSize: Int = 4096) -> String {
+    var frame = ""
+    frame.reserveCapacity(totalBytes)
+    let blockCount = (totalBytes + blockSize - 1) / blockSize
+    for blockIndex in 0..<blockCount {
+        let marker = String(blockIndex)
+        frame += marker + String(repeating: "x", count: blockSize - marker.count)
+    }
+    return frame
 }
 
 /// Гонка с сигналом отмены, не с молчаливым системным киллом (МЕЕ-329 у самого `swift test`
