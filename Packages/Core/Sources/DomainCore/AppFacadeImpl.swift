@@ -43,7 +43,7 @@ public actor AppFacadeImpl: AppFacade {
     let calendar: CalendarPort
     let clock: @Sendable () -> Date
 
-    var continuations: [AsyncStream<AppEvent>.Continuation] = []
+    nonisolated let broadcaster = AppEventBroadcaster()
 
     public init(
         meetings: MeetingRepository,
@@ -140,14 +140,44 @@ public actor AppFacadeImpl: AppFacade {
 
     // MARK: - Поток событий (инв. 15, 16) — оснастка; наполнение публикациями идёт вместе с командами
 
-    public func events() -> AsyncStream<AppEvent> {
+    /// `events()` в контракте (§2) не `async` — актор обязан отдать такой метод `nonisolated`,
+    /// тем же приёмом, что `JobQueueEngine.events()`/`SessionMachine.changes()`. Состояние
+    /// подписчиков поэтому живёт в `AppEventBroadcaster`, отдельном классе с замком, а не в акторе.
+    public nonisolated func events() -> AsyncStream<AppEvent> {
+        broadcaster.subscribe()
+    }
+
+    func publish(_ event: AppEvent) {
+        broadcaster.publish(event)
+    }
+}
+
+/// См. комментарий у `AppFacadeImpl.events()`. Тот же приём, что `JobEventBroadcaster`.
+final class AppEventBroadcaster: @unchecked Sendable {
+
+    private let lock = NSLock()
+    private var continuations: [UUID: AsyncStream<AppEvent>.Continuation] = [:]
+
+    private func locked<Value>(_ body: () -> Value) -> Value {
+        lock.lock()
+        defer { lock.unlock() }
+        return body()
+    }
+
+    func subscribe() -> AsyncStream<AppEvent> {
         AsyncStream { continuation in
-            continuations.append(continuation)
+            let subscriptionId = UUID()
+            locked { continuations[subscriptionId] = continuation }
+            continuation.onTermination = { [weak self] _ in
+                guard let self else { return }
+                self.locked { self.continuations[subscriptionId] = nil }
+            }
         }
     }
 
     func publish(_ event: AppEvent) {
-        for continuation in continuations {
+        let targets = locked { Array(continuations.values) }
+        for continuation in targets {
             continuation.yield(event)
         }
     }
