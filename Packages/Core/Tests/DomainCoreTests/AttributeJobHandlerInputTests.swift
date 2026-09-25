@@ -39,7 +39,7 @@ final class AttributeJobHandlerInputTests: XCTestCase {
         let harness = AttributeHarness()
         let segments = try (0..<5).map { index in
             try AttributeFixture.segment(
-                words: [try AttributeFixture.word("word\(index)")],
+                words: [try AttributeFixture.word("word\(index)", start: index * 1_000, end: index * 1_000 + 100)],
                 start: index * 1_000, end: index * 1_000 + 1_000
             )
         }

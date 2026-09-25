@@ -70,7 +70,7 @@ final class AttributeJobHandlerApplyTests: XCTestCase {
         let words = [try AttributeFixture.word("привет"), try AttributeFixture.word("мир")]
         let corrected = try AttributeFixture.segment(words: words, start: 0, end: 500)
         let uncorrected = try AttributeFixture.segment(
-            words: [try AttributeFixture.word("тишина")], start: 500, end: 1_000
+            words: [try AttributeFixture.word("тишина", start: 500, end: 600)], start: 500, end: 1_000
         )
         let transcript = try AttributeFixture.transcript(segments: [corrected, uncorrected])
         let transcriptId = try await harness.seedTranscript(transcript)
