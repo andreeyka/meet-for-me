@@ -77,20 +77,22 @@ final class MicChannelAndUserTests: XCTestCase {
         let (transcript, segmentIds) = try Fixture.transcript([
             SegmentSpec(channel: .system, cluster: 0)
         ], speakers: [try Fixture.speaker(0, embedding: [1.0, 0.0])])
-        let personId = Fixture.uuid(1)
+        let person = Fixture.person(1, name: "Иван")
         let existing = SpeakerProfile(
-            personId: personId, embedding: [0.0, 1.0], modelVersion: "v1", sampleCount: 4, updatedAt: Fixture.createdAt
+            personId: person.id, embedding: [0.0, 1.0], modelVersion: "v1", sampleCount: 4, updatedAt: Fixture.createdAt
         )
-        let input = Fixture.input(transcript: transcript, segmentIds: segmentIds, profiles: [existing])
+        let input = Fixture.input(
+            transcript: transcript, segmentIds: segmentIds, attendees: [person], profiles: [existing]
+        )
 
         let result = try await port.confirm(
-            transcriptId: input.transcriptId, cluster: 0, personId: personId, input: input
+            transcriptId: input.transcriptId, cluster: 0, personId: person.id, input: input
         )
 
         XCTAssertEqual(result.profileUpdates.count, 1)
         let update = try XCTUnwrap(result.profileUpdates.first)
         XCTAssertEqual(update.sampleCount, 5)
-        XCTAssertEqual(update.personId, personId)
+        XCTAssertEqual(update.personId, person.id)
         XCTAssertEqual(update.embedding[0], 0.242536, accuracy: 0.0001)
         XCTAssertEqual(update.embedding[1], 0.970143, accuracy: 0.0001)
         let length = (update.embedding.reduce(0.0) { $0 + Double($1) * Double($1) }).squareRoot()

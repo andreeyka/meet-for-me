@@ -10,15 +10,17 @@ final class RulesAndEdgeCasesTests: XCTestCase {
     private let port = SpeakerAttribution()
 
     func test_k20_embeddingLeavesOnlyThroughProfileUpdates() async throws {
-        let personId = Fixture.uuid(1)
+        let person = Fixture.person(1, name: "Иван")
         let (transcript, segmentIds) = try Fixture.transcript([
             SegmentSpec(channel: .system, cluster: 0)
         ], speakers: [try Fixture.speaker(0, embedding: [1.0, 0.0])])
         let existing = Fixture.profile(1, embedding: [0.0, 1.0])
-        let input = Fixture.input(transcript: transcript, segmentIds: segmentIds, profiles: [existing])
+        let input = Fixture.input(
+            transcript: transcript, segmentIds: segmentIds, attendees: [person], profiles: [existing]
+        )
 
         let confirmed = try await port.confirm(
-            transcriptId: input.transcriptId, cluster: 0, personId: personId, input: input
+            transcriptId: input.transcriptId, cluster: 0, personId: person.id, input: input
         )
         XCTAssertEqual(confirmed.profileUpdates.count, 1)
         XCTAssertFalse(confirmed.profileUpdates[0].embedding.isEmpty)
@@ -31,25 +33,36 @@ final class RulesAndEdgeCasesTests: XCTestCase {
     }
 
     func test_k44_foreignOrDuplicateUserEditedIdsIgnoredSilently() async throws {
+        let transcriptId = Fixture.uuid(1)
         let (transcript, segmentIds) = try Fixture.transcript([
             SegmentSpec(channel: .system, cluster: 0)
         ], speakers: [try Fixture.speaker(0)])
         let baseline = try await port.attribute(
-            Fixture.input(transcript: transcript, segmentIds: segmentIds), thresholds: .slice1Defaults
+            Fixture.input(transcriptId: transcriptId, transcript: transcript, segmentIds: segmentIds),
+            thresholds: .slice1Defaults
         )
 
         let withForeignId = try await port.attribute(
-            Fixture.input(transcript: transcript, segmentIds: segmentIds, userEditedSegmentIds: [999]),
+            Fixture.input(
+                transcriptId: transcriptId, transcript: transcript, segmentIds: segmentIds,
+                userEditedSegmentIds: [999]
+            ),
             thresholds: .slice1Defaults
         )
         XCTAssertEqual(withForeignId, baseline)
 
         let withSingleId = try await port.attribute(
-            Fixture.input(transcript: transcript, segmentIds: segmentIds, userEditedSegmentIds: [1]),
+            Fixture.input(
+                transcriptId: transcriptId, transcript: transcript, segmentIds: segmentIds,
+                userEditedSegmentIds: [1]
+            ),
             thresholds: .slice1Defaults
         )
         let withDuplicateId = try await port.attribute(
-            Fixture.input(transcript: transcript, segmentIds: segmentIds, userEditedSegmentIds: [1, 1]),
+            Fixture.input(
+                transcriptId: transcriptId, transcript: transcript, segmentIds: segmentIds,
+                userEditedSegmentIds: [1, 1]
+            ),
             thresholds: .slice1Defaults
         )
         XCTAssertEqual(withDuplicateId, withSingleId, "повтор валидного id не меняет ответ по сравнению с одним разом")
@@ -159,21 +172,22 @@ final class RulesAndEdgeCasesTests: XCTestCase {
     }
 
     func test_k50_confirmSucceedsWithoutProfileTrainingWhenVoiceProfilesDisabled() async throws {
-        let personId = Fixture.uuid(1)
+        let person = Fixture.person(1, name: "Иван")
         let (transcript, segmentIds) = try Fixture.transcript([
             SegmentSpec(channel: .system, cluster: 0)
         ], speakers: [try Fixture.speaker(0, embedding: [1.0, 0.0])])
         let existing = Fixture.profile(1, embedding: [0.0, 1.0])
         let input = Fixture.input(
-            transcript: transcript, segmentIds: segmentIds, profiles: [existing], voiceProfilesEnabled: false
+            transcript: transcript, segmentIds: segmentIds, attendees: [person],
+            profiles: [existing], voiceProfilesEnabled: false
         )
 
         let result = try await port.confirm(
-            transcriptId: input.transcriptId, cluster: 0, personId: personId, input: input
+            transcriptId: input.transcriptId, cluster: 0, personId: person.id, input: input
         )
 
         let assignment = try XCTUnwrap(result.assignments.first { $0.cluster == 0 })
-        XCTAssertEqual(assignment.personId, personId)
+        XCTAssertEqual(assignment.personId, person.id)
         XCTAssertEqual(assignment.source, .user)
         XCTAssertTrue(result.profileUpdates.isEmpty, "выключенные профили — обучение не происходит, но вызов успешен")
     }
