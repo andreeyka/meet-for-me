@@ -23,7 +23,12 @@
 
 import Foundation
 
-@objc public protocol EngineXPCServiceProtocol: NSObjectProtocol {
+// Без `: NSObjectProtocol` — не нужен ни `NSXPCInterface(with:)`, ни приведению
+// `remoteObjectProxy` через `as?` (обе стороны на деле всегда `NSObject`-подклассы,
+// `ProgressReceiver`/сервис-реализация); лишнее наследование только раздувало бы
+// публичную поверхность модуля типом `NSObjectProtocol`, которого нет в
+// `allowed-types/EngineXPCClient.json`.
+@objc public protocol EngineXPCServiceProtocol {
     /// `requestData` — `EngineWire.encode(EngineRequest)`. `reply` получает
     /// `EngineWire.encode(EngineReply)` при успешном разборе и исполнении, либо `nil` с
     /// `NSError` в домене `EngineTransportFault.errorDomain` при отказе транспорта (§3.1) —
@@ -31,7 +36,7 @@ import Foundation
     func send(_ requestData: Data, reply: @escaping (Data?, Error?) -> Void)
 }
 
-@objc public protocol EngineXPCClientProtocol: NSObjectProtocol {
+@objc public protocol EngineXPCClientProtocol {
     /// `progressData` — `EngineWire.encode(EngineProgressMessage)`. Без ответа (`Void`) —
     /// сервис не ждёт подтверждения доставки, клиент вправе отбросить кадр молча (К40 ii-iii).
     func didReceiveProgress(_ progressData: Data)

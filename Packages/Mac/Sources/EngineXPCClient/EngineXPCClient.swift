@@ -57,16 +57,15 @@ public final class EngineXPCClient: TranscriptionServicePort, @unchecked Sendabl
 
     /// Прод: соединение по имени сервиса launchd. Реальный `EngineXPCServiceProtocol`
     /// раздаёт сервис (`Services/TranscriptionEngineXPC`), эта сторона его не знает —
-    /// только протокол.
-    public convenience init(
-        machServiceName: String,
-        modelCatalog: ModelCatalogPort,
-        clock: @escaping @Sendable () -> Date = { Date() }
-    ) {
+    /// только протокол. Без параметра часов — реальные часы нужны только тестам
+    /// (внутренний `init(makeConnection:modelCatalog:clock:)`), и вынесение `Date` в
+    /// публичную сигнатуру раздувало бы поверхность модуля типом, которого нет в
+    /// `allowed-types/EngineXPCClient.json`.
+    public convenience init(machServiceName: String, modelCatalog: ModelCatalogPort) {
         self.init(
             makeConnection: { NSXPCConnection(machServiceName: machServiceName, options: []) },
             modelCatalog: modelCatalog,
-            clock: clock
+            clock: { Date() }
         )
     }
 
