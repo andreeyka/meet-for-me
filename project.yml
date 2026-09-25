@@ -13,12 +13,14 @@
 #                         имя таргета совпадает с продуктом, не с каталогом; владелец
 #                         содержимого — DEV-2, задача MEE-431; сам этот файл — не её зона).
 #
-# Оба таргета зависят на ВСЕ публичные продукты обоих SPM-пакетов сразу, а не только на то,
+# Оба таргета зависят на все публичные продукты обоих SPM-пакетов сразу, а не только на то,
 # что нужно сегодняшнему каркасу: правка этого файла — сама по себе interface-request
 # (владение архитектора), и заводить его заново под каждый новый порт, который добавит
 # composition root, дороже, чем объявить полный список один раз. Тот же приём уже действует
 # в Packages/Mac/Package.swift и Packages/Core/Package.swift — там тоже перечислены все
-# модули сразу, а не по мере необходимости.
+# модули сразу, а не по мере необходимости. Исключение — `GigaAM`: по C-012 она живёт только
+# внутри процесса `TranscriptionEngine.xpc`, App с ней не работает напрямую ни на одном
+# этапе (приёмка РП, #163) — зависимость только у таргета `TranscriptionEngine`, не у `MeetForMe`.
 name: MeetForMe
 
 options:
@@ -88,8 +90,6 @@ targets:
       - package: Core
         product: EngineKit
       - package: Core
-        product: GigaAM
-      - package: Core
         product: ModelManager
       - package: Core
         product: Attribution
@@ -121,6 +121,20 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.andreeyka.meetforme.TranscriptionEngine
         ENABLE_HARDENED_RUNTIME: YES
+    info:
+      path: Services/TranscriptionEngineXPC/Info.plist
+      properties:
+        # Шаблон Apple для встроенного XPC-сервиса, вызываемого `NSXPCConnection(serviceName:)`
+        # (приёмка РП, #163): `CFBundlePackageType` для `xpc-service` XcodeGen уже подставляет
+        # сам («generated automatically if appropriate», ProjectSpec.md, «Plist») — но не
+        # словарь `XPCService`, это чистый Info.plist-контент, не build setting, и его нужно
+        # назвать явно.
+        XPCService:
+          ServiceType: Application
     dependencies:
       - package: Core
         product: EngineKit
+      # По C-012 (Q10 architecture.md) GigaAM работает только внутри этого процесса — не App
+      # (см. правку выше и приёмку РП, #163). Само содержимое подключения — задача MEE-431.
+      - package: Core
+        product: GigaAM

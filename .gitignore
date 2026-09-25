@@ -7,6 +7,7 @@ DerivedData/
 # «created on disk on every generation») — производные файлы, а не исходники.
 App/Info.plist
 App/MeetForMe.entitlements
+Services/TranscriptionEngineXPC/Info.plist
 .DS_Store
 __pycache__/
 *.pyc
