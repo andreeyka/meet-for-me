@@ -65,6 +65,7 @@ public actor ProcessRPCTransport: RPCTransport {
     var pendingReceive: CheckedContinuation<String, Error>?
     var pendingExits: [CheckedContinuation<Void, Never>] = []
     var terminated: ProcessRPCTransportError?
+    var stdoutClosed: ProcessRPCTransportError?
     let stdoutContinuation: AsyncStream<Data>.Continuation
 
     /// Один раз на процесс хоста, а не на транспорт: `signal()` — глобальная настройка, не
@@ -203,9 +204,20 @@ public actor ProcessRPCTransport: RPCTransport {
     /// Второй одновременный вызов, пока первый ещё не разрешился, — отказ, а не молчаливая
     /// перезапись `pendingReceive` (возврат РП, бэклог): без проверки первый вызывающий терял
     /// бы своё продолжение навсегда, ничего не узнав об этом.
+    ///
+    /// `stdoutClosed`, не `terminated` (возврат РП, приёмка PR #138, MEE-424, п. 1): `terminated`
+    /// ставит и `terminationHandler` (`recordTermination`) — ядерный сигнал о выходе процесса,
+    /// который может дойти до актора РАНЬШЕ, чем потребитель `AsyncStream` разберёт ещё не
+    /// прочитанный последний кусок `stdout` с фактическим ответом плагина (тот же класс гонки,
+    /// что markGone/recordTermination уже решают для УЖЕ висящего `pendingReceive` — здесь тот же
+    /// вопрос для ЕЩЁ НЕ начатого вызова: `StdioCalendarConnector.awaitResponse` реально зовёт
+    /// `receive()` уже ПОСЛЕ уведомления о том, что плагин завершился). Проверять здесь `terminated`
+    /// значило бы отказывать немедленно, даже когда ответ уже записан и вот-вот дойдёт до `buffer`
+    /// — `stdoutClosed` ставит только `markGone`, только на настоящем EOF `stdout`, когда буфер
+    /// уже гарантированно вычитан весь и никакого ответа потерять невозможно.
     public func receive() async throws -> String {
         if let line = try extractLine() { return line }
-        if let terminated { throw terminated }
+        if let stdoutClosed { throw stdoutClosed }
         guard pendingReceive == nil else {
             throw ProcessRPCTransportError(description: "receive() уже вызван — второй одновременный вызов запрещён")
         }

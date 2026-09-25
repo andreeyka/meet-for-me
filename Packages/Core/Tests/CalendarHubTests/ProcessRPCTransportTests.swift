@@ -57,8 +57,11 @@ final class ProcessRPCTransportTests: XCTestCase {
     }
 
     /// Процесс читает одну строку и выходит, не написав ничего в stdout — `receive()`
-    /// обязан не зависнуть, а вернуть ошибку транспорта (детектируется и по EOF stdout,
-    /// и по `terminationHandler`, какой из двух сработает первым).
+    /// обязан не зависнуть, а вернуть ошибку транспорта. Детектируется по EOF `stdout`
+    /// (`markGone`, `stdoutClosed`) — `terminationHandler` сам по себе `receive()` не отказывает
+    /// (возврат РП, приёмка PR #138/MEE-424): здесь оба сигнала всё равно приходят практически
+    /// одновременно (процесс не пишет ничего в stdout перед выходом), поэтому какой из двух
+    /// первым долетит до актора — не важно для исхода этого теста.
     func test_processDeathSurfacesAsTransportErrorNotHang() async throws {
         try await withHangGuard {
             let transport = try ProcessRPCTransport(
@@ -75,11 +78,43 @@ final class ProcessRPCTransportTests: XCTestCase {
         }
     }
 
-    /// `close()` посылает SIGTERM и ждёт настоящего завершения процесса — по EOF `stdout`
-    /// или по `terminationHandler`, какой сработает первым, плюс собственный 5с сторож
-    /// внутри `ProcessRPCTransport.close()` (не сон по времени политики §5.2, а конечная
-    /// подстраховка транспорта — МЕЕ-417: «не на стенных часах»), затем закрывает каналы —
-    /// последующий `receive()` обязан отказать, не зависнуть.
+    /// Возврат РП (приёмка PR #138, MEE-424, п. 1-2): плагин отвечает и САМ выходит сразу после
+    /// — `receive()` обязан вернуть настоящий ответ, даже если вызван уже ПОСЛЕ того, как
+    /// `terminationHandler` отметил процесс мёртвым (реальный путь: `StdioCalendarConnector.
+    /// awaitResponse` зовёт `receive()` не гонкой с самим `fetch`, а уже после того, как цикл
+    /// синхронизации получил уведомление о завершении). Явная задержка перед `receive()` —
+    /// чтобы гарантированно застать `terminated` уже выставленным ДО первого вызова, не
+    /// полагаясь на случайное совпадение тайминга. До фикса (`if let terminated` в `receive()`)
+    /// этот тест обязан был бы падать: `receive()` отказал бы транспортной ошибкой мимо уже
+    /// записанного в `buffer`/на подходе в `AsyncStream` ответа.
+    func test_receiveGetsResponseEvenAfterPluginAlreadyExited() async throws {
+        try await withHangGuard {
+            let transport = try ProcessRPCTransport(
+                executablePath: "/usr/bin/env", arguments: ["sh", "-c", #"read l; echo "$l"; exit 0"#]
+            )
+            try await transport.send("привет-и-сразу-выхожу")
+            // Даёт плагину время дочитать строку, ответить и завершиться ДО вызова receive() —
+            // не гонкой с ним, а заведомо после того, как terminationHandler уже отработал.
+            try await Task.sleep(for: .milliseconds(300))
+
+            let received = try await transport.receive()
+            XCTAssertEqual(received, "привет-и-сразу-выхожу")
+
+            do {
+                _ = try await transport.receive()
+                XCTFail("второй receive() после настоящего EOF stdout обязан отказать")
+            } catch is ProcessRPCTransportError {
+                // ожидаемо — на этот раз ответа больше нет, stdout действительно закрыт.
+            }
+        }
+    }
+
+    /// `close()` сначала закрывает `stdin` (EOF — штатный способ попросить `cat` выйти самому),
+    /// затем, если процесс всё ещё жив, SIGTERM и SIGKILL — ждёт настоящего завершения по EOF
+    /// `stdout`, плюс собственный сторож внутри `ProcessRPCTransport.close()` на каждом шаге (не
+    /// сон по времени политики §5.2, а конечная подстраховка транспорта — МЕЕ-417: «не на
+    /// стенных часах»), затем закрывает каналы — последующий `receive()` обязан отказать, не
+    /// зависнуть.
     func test_closeTerminatesProcessThenReceiveFailsInsteadOfHanging() async throws {
         try await withHangGuard {
             let transport = try ProcessRPCTransport(executablePath: "/usr/bin/env", arguments: ["cat"])
@@ -219,11 +254,12 @@ private func makeNonRepeatingFrame(totalBytes: Int, blockSize: Int = 4096) -> St
 /// Гонка с сигналом отмены, не с молчаливым системным киллом (МЕЕ-329 у самого `swift test`
 /// уже проверяет собственный предел, но без единой строки о том, ГДЕ именно зависло —
 /// возврат РП, приёмка PR #138, Linux). 15с — с запасом больше самого медленного легитимного
-/// случая этого файла: на Linux `close()` может пройти через ДВА последовательных 5с сторожа
-/// `ProcessRPCTransport` (SIGTERM, затем — если процесс всё ещё жив — SIGKILL, см. докстринг
-/// `close()`), то есть до ~10с само по себе, плюс кадр 9 МиБ — 15с даёт запас, не впритык.
-/// Много меньше 300с общего предела `swift test`, так что провал одного теста здесь не
-/// съедает предел остальных.
+/// случая этого файла: `close()` — сначала 1с грейс после EOF `stdin`, и, только если процесс
+/// всё ещё жив, ДВА последовательных 5с сторожа `ProcessRPCTransport` (SIGTERM, затем SIGKILL,
+/// см. докстринг `close()`) — то есть до ~11с само по себе в худшем случае, плюс кадр 9 МиБ —
+/// 15с даёт запас, не впритык. На практике `stdin`-EOF решает почти все тестовые сценарии этого
+/// файла ещё на грейс-периоде (миллисекунды), не доходя до сигналов вовсе. Много меньше 300с
+/// общего предела `swift test`, так что провал одного теста здесь не съедает предел остальных.
 private struct ProcessRPCTransportTestHang: Error, CustomStringConvertible {
     var description: String { "зависание — не уложился в 15с (МЕЕ-417, диагностика Linux)" }
 }

@@ -41,9 +41,17 @@ extension ProcessRPCTransport {
         // buffer есть смысл», без ложных пропусков.
         let mayContainDelimiter = data.contains(0x0A)
         buffer.append(data)
-        guard mayContainDelimiter else { return }
+        // `pendingReceive == nil` — не трогать `buffer` через `extractLine()` вовсе (возврат РП,
+        // приёмка PR #138, MEE-424, п. 1/2): та не только читает, но и УДАЛЯЕТ строку из
+        // `buffer` безусловно. Если бы вызвать её здесь, пока `receive()` ещё не позвали
+        // (плагин ответил и сразу вышел ДО того, как вызывающая сторона обратилась за ответом —
+        // реальный путь `StdioCalendarConnector.awaitResponse`), извлечённая строка была бы
+        // просто отброшена (отдать её некому) и потеряна НАВСЕГДА — не осталась бы в `buffer`
+        // для следующего вызова `receive()`, у которого есть свой собственный `extractLine()` в
+        // самом начале, как раз на этот случай.
+        guard mayContainDelimiter, let continuation = pendingReceive else { return }
         do {
-            guard let line = try extractLine(), let continuation = pendingReceive else { return }
+            guard let line = try extractLine() else { return }
             pendingReceive = nil
             continuation.resume(returning: line)
         } catch {
@@ -74,21 +82,31 @@ extension ProcessRPCTransport {
     /// Linux ненадёжный по ВРЕМЕНИ, не только по факту) обогнал ещё не разобранный
     /// потребителем `AsyncStream` последний кусок stdout — при старом поведении (`markGone`
     /// отсюда) `pendingReceive` был бы отказан ДО того, как этот кусок дойдёт до
-    /// `handleStdout`, и сам ответ был бы молча потерян (`handleStdout` просто отбрасывает
-    /// извлечённую строку, если `pendingReceive` уже `nil`).
+    /// `handleStdout`. Сам ответ при этом не терялся бы даже так — он остаётся в `buffer`
+    /// (`handleStdout` не трогает `extractLine()`, пока `pendingReceive == nil`, см. её
+    /// докстринг) для следующего вызова `receive()` — но ТЕКУЩИЙ, уже висящий вызов получил бы
+    /// отказ вместо ответа, который на самом деле уже есть или вот-вот придёт.
     func handleTermination(status: Int32) {
         recordTermination(ProcessRPCTransportError(description: "процесс плагина завершился, код \(status)"))
     }
 
     /// Часть «процесса больше нет», общая для ОБОИХ сигналов, — фиксирует `terminated` (быстрый
-    /// путь `send()`/`receive()` для уже известных вызовов) и снимает `waitForExit()` в
-    /// `close()`: тому важен только факт выхода процесса, не то, вычитан ли ещё stdout. Не
-    /// трогает `pendingReceive`/`stdoutContinuation` — этим двумя ведает только `markGone`,
-    /// вызываемый исключительно из настоящего EOF `stdout` (`handleStdout`), когда буфер
-    /// гарантированно вычитан весь. Смерть процесса БЕЗ EOF (на практике не должна случаться
-    /// после `closeParentSideOfPipes` — ребёнок держит единственную оставшуюся копию конца
-    /// канала) отказывает зависший `receive()` только через сторож `waitForExit`, не отсюда.
-    /// Идемпотентна: `markGone` тоже зовёт её первым делом, повторный вызов видит уже пустые
+    /// путь ТОЛЬКО `send()`: тому неважно, вычитан ли stdout, только факт, что писать уже
+    /// некуда) и снимает `waitForExit()` в `close()`: тому важен только факт выхода процесса, не
+    /// то, вычитан ли ещё stdout. Не трогает `pendingReceive`/`stdoutClosed`/`stdoutContinuation`
+    /// — этими тремя ведает только `markGone`, вызываемый исключительно из настоящего EOF
+    /// `stdout` (`handleStdout`), когда буфер гарантированно вычитан весь (возврат РП, приёмка
+    /// PR #138, MEE-424, п. 1: `receive()` проверяет именно `stdoutClosed`, не `terminated`, —
+    /// иначе уже записанный, но ещё не разобранный ответ плагина терялся бы для ЕЩЁ НЕ начатого
+    /// вызова `receive()`, тем же классом гонки, что и для уже висящего). Смерть процесса БЕЗ
+    /// EOF (на практике не должна случаться после `closeParentSideOfPipes` — ребёнок держит
+    /// единственную оставшуюся копию конца канала) НЕ отказывает зависший `receive()` вообще —
+    /// ни через этот метод, ни через сторож `waitForExit` (тот снимает только `pendingExits`,
+    /// нужные `close()`, и никогда не трогает `pendingReceive`): в этом (не наблюдавшемся на
+    /// практике) случае `receive()` остаётся висеть, пока вызывающая сторона сама не отменит
+    /// задачу (`withTaskCancellationHandler` в `receive()`) — например, если stdout держит открытым
+    /// не сам плагин, а его собственный внук-процесс, унаследовавший дескриптор. Идемпотентна:
+    /// `markGone` тоже зовёт её первым делом, повторный вызов видит уже пустые
     /// `pendingExits`/уже выставленный `terminated`.
     func recordTermination(_ error: ProcessRPCTransportError) {
         if terminated == nil { terminated = error }
@@ -97,11 +115,14 @@ extension ProcessRPCTransport {
     }
 
     /// Точка «процесса больше нет» ТОЛЬКО от настоящего EOF `stdout` (`handleStdout`) — здесь,
-    /// и только здесь, безопасно отказывать `pendingReceive`: буфер stdout к этому моменту
-    /// гарантированно вычитан весь, начиная с самого начала (порядок кусков — `AsyncStream` с
-    /// одним потребителем), так что никакой ещё не разобранный ответ потеряться не может.
+    /// и только здесь, безопасно отказывать `pendingReceive` И ставить `stdoutClosed` (проверяет
+    /// `receive()`, не `terminated`, — см. докстринг `recordTermination`): буфер stdout к этому
+    /// моменту гарантированно вычитан весь, начиная с самого начала (порядок кусков —
+    /// `AsyncStream` с одним потребителем), так что никакой ещё не разобранный ответ потеряться
+    /// не может.
     func markGone(_ error: ProcessRPCTransportError) {
         recordTermination(error)
+        if stdoutClosed == nil { stdoutClosed = error }
         failPendingReceive(error)
         // Без этого потребитель `stdoutStream` (единственный, `init`) навсегда завис бы на
         // следующей итерации `for await` — ни `readabilityHandler` (уже снят), ни что-либо
