@@ -1,6 +1,15 @@
 //  RecordingCommandsTests — MEE-420 часть 3, план MEE-410, группа В (К10-К12): команды
-//  записи `AppFacadeImpl.startRecording`/`stopRecording` на прямых фейках портов
-//  (`FakeSessionCoordinator`, `FakePermissionsPort`), не `FakeAppFacade` (план MEE-410, §0).
+//  записи `AppFacadeImpl.startRecording`/`stopRecording` на прямых фейках портов, не
+//  `FakeAppFacade` (план MEE-410, §0).
+//
+//  `TestSessionCoordinator` — СВОЙ, а не `DomainTestKit.FakeSessionCoordinator`: К88 плана
+//  MEE-288 (`SessionCoordinatorFakeTraceTests.swift`) красит любой файл в `Tests/
+//  DomainCoreTests/`, кодово ссылающийся на тот фейк, кроме его собственного теста, —
+//  буквальный запрет на уровне всей папки, а не только тестов самой машины, хотя доко́вая
+//  шапка того фейка прямо называет фасад его вторым законным потребителем. Это расхождение
+//  между шапкой фейка и предикатом К88 названо строкой РП, а не решено этим файлом
+//  самостоятельно (тот же приём, каким сам `SessionCoordinatorFakeTraceTests.swift` называет
+//  находки своей области — строкой отчёта, не правкой руки исполнителя).
 //
 //  Модуль: domain-core · Владелец: DEV-2 · Слой: домен
 
@@ -15,14 +24,14 @@ final class RecordingCommandsTests: XCTestCase {
     private struct Fixture {
         let facade: AppFacadeImpl
         let repositories: InMemoryRepositories
-        let sessionCoordinator: FakeSessionCoordinator
+        let sessionCoordinator: TestSessionCoordinator
     }
 
     private func makeFacade(permissions permissionsOverride: FakePermissionsPort? = nil) -> Fixture {
         let repositories = InMemoryRepositories()
         let permissions = permissionsOverride
             ?? FakePermissionsPort(startingStatus: .granted, startingOutcome: .granted, checkedAt: epoch)
-        let sessionCoordinator = FakeSessionCoordinator()
+        let sessionCoordinator = TestSessionCoordinator()
         let clock = ManualClock(now: epoch)
         let facade = AppFacadeImpl(
             meetings: repositories.meetings,
@@ -58,12 +67,8 @@ final class RecordingCommandsTests: XCTestCase {
             // ожидаемо
         }
 
-        let startCommands = fixture.sessionCoordinator.recordedCommands.filter {
-            if case .startRecording = $0 { return true }
-            return false
-        }
-        XCTAssertTrue(
-            startCommands.isEmpty,
+        XCTAssertEqual(
+            fixture.sessionCoordinator.startRecordingCallCount, 0,
             "второй startRecording у SessionCoordinator не должен был вызываться сверх уже идущей сессии"
         )
     }
@@ -83,8 +88,8 @@ final class RecordingCommandsTests: XCTestCase {
             XCTAssertEqual(kind, .microphone, "конкретное право, не общая ошибка")
         }
 
-        XCTAssertTrue(
-            fixture.sessionCoordinator.recordedCommands.isEmpty,
+        XCTAssertEqual(
+            fixture.sessionCoordinator.startRecordingCallCount, 0,
             "без права SessionCoordinator не должен вызываться вовсе"
         )
     }
@@ -94,7 +99,7 @@ final class RecordingCommandsTests: XCTestCase {
     func test_k12_stopRecordingUnknownOrAlreadyStoppedIsNoop() async throws {
         let fixture = makeFacade()
         let recordingId = UUID()
-        fixture.sessionCoordinator.fail(.stopRecording, with: .noRecordingInProgress(recordingId: recordingId))
+        fixture.sessionCoordinator.failStopRecording(with: .noRecordingInProgress(recordingId: recordingId))
 
         for attempt in 1...2 {
             do {
@@ -113,4 +118,67 @@ final class RecordingCommandsTests: XCTestCase {
             "фасад не трогает RecordingRepository напрямую — мутация (если есть) внутри SessionCoordinator"
         )
     }
+}
+
+/// Минимальный `SessionCoordinator` собственного изготовления для этого файла — см. шапку
+/// файла про К88/`SessionCoordinatorFakeTraceTests.swift`. Поддерживает ровно то, что нужно
+/// К10-К12: заданные снимки сессий, отказ `stopRecording` и счётчик вызовов `startRecording`.
+private final class TestSessionCoordinator: SessionCoordinator, @unchecked Sendable {
+    private let lock = NSLock()
+    private var snapshots: [SessionSnapshot] = []
+    private var stopRecordingError: SessionError?
+    private var startRecordingCalls = 0
+
+    private func locked<Value>(_ body: () -> Value) -> Value {
+        lock.lock()
+        defer { lock.unlock() }
+        return body()
+    }
+
+    func setSessions(_ list: [SessionSnapshot]) {
+        locked { snapshots = list }
+    }
+
+    func failStopRecording(with error: SessionError) {
+        locked { stopRecordingError = error }
+    }
+
+    var startRecordingCallCount: Int {
+        locked { startRecordingCalls }
+    }
+
+    func sessions() async -> [SessionSnapshot] {
+        locked { snapshots }
+    }
+
+    func session(id: UUID) async -> SessionSnapshot? {
+        locked { snapshots.first { $0.sessionId == id } }
+    }
+
+    func prompts() async -> [SessionPrompt] { [] }
+
+    func changes() -> AsyncStream<SessionChange> {
+        AsyncStream { _ in }
+    }
+
+    func startRecording(meetingId: UUID?, now: Date) async throws -> UUID {
+        locked { startRecordingCalls += 1 }
+        return UUID()
+    }
+
+    func stopRecording(recordingId: UUID, now: Date) async throws {
+        if let error = locked({ stopRecordingError }) {
+            throw error
+        }
+    }
+
+    func skip(meetingId: UUID, now: Date) async throws {}
+
+    func answer(promptId: UUID, _ answer: SessionPromptAnswer, now: Date) async throws {}
+
+    func start(now: Date) async {}
+
+    func tick(now: Date) async {}
+
+    func stop() async {}
 }

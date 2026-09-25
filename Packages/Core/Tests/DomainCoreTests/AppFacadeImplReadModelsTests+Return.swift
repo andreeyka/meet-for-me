@@ -159,7 +159,7 @@ extension AppFacadeImplReadModelsTests {
             permissions: ThrowingOpenSettingsPermissionsPort(inner: permissions),
             modelCatalog: FakeModelCatalogPort(),
             calendar: FakeCalendarPort(),
-            sessionCoordinator: FakeSessionCoordinator()
+            sessionCoordinator: NoOpSessionCoordinator()
         )
 
         do {

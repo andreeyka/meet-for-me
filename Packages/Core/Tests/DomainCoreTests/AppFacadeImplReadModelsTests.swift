@@ -19,7 +19,6 @@ final class AppFacadeImplReadModelsTests: XCTestCase {
         let facade: AppFacadeImpl
         let repositories: InMemoryRepositories
         let permissions: FakePermissionsPort
-        let sessionCoordinator: FakeSessionCoordinator
     }
 
     func makeFacade(
@@ -33,7 +32,6 @@ final class AppFacadeImplReadModelsTests: XCTestCase {
             ?? FakePermissionsPort(startingStatus: .granted, startingOutcome: .granted, checkedAt: epoch)
         let meetings = meetingsOverride?(repositories.meetings) ?? repositories.meetings
         let transcripts = transcriptsOverride?(repositories.transcripts) ?? repositories.transcripts
-        let sessionCoordinator = FakeSessionCoordinator()
         let facade = AppFacadeImpl(
             meetings: meetings,
             recordings: repositories.recordings,
@@ -42,12 +40,10 @@ final class AppFacadeImplReadModelsTests: XCTestCase {
             permissions: permissions,
             modelCatalog: FakeModelCatalogPort(),
             calendar: FakeCalendarPort(),
-            sessionCoordinator: sessionCoordinator,
+            sessionCoordinator: NoOpSessionCoordinator(),
             clock: clock
         )
-        return Fixture(
-            facade: facade, repositories: repositories, permissions: permissions, sessionCoordinator: sessionCoordinator
-        )
+        return Fixture(facade: facade, repositories: repositories, permissions: permissions)
     }
 
     // MARK: - К4 (инв. 3, 20): идемпотентность чтения
@@ -291,4 +287,25 @@ final class AppFacadeImplReadModelsTests: XCTestCase {
             inputDevices: [], discontinuities: [], isFinalized: true
         )
     }
+}
+
+/// `AppFacadeImpl.init` требует `SessionCoordinator` с группы В (MEE-420 ч.3) — эти тесты
+/// сессий не проверяют, им годится любая рабочая реализация. Не `DomainTestKit.
+/// FakeSessionCoordinator`: `SessionCoordinatorFakeTraceTests.swift` (К88, план MEE-288)
+/// красит любой файл `Tests/DomainCoreTests/`, кодово ссылающийся на тот фейк, кроме его
+/// собственного теста, — расхождение с доко́вой шапкой самого фейка (прямо называющей
+/// фасад законным потребителем) названо РП, не решено этим файлом самостоятельно. Не
+/// `private` — используется и из `AppFacadeImplReadModelsTests+Return.swift`.
+final class NoOpSessionCoordinator: SessionCoordinator, @unchecked Sendable {
+    func sessions() async -> [SessionSnapshot] { [] }
+    func session(id: UUID) async -> SessionSnapshot? { nil }
+    func prompts() async -> [SessionPrompt] { [] }
+    func changes() -> AsyncStream<SessionChange> { AsyncStream { _ in } }
+    func startRecording(meetingId: UUID?, now: Date) async throws -> UUID { UUID() }
+    func stopRecording(recordingId: UUID, now: Date) async throws {}
+    func skip(meetingId: UUID, now: Date) async throws {}
+    func answer(promptId: UUID, _ answer: SessionPromptAnswer, now: Date) async throws {}
+    func start(now: Date) async {}
+    func tick(now: Date) async {}
+    func stop() async {}
 }
