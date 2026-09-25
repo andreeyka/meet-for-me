@@ -74,4 +74,36 @@ final class SessionMachineJobQueueSignalTests: XCTestCase {
         )
         await staged.stand.machine.stop()
     }
+
+    // MARK: - К39(б), «порядок» (MEE-428, план MEE-288 §2, дельты АД/АЖ)
+
+    /// К39(б) («порядок»): счётчик один — этого мало, `recordingDidStop()` обязан предшествовать
+    /// самой ЗАПИСИ перехода в `failed`, не только случиться где-то до конца теста. Различающий
+    /// вектор — реализация, переставившая вызовы (`setStatus` раньше, `recordingDidStop()`
+    /// позже): даёт тот же счётчик (1), что и верная, но здесь `happened(before:)` даёт `false` —
+    /// при отказе записи перехода (`StorageError`) флаг остался бы поднятым для уже остановленного
+    /// захвата.
+    ///
+    /// Журнал очищается ПОСЛЕ оснастки: `recording(from:)` сама доводит сессию до `.recording`
+    /// через более ранние переходы, и `MeetingRepository.setStatus(_:meetingId:)` пишется на
+    /// КАЖДОМ из них (`SessionMachine.transition`, единственное место записи статуса). Без
+    /// очистки `PortCallLog.firstIndex(of:)` нашёл бы ТУ, раннюю запись — а она предшествует
+    /// `recordingDidStop()` естественно, и утверждение о порядке оказалось бы зелёным по
+    /// построению, не различающим.
+    func test_k39b_recordingDidStopPrecedesTheFailedTransitionWrite() async throws {
+        let staged = try await SessionMachineStand.recording(from: moment)
+        staged.stand.log.clear()
+
+        await staged.stand.deliver(CaptureEvent.failed(.systemUnavailable(message: "отказ")))
+        await staged.stand.machine.tick(now: moment.addingTimeInterval(80))
+
+        XCTAssertEqual(staged.stand.queue.recordingDidStopCallCount, 1, "ровно один вызов на строку 11")
+        XCTAssertTrue(
+            staged.stand.log.happened(
+                "JobQueue.recordingDidStop()", before: "MeetingRepository.setStatus(_:meetingId:)"
+            ),
+            "К39(б): флаг снят ДО записи перехода — переставленные вызовы дали бы то же число, но не этот порядок"
+        )
+        await staged.stand.machine.stop()
+    }
 }
