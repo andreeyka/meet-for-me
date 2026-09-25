@@ -226,4 +226,34 @@ extension StdioProtocolTests {
         XCTAssertEqual(transport.sent.count, 3, "initialize, listCalendars, shutdown — по одному разу каждый")
         XCTAssertTrue(transport.sent[2].contains(#""method":"shutdown""#), "третий кадр — shutdown")
     }
+
+    /// Возврат РП (MEE-386): вход выше доказывает «не повторяется» СТРУКТУРНО — сценарий вовсе
+    /// не содержит ответа на `shutdown`, так что повторить было бы нечего. Здесь — тот же
+    /// вывод буквально: сценарий СОДЕРЖИТ настоящий кадр `-32003` (rateLimited, §5.1) на id
+    /// `shutdown`-запроса, но `shutdown()` (`StdioCalendarConnector.swift`) никогда не читает
+    /// ответ (`awaitResponse` не вызывается вовсе) — кадр остаётся непрочитанным в очереди
+    /// сценария, а не провоцирует повтор. `transport.sent.count` не растёт после `stop()` —
+    /// прямое доказательство отсутствия повторной попытки.
+    func test_k56_shutdownIgnoresRateLimitedErrorFrameAndDoesNotRetry() async throws {
+        let bundle = StdioHarness.make()
+        let hub = bundle.hub
+        let transport = bundle.transport
+        let waitSeam = bundle.waitSeam
+        transport.enqueue(StdioHarness.initializeFrame(id: 1))
+        transport.enqueue(#"{"schemaVersion":1,"id":2,"result":{"calendars":[]}}"#)
+        _ = try await hub.listCalendars(source: StdioHarness.source)
+
+        // id=3 — то, что реально получит исходящий кадр `shutdown` (initialize=1, listCalendars=2).
+        transport.enqueue(StdioHarness.errorFrame(id: 3, code: -32003, message: "slow down"))
+
+        await hub.stop()
+
+        XCTAssertEqual(
+            transport.sent.count, 3, "shutdown ушёл ровно 1 раз — -32003 в очереди не спровоцировал повтор"
+        )
+        XCTAssertTrue(transport.sent[2].contains(#""method":"shutdown""#), "третий кадр — shutdown")
+        XCTAssertTrue(
+            Self.retryDelays(waitSeam).isEmpty, "shutdown не проходит через политику повторов §5.2 вовсе"
+        )
+    }
 }

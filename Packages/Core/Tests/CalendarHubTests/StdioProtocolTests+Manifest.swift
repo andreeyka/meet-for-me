@@ -53,6 +53,34 @@ extension StdioProtocolTests {
         XCTAssertEqual(manifest.protocolVersion, "1.9")
     }
 
+    /// Возврат РП (MEE-386): `RPCProtocolVersion.majorIsCompatible` — общая форма для К53
+    /// (здесь) и К1 (`StdioProtocolTests.swift`, рукопожатие `initialize`), поэтому один тест
+    /// на строгую форму «цифры.цифры» покрывает оба входа сразу. Все пять векторов — реальные
+    /// строки, которые СТАРАЯ форма сравнения (`Int(_:)` на первой половине `split`) пропускала
+    /// бы как совместимые (MAJOR "1" совпал бы с `supportedMajor` 1), хотя ни одна не имеет
+    /// строгой формы `MAJOR.MINOR`.
+    func test_k53_manifestProtocolVersionStrictDigitsDotDigitsFormat_rejectsMalformedVectors() {
+        let malformed = [
+            "1",       // нет точки вовсе
+            "+1.0",    // ведущий знак `+`
+            "01.0",    // ведущий ноль у MAJOR
+            "1.abc",   // MINOR не числовой
+            "1."       // MINOR пустой
+        ]
+        for version in malformed {
+            let bytes = Self.manifestJSON(schemaVersion: 1, protocolVersion: version)
+            XCTAssertThrowsError(
+                try PluginManifestLoader.parse(bytes), "ожидался отказ на protocolVersion=\"\(version)\""
+            ) { error in
+                XCTAssertEqual(
+                    error as? PluginManifestError,
+                    .incompatibleProtocolMajor(found: version, supportedMajor: 1),
+                    "protocolVersion=\"\(version)\""
+                )
+            }
+        }
+    }
+
     static func manifestJSON(schemaVersion: Int, protocolVersion: String) -> Data {
         Data(#"""
         {"schemaVersion":\#(schemaVersion),"id":"p","name":"P","version":"1.0",

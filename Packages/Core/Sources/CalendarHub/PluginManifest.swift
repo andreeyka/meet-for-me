@@ -76,15 +76,35 @@ enum PluginManifestLoader {
 }
 
 /// Сравнение `protocolVersion` (строка `MAJOR.MINOR`) по совместимости — общая форма для
-/// манифеста (К53) и рукопожатия `initialize` (К1, следующая часть MEE-386): совпадение
-/// `MAJOR` обязательно, `MINOR` — нет (§1.1/§7). Строка без точки или с нечисловым `MAJOR`
-/// не совместима — решение этой задачи, контракт этот случай отдельно не разбирает.
+/// манифеста (К53) и рукопожатия `initialize` (К1): совпадение `MAJOR` обязательно, `MINOR` —
+/// нет (§1.1/§7). Форма строки — строго «цифры.цифры»: ровно одна точка, обе стороны непустые,
+/// только ASCII-цифры, без ведущего нуля (кроме самого «0») — решение этой задачи, контракт
+/// этот случай отдельно не разбирает. `Int(_:)` сам по себе такую форму не гарантирует: он
+/// принимает ведущий `+` (`Int("+1") == 1`) и ведущие нули (`Int("01") == 1`), а старая форма
+/// сравнения (`split(maxSplits: 1).first`) вовсе не требовала второй половины — строка без
+/// точки проходила бы дальше просто как один `MAJOR` (возврат РП, MEE-386: `"1"`, `"+1.0"`,
+/// `"01.0"`, `"1.abc"`, `"1."` — все должны отвергаться, ни один пример этой формой не проходит).
 enum RPCProtocolVersion {
     static func majorIsCompatible(_ version: String, supportedMajor: Int) -> Bool {
-        guard let majorText = version.split(separator: ".", maxSplits: 1).first,
-              let major = Int(majorText) else {
+        let parts = version.split(separator: ".", omittingEmptySubsequences: false)
+        guard parts.count == 2,
+              let major = strictNonNegativeInteger(parts[0]),
+              strictNonNegativeInteger(parts[1]) != nil else {
             return false
         }
         return major == supportedMajor
+    }
+
+    /// Непустая последовательность ASCII-цифр (`0`-`9`), без знака и без ведущего нуля, кроме
+    /// самого `"0"` — `Character.isNumber` в одиночку пропустил бы и не-ASCII цифры (например,
+    /// арабские), поэтому обе проверки (`isASCII`, `isNumber`) обязательны вместе.
+    private static func strictNonNegativeInteger(_ text: Substring) -> Int? {
+        guard !text.isEmpty, text.allSatisfy({ $0.isASCII && $0.isNumber }) else {
+            return nil
+        }
+        guard text == "0" || text.first != "0" else {
+            return nil
+        }
+        return Int(text)
     }
 }
