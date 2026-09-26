@@ -67,6 +67,12 @@ public actor ProcessRPCTransport: RPCTransport {
     var terminated: ProcessRPCTransportError?
     var stdoutClosed: ProcessRPCTransportError?
     let stdoutContinuation: AsyncStream<Data>.Continuation
+    /// Аналог `stdoutClosed` для `stderr` (МЕЕ-444) — булев, не `ProcessRPCTransportError?`:
+    /// `stderr` не несёт транспортной ошибки наружу (`StdioCalendarConnector` его не читает,
+    /// только журналирует построчно через `onStderrLine`), здесь важен только сам факт «дошёл
+    /// до настоящего EOF», см. `waitForStdioEOF`.
+    var stderrEOFObserved = false
+    var pendingStdioEOF: [CheckedContinuation<Void, Never>] = []
 
     /// Один раз на процесс хоста, а не на транспорт: `signal()` — глобальная настройка, не
     /// свойство одного дескриптора (переносимого `F_SETNOSIGPIPE`, доступного только на
@@ -119,7 +125,15 @@ public actor ProcessRPCTransport: RPCTransport {
         }
         Task { [weak self] in
             for await data in stderrStream {
-                guard let self, !data.isEmpty else { return }
+                guard let self else { return }
+                // Пустой кусок — настоящий EOF `stderr` (тот же признак, что `handleStdout`
+                // использует для `markGone`), не просто «нечего разбирать построчно» — МЕЕ-444:
+                // `close()` обязан дождаться этого сигнала, не только смерти самого процесса,
+                // прежде чем трогать дескриптор, см. `waitForStdioEOF`.
+                guard !data.isEmpty else {
+                    await self.markStderrEOFObserved()
+                    return
+                }
                 await self.handleStderr(data, onLine: onStderrLine)
             }
         }
@@ -277,10 +291,14 @@ public actor ProcessRPCTransport: RPCTransport {
                 await waitForExit()
             }
         }
-        // Обработчик и так снимает сам себя на EOF (`installReadabilityHandler`) — здесь просто
-        // финальная подчистка на случай, если EOF по какой-то причине не случился (сторож всё
-        // равно уже разрешил `waitForExit()` к этому моменту). ПОСЛЕ ожидания выхода, не до: до
-        // — отключал бы EOF как путь детектирования ещё до того, как он успел бы сработать.
+        // МЕЕ-444 (диагностика SIGSEGV на Linux, «bad pointer dereference», CI run
+        // 108070063812): смерть процесса (`waitForExit` выше) и настоящий EOF `stdout`/`stderr`
+        // — НЕЗАВИСИМЫЕ сигналы (тот же класс гонки, что `recordTermination`/`markGone` уже
+        // решают для `pendingReceive`, см. их докстринги) — `terminationHandler` мог долететь
+        // РАНЬШЕ, чем диспетчерский источник чтения `stdout`/`stderr` вообще успел сработать
+        // хоть раз. Полный довод и причина падения — докстринг `waitForStdioEOF`
+        // (ProcessRPCTransport+Internals.swift).
+        await waitForStdioEOF()
         stdoutHandle.readabilityHandler = nil
         stderrHandle.readabilityHandler = nil
         try? stdoutHandle.close()
