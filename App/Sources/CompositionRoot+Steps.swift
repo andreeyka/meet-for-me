@@ -174,10 +174,18 @@ extension CompositionRoot {
     /// `beginUse`/`endUse` клиента попадают туда, куда смотрит фасад. Соединением владеет сам
     /// клиент (записка MEE-430 §3) — лениво, при первом запросе; `AppGraph.shutdown` его не
     /// трогает, у C-012 нет `close`.
+    ///
+    /// MEE-480 (C-012 v12 §1.1): запись и путь к дорожкам клиент берёт из того же хранилища
+    /// и той же раскладки `FileLayout`, что получает фасад (`makeFacade` выше): вторая
+    /// раскладка разошлась бы с первой в пути к файлу.
     static func registerHandlers(_ partial: PartialGraph, facade: AppFacadeImpl) async {
         let storage = partial.context.storage
+        let fileLayout = partial.context.fileLayout
         let engineClient = EngineXPCClient(
-            serviceName: transcriptionEngineServiceName(), modelCatalog: partial.modelCatalog
+            serviceName: transcriptionEngineServiceName(),
+            modelCatalog: partial.modelCatalog,
+            recordings: storage.recordingRepository(fileLayout: fileLayout),
+            fileLayout: fileLayout
         )
         await registerOrCrash(
             TranscribeJobHandler(port: engineClient, transcripts: storage.transcriptRepository()),

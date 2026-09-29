@@ -26,6 +26,9 @@ final class TestEngineXPCService: NSObject, EngineXPCServiceProtocol, @unchecked
     private var sendCountValue = 0
     /// К22: `jobId` каждого разобранного рабочего/`cancel`-кадра, по порядку прихода.
     private var receivedJobIdsValue: [EngineJobId] = []
+    /// MEE-480 (инв. 25, 26): каждый разобранный кадр, кроме `ping`, по порядку прихода —
+    /// содержимое `TranscriptionRequest.audio`/`EmbeddingRequest` и счёт `.transcribe`/`.diarize`.
+    private var receivedRequestsValue: [EngineRequest] = []
 
     /// Прокси клиента, которому пушить прогресс — назначается при подключении (`XPCFixture`).
     var progressTarget: EngineXPCClientProtocol?
@@ -64,6 +67,7 @@ final class TestEngineXPCService: NSObject, EngineXPCServiceProtocol, @unchecked
 
     var sendCount: Int { locked { sendCountValue } }
     var receivedJobIds: [EngineJobId] { locked { receivedJobIdsValue } }
+    var receivedRequests: [EngineRequest] { locked { receivedRequestsValue } }
 
     /// К23, К38(вектор сброса), К40(iii): пуш прогресса в обход настоящего движка — тест сам
     /// решает, когда и для какого `jobId` (в том числе чужого/уже завершённого, в том числе
@@ -104,7 +108,10 @@ final class TestEngineXPCService: NSObject, EngineXPCServiceProtocol, @unchecked
         // и его учёт здесь ложно раздувал бы счётчик уникальных jobId внутренним
         // рукопожатием, которое тест вообще не запрашивал явно.
         if case .ping = request {} else {
-            locked { receivedJobIdsValue.append(Self.jobId(of: request)) }
+            locked {
+                receivedJobIdsValue.append(Self.jobId(of: request))
+                receivedRequestsValue.append(request)
+            }
         }
         if let overrideBuilder = locked({ forcedReplyOverride }) {
             respond(overrideBuilder(Self.jobId(of: request)), reply: reply)
@@ -208,6 +215,9 @@ final class TestEngineXPCService: NSObject, EngineXPCServiceProtocol, @unchecked
 final class XPCFixture: NSObject {
     let service: TestEngineXPCService
     let modelCatalog = FakeModelCatalogPort()
+    /// MEE-480: раскладка, из которой клиент строит `AudioRef.fileURL` (инв. 25); каталог
+    /// удаляется вместе с фикстурой.
+    let temporaryLayout = TemporaryFileLayout()
     let client: EngineXPCClient
 
     private let listener: NSXPCListener
@@ -219,6 +229,7 @@ final class XPCFixture: NSObject {
     init(
         service: TestEngineXPCService = TestEngineXPCService(),
         clock: @escaping @Sendable () -> Date = { Date() },
+        recordings: RecordingRepository = AnyIdFinalizedRecordingRepository(),
         wrapCatalog: (FakeModelCatalogPort) -> ModelCatalogPort = { $0 }
     ) {
         self.service = service
@@ -226,7 +237,8 @@ final class XPCFixture: NSObject {
         self.listener = listener
         self.client = EngineXPCClient(
             makeConnection: { NSXPCConnection(listenerEndpoint: listener.endpoint) },
-            modelCatalog: wrapCatalog(modelCatalog), clock: clock
+            modelCatalog: wrapCatalog(modelCatalog), recordings: recordings,
+            fileLayout: temporaryLayout.layout, clock: clock
         )
         super.init()
         listener.delegate = self
