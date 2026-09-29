@@ -27,12 +27,13 @@ extension GRDBTranscriptRepository {
             let segments = try segmentRows.map {
                 try Self.domainSegment(from: $0, entity: StorageEntity.transcript, id: idText)
             }
+            let speakers = try Self.speakers(from: row["speakers_json"], segments: segments, id: idText)
             do {
                 return try Transcript(
                     recordingId: recordingId,
                     language: row["language"], engine: row["engine"], modelVersion: row["model_version"],
                     createdAt: EpochTime.date(fromSeconds: row["created_at"]), segments: segments,
-                    speakers: Self.syntheticSpeakers(from: segments)
+                    speakers: speakers
                 )
             } catch {
                 throw StorageErrorMapping.map(error, entity: StorageEntity.transcript, id: idText)
@@ -105,10 +106,25 @@ extension GRDBTranscriptRepository {
         )
     }
 
-    /// СТРОКА (см. шапку `GRDBTranscriptRepository.swift`): схема не хранит
-    /// `Transcript.speakers` — восстанавливается по одному `Speaker` на различный
-    /// непустой `cluster`, `embedding`/`embeddingModelVersion` пусты, `totalMs` —
-    /// сумма длительностей его сегментов.
+    /// Инвариант 38 (C-010 v28, IR-153): `speakers` — из `speakers_json` целиком и без
+    /// пересчёта, порядок прежний; с сегментами не сверяются — это делает сам
+    /// `Transcript.init` (C-003, инвариант 9), и его отказ сводится к `dataCorrupted`
+    /// у вызывающего. Нечитаемый JSON — `dataCorrupted(entity: "Transcript", …)`
+    /// (инвариант 21). `NULL` — строка до `v1-slice3`: единственное исключение,
+    /// `speakers` строятся по сегментам.
+    private static func speakers(
+        from speakersJSON: String?, segments: [Transcript.Segment], id: String
+    ) throws -> [Transcript.Speaker] {
+        guard let speakersJSON else { return syntheticSpeakers(from: segments) }
+        return try StorageJSON.decodeFromText(
+            [Transcript.Speaker].self, from: speakersJSON, entity: StorageEntity.transcript, id: id
+        )
+    }
+
+    /// СТРОКА (см. шапку `GRDBTranscriptRepository.swift`): только для строки с
+    /// `speakers_json IS NULL` (до `v1-slice3`) — по одному `Speaker` на различный
+    /// непустой `cluster` по возрастанию, `embedding`/`embeddingModelVersion` пусты,
+    /// `totalMs` — сумма длительностей его сегментов (инвариант 38, исключение).
     private static func syntheticSpeakers(from segments: [Transcript.Segment]) -> [Transcript.Speaker] {
         var totalByCluster: [Int: Int] = [:]
         for segment in segments {

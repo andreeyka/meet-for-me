@@ -124,7 +124,10 @@ extension SchemaMigrationTests {
             ExpectedColumn("engine", "TEXT", notNull: true),
             ExpectedColumn("model_version", "TEXT", notNull: true),
             ExpectedColumn("language", "TEXT", notNull: true),
-            ExpectedColumn("created_at", "INTEGER", notNull: true)
+            ExpectedColumn("created_at", "INTEGER", notNull: true),
+            // IR-153 (MEE-490), C-010 v28 §3.2, миграция v1-slice3 (MEE-505): колонка добавлена
+            // ПОСЛЕ v1-slice1 тем же путём, что `raw_payload_json` выше; допускает `NULL`.
+            ExpectedColumn("speakers_json", "TEXT")
         ]),
         ("segments", [
             ExpectedColumn("id", "INTEGER"),
