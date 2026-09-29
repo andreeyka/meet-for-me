@@ -156,7 +156,7 @@ final class FailureEventTests: XCTestCase {
             let fixture = FailureFixture()
             let published = await fixture.asyncView(for: AppFacadeError.underlying(view))
             XCTAssertEqual(published, view, view.code)
-            XCTAssertEqual(AppFacadeImpl.errorView(for: .underlying(view)), view, view.code)
+            XCTAssertEqual(AppFacadeError.underlying(view).view, view, view.code)
         }
     }
 

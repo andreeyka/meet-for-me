@@ -23,9 +23,10 @@
 //  `AppFacadeImpl+Recording.swift`, М — `AppFacadeImpl+Models.swift`, Н — `AppFacadeImpl+Jobs.swift`
 //  (MEE-420). Заглушек `notImplemented` больше нет.
 //
-//  `status()` — честно неполная реализация: `activeSession` собирается из `SessionCoordinator`
-//  и потока `AudioCapturePort.events()` (группа Р, К42, MEE-449 — `AppFacadeImpl+ActiveSession.
-//  swift`), `upcoming`/счётчики задач — нули/пусто до групп Н/К.
+//  `status()`: `activeSession` собирается из `SessionCoordinator` и потока
+//  `AudioCapturePort.events()` (группа Р, К42, MEE-449 — `AppFacadeImpl+ActiveSession.swift`);
+//  `runningJobs` и счётчики задач — из `JobQueue` по инв. 35 C-016 v13 (MEE-477,
+//  `AppFacadeImpl+JobObservation.swift`).
 //  `connectors` тоже оставлено пустым, хотя группа О (МЕЕ-441) реализована: ни один критерий
 //  плана (К39-К41) не требует его наполнения, а `ConnectorHealthView.displayName`/
 //  `needsAuthorization` не из чего честно собрать за пределами одного источника — см.
@@ -84,6 +85,10 @@ public actor AppFacadeImpl: AppFacade {
     /// MEE-456: последнее известное фасаду состояние каждой нетерминальной сессии —
     /// `AppFacadeImpl+SessionObservation.swift`.
     var knownSessionStates: [UUID: MeetingStatus] = [:]
+
+    /// C-016 v13, инв. 35 (MEE-477): тип и доли задач очереди по `JobQueue.events()` —
+    /// `AppFacadeImpl+JobObservation.swift`.
+    var jobObservation = JobObservation()
 
     public init(
         meetings: MeetingRepository,
@@ -276,12 +281,14 @@ public actor AppFacadeImpl: AppFacade {
         // slice1Defaults на этот один расчёт то же умолчание, что settingsRepository() ещё
         // не читало ни разу (§2.1: «строки нет — берётся значение из slice1Defaults»).
         let currentSettings = (try? await settings()) ?? AppSettings.slice1Defaults
+        // Инв. 35 (а)–(г), C-016 v13: очередь из `JobQueue`, отказ чтения — пусто и нули.
+        let queue = await jobQueueSummary()
         return AppStatus(
             activeSession: await activeSessionView(),
             upcoming: upcomingItems,
-            runningJobs: [],
-            pendingJobCount: 0,
-            failedJobCount: 0,
+            runningJobs: queue.runningJobs,
+            pendingJobCount: queue.pendingJobCount,
+            failedJobCount: queue.failedJobCount,
             permissionsReady: permissionsReady(snapshot: snapshot, settings: currentSettings),
             connectors: [],
             updatedAt: clock()
