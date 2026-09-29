@@ -82,15 +82,17 @@ final class JobQueueEventsInv35Tests: XCTestCase {
 
     /// MEE-488, п. 1: поздний `progressed` после `succeeded` — пара забыта, `job(id:)` вернёт
     /// завершённую задачу; она не идёт, поэтому доля не публикуется. Барьер — `cancelled`.
+    /// Статус в фейке меняется вслед за событием (MEE-495, п. 3): до `succeeded` задача идёт.
     func test_35e_lateProgressAfterSucceededIsDropped() async {
         let fixture = FacadeV11Fixture()
-        let job = inv35Job(.transcode(recordingId: UUID()), status: .succeeded)
+        let job = inv35Job(.transcode(recordingId: UUID()), status: .running)
         fixture.jobQueue.setJobs([job])
         let stream = fixture.facade.events()
 
         fixture.jobQueue.emit(.started(jobId: job.id, type: .transcode))
         fixture.jobQueue.emit(.progressed(jobId: job.id, fraction: 0.2))
         fixture.jobQueue.emit(.succeeded(jobId: job.id, type: .transcode))
+        fixture.jobQueue.setJobs([inv35Job(job.payload, status: .succeeded, id: job.id)])
         fixture.jobQueue.emit(.progressed(jobId: job.id, fraction: 0.9))
         fixture.jobQueue.emit(.cancelled(jobId: UUID(), type: .transcode))
         let events = await collectEvents(stream, count: 6, timeoutSeconds: 1)
