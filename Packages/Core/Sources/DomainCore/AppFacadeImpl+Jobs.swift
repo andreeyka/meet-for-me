@@ -16,9 +16,8 @@
 //   • Инв. 19, §3.1: `JobQueueError` — `jobs.<имя case>`, `permissionKind` — `nil`.
 //
 //  ЧТО КОНТРАКТ НЕ НАЗЫВАЕТ, И КАК ЭТО РЕШЕНО ЗДЕСЬ (вопросы — в отчёте MEE-420).
-//   • Очередь фасаду до этой задачи не передавалась. `AppFacadeImpl.init` получил параметр
-//     `jobQueue: JobQueue? = nil` — по умолчанию `nil`, чтобы не ломать композиционный
-//     корень `App/` (зона DEV-1). Без очереди команды группы Н отказывают `notAllowed`.
+//   • Очередь — обязательный параметр `AppFacadeImpl.init` (C-016 v11 инв. 31, IR-144,
+//     MEE-462): режима «фасад без очереди» и отказа `notAllowed` на этот случай нет.
 //   • `retryJob` несуществующей задачи — `jobs.unknownJob`, тот же код, что отдаёт
 //     `cancelJob` от очереди (`JobQueueEngine.cancel`). Статус прежней задачи не
 //     проверяется: контракт не говорит, какие статусы допускают повтор. Подача повторяет
@@ -33,7 +32,7 @@ extension AppFacadeImpl {
     // MARK: - Чтение
 
     public func jobs(status: JobStatus) async throws -> [Job] {
-        let queue = try requireJobQueue()
+        let queue = jobQueue
         do {
             return try await queue.jobs(status: status)
         } catch {
@@ -44,7 +43,7 @@ extension AppFacadeImpl {
     // MARK: - Команды обработки (группа Н)
 
     public func retranscribe(recordingId: UUID, profileId: String) async throws -> UUID {
-        let queue = try requireJobQueue()
+        let queue = jobQueue
         let missing: [ModelDescriptor]
         do {
             missing = try await modelCatalog.missingModels(profileId: profileId)
@@ -63,7 +62,7 @@ extension AppFacadeImpl {
     }
 
     public func cancelJob(id: UUID) async throws {
-        let queue = try requireJobQueue()
+        let queue = jobQueue
         do {
             try await queue.cancel(jobId: id)
         } catch {
@@ -73,7 +72,7 @@ extension AppFacadeImpl {
     }
 
     public func retryJob(id: UUID) async throws -> UUID {
-        let queue = try requireJobQueue()
+        let queue = jobQueue
         let previous: Job?
         do {
             previous = try await queue.job(id: id)
@@ -93,13 +92,6 @@ extension AppFacadeImpl {
     }
 
     // MARK: - Вспомогательное
-
-    private func requireJobQueue() throws -> JobQueue {
-        guard let jobQueue else {
-            throw AppFacadeError.notAllowed(reason: "AppFacadeImpl: очередь задач (JobQueue) фасаду не передана")
-        }
-        return jobQueue
-    }
 
     private func submit(_ submission: JobSubmission, to queue: JobQueue) async throws -> UUID {
         do {

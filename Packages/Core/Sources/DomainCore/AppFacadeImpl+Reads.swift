@@ -246,19 +246,4 @@ extension AppFacadeImpl {
             throw wrapUnexpected(error)
         }
     }
-
-    // MARK: - Ещё не реализовано — см. заголовок AppFacadeImpl.swift
-
-    /// MEE-449: остановлено на вопросе к контракту, а не догадкой. `MeetingDetail.attendees:
-    /// [PersonRecord]` и `organizer: PersonRecord?` (C-016 §1) не из чего собрать через C-010:
-    /// строки `attendees`/`organizer_person_id` хранилище ведёт, но ни `MeetingRepository`, ни
-    /// `PersonRepository` их не читают, а `MeetingEvent.Attendee` (C-001) несёт имя/адрес, не
-    /// `PersonRecord.id`; участник без адреса недостижим через `person(email:)` вовсе.
-    /// Вопрос — в отчёте MEE-449 (IR через РП).
-    public func meeting(id: UUID) async throws -> MeetingDetail? {
-        throw AppFacadeError.notAllowed(
-            reason: "AppFacadeImpl.meeting(id:) — ждёт ответа архитектора: источник MeetingDetail.attendees/"
-                + "organizer в C-010 не назван (MEE-449)"
-        )
-    }
 }

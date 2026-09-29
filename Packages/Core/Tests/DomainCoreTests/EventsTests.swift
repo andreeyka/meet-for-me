@@ -141,6 +141,8 @@ final class EventsTests: XCTestCase {
             attribution: attribution,
             settings: repositories.settings,
             connectors: repositories.connectors,
+            jobQueue: FakeJobQueue(),
+            fileLayout: FileLayout(root: FileManager.default.temporaryDirectory),
             clock: { Date() }
         )
         return Fixture(facade: facade, repositories: repositories, attribution: attribution, permissions: permissions)
@@ -261,7 +263,9 @@ final class EventsTests: XCTestCase {
             speakerProfiles: repositories.speakerProfiles, permissions: permissions,
             modelCatalog: FakeModelCatalogPort(), calendar: FakeCalendarPort(),
             sessionCoordinator: NoOpSessionCoordinator(), attribution: FakeAttributionPort(),
-            settings: repositories.settings, connectors: repositories.connectors, clock: { Date() }
+            settings: repositories.settings, connectors: repositories.connectors,
+            jobQueue: FakeJobQueue(), fileLayout: FileLayout(root: FileManager.default.temporaryDirectory),
+            clock: { Date() }
         )
         // Исходно (slice1Defaults.recordingPolicy == .ask) notifications уже обязательно и
         // denied — permissionsReady стартует .notReady. Переход в .auto делает его не
