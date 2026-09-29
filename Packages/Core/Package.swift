@@ -65,7 +65,9 @@ var targets: [Target] = [
     .target(name: "CalendarHub", dependencies: ["DomainCore"]),
     .target(name: "EngineKit", dependencies: ["DomainCore"]),
     .target(name: "GigaAM", dependencies: ["EngineKit"]),
-    .target(name: "ModelManager", dependencies: ["DomainCore"]),
+    // resources: встроенная копия catalog.json (C-014 §2 «Встроенная копия лежит в бандле
+    // приложения»; К1 перечня MEE-429, MEE-442). Новой зависимости нет — только ресурс.
+    .target(name: "ModelManager", dependencies: ["DomainCore"], resources: [.copy("Resources/catalog.json")]),
     .target(name: "Attribution", dependencies: ["DomainCore", "EngineKit"]),
 
     // resources: эталонные manifest.json и transcript.v1.json — экземпляры спецификации
