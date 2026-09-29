@@ -134,6 +134,8 @@ extension AppFacadeError {
     /// `permissionKind` (инв. 23, §3.1): у `facade.permissionRequired` — «тем `PermissionKind`,
     /// который несёт сам случай», у прочих — `nil`. `switch` без `default:` — новый случай
     /// `AppFacadeError` обязан стать ошибкой компиляции, а не молча уехать в чужой код.
+    /// `message` и `recoverySuggestion` — русские тексты для человека (§3.1: не стабильны,
+    /// критериев на них нет; MEE-492) — `AppFacadeError+Text.swift`.
     public var view: AppErrorView {
         let name: String
         var permissionKind: PermissionKind?
@@ -150,8 +152,8 @@ extension AppFacadeError {
         case .jobFailed: name = "jobFailed"
         }
         return AppErrorView(
-            code: "facade.\(name)", message: String(describing: self),
-            recoverySuggestion: nil, permissionKind: permissionKind
+            code: "facade.\(name)", message: humanMessage,
+            recoverySuggestion: humanRecoverySuggestion, permissionKind: permissionKind
         )
     }
 }

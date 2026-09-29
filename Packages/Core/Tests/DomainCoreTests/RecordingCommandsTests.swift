@@ -151,7 +151,7 @@ final class RecordingCommandsTests: XCTestCase {
             ),
             CaptureErrorRow(
                 error: .systemAudioDenied, expectedCode: "capture.systemAudioDenied",
-                expectedPermissionKind: .systemAudioRecording, expectsRecoverySuggestion: false
+                expectedPermissionKind: .systemAudioRecording, expectsRecoverySuggestion: true
             ),
             CaptureErrorRow(
                 error: .systemAudioPromptTimedOut(waitedSeconds: 45),
@@ -160,7 +160,7 @@ final class RecordingCommandsTests: XCTestCase {
             ),
             CaptureErrorRow(
                 error: .microphoneDenied, expectedCode: "capture.microphoneDenied",
-                expectedPermissionKind: .microphone, expectsRecoverySuggestion: false
+                expectedPermissionKind: .microphone, expectsRecoverySuggestion: true
             ),
             CaptureErrorRow(
                 error: .microphonePromptTimedOut(waitedSeconds: 45),
@@ -203,7 +203,7 @@ final class RecordingCommandsTests: XCTestCase {
                 XCTAssertEqual(view.permissionKind, row.expectedPermissionKind, "\(row.error)")
                 XCTAssertEqual(
                     view.recoverySuggestion != nil, row.expectsRecoverySuggestion,
-                    "\(row.error): §3.1 — recoverySuggestion обязан говорить вместо permissionKind у PromptTimedOut"
+                    "\(row.error): §3.1 — совет у PromptTimedOut и у отказа права (MEE-492)"
                 )
             }
         }
@@ -223,18 +223,17 @@ final class RecordingCommandsTests: XCTestCase {
             XCTAssertEqual(id, meetingId.uuidString)
         }
 
-        // Бэклог РП: сообщение alreadyRecording обязано нести sessionId — для диагностики.
+        // MEE-492 (решение РП по ревью #213): текст для человека — без sessionId; стабилен `code`.
         let busySessionId = UUID()
         let fixture2 = makeFacade()
         fixture2.sessionCoordinator.failStartRecording(with: .alreadyRecording(sessionId: busySessionId))
         do {
             _ = try await fixture2.facade.startRecording(meetingId: nil)
             XCTFail("ожидался notAllowed")
-        } catch AppFacadeError.notAllowed(let reason) {
-            XCTAssertTrue(
-                reason.contains(busySessionId.uuidString),
-                "сообщение обязано нести sessionId занятой сессии для диагностики: \(reason)"
-            )
+        } catch let error as AppFacadeError {
+            XCTAssertEqual(error.view.code, "facade.notAllowed")
+            XCTAssertFalse(error.view.message.contains(busySessionId.uuidString), error.view.message)
+            XCTAssertFalse(error.view.message.isEmpty)
         }
 
         let fixture3 = makeFacade()
@@ -244,6 +243,21 @@ final class RecordingCommandsTests: XCTestCase {
             XCTFail("ожидался notAllowed")
         } catch AppFacadeError.notAllowed {
             // ожидаемо
+        }
+
+        // MEE-492: `sessionIsTerminal` — тоже без UUID и `rawValue` состояния.
+        let terminalSessionId = UUID()
+        let fixture4 = makeFacade()
+        fixture4.sessionCoordinator.failStartRecording(
+            with: .sessionIsTerminal(sessionId: terminalSessionId, state: .skipped)
+        )
+        do {
+            _ = try await fixture4.facade.startRecording(meetingId: nil)
+            XCTFail("ожидался notAllowed")
+        } catch let error as AppFacadeError {
+            XCTAssertEqual(error.view.code, "facade.notAllowed")
+            XCTAssertFalse(error.view.message.contains(terminalSessionId.uuidString), error.view.message)
+            XCTAssertFalse(error.view.message.contains(MeetingStatus.skipped.rawValue), error.view.message)
         }
     }
 }

@@ -65,6 +65,9 @@ enum MeetingsListContent: Equatable, Sendable {
     case loaded([MeetingListItem])
     /// Чтение бросило (`AppFacadeError`): ошибка на месте списка, окно не падает.
     case failed(AppErrorView)
+    /// Чтение бросило не `AppFacadeError` (`CancellationError`): ошибкой не показывается (C-016 v13
+    /// инв. 37), но и «Загрузка…» навсегда не остаётся — «прервано» с повтором (MEE-492 п. C1).
+    case interrupted
 }
 
 /// Записи без встречи за неделю — вторая половина списка (строки `MeetingRow.Kind.adHoc`).
@@ -72,6 +75,7 @@ enum AdHocListContent: Equatable, Sendable {
     case loading
     case loaded([RecordingSummary])
     case failed(AppErrorView)
+    case interrupted
 }
 
 enum MeetingDetailContent: Equatable, Sendable {
@@ -80,6 +84,7 @@ enum MeetingDetailContent: Equatable, Sendable {
     case loaded(MeetingDetail)
     case notFound
     case failed(AppErrorView)
+    case interrupted
 }
 
 enum TranscriptContent: Equatable, Sendable {
@@ -89,6 +94,51 @@ enum TranscriptContent: Equatable, Sendable {
     /// Фасад ответил `nil`: транскрипта (или выбранной версии) нет.
     case missing
     case failed(AppErrorView)
+    case interrupted
+}
+
+// MARK: - Что перечитывает «Повторить загрузку»
+
+/// Отказ (`failed`) и прерванное чтение (`interrupted`) — оба ждут повтора (MEE-492 п. C1).
+extension MeetingsListContent {
+    var needsRetry: Bool {
+        switch self {
+        case .failed, .interrupted: return true
+        case .loading, .loaded: return false
+        }
+    }
+}
+
+extension AdHocListContent {
+    var needsRetry: Bool {
+        switch self {
+        case .failed, .interrupted: return true
+        case .loading, .loaded: return false
+        }
+    }
+}
+
+extension MeetingDetailContent {
+    var needsRetry: Bool {
+        switch self {
+        case .failed, .interrupted: return true
+        case .none, .loading, .loaded, .notFound: return false
+        }
+    }
+}
+
+extension TranscriptContent {
+    var needsRetry: Bool {
+        switch self {
+        case .failed, .interrupted: return true
+        case .none, .loading, .loaded, .missing: return false
+        }
+    }
+}
+
+/// Текст заглушки прерванного чтения: не ошибка (C-016 v13 инв. 37), но с кнопкой повтора.
+enum InterruptedReadText {
+    static let placeholder = "Загрузка прервана"
 }
 
 /// Снимок очереди для блока «Состояние обработки»: `jobs(status:)` — по записи через

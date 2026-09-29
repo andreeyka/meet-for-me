@@ -91,8 +91,9 @@ extension AppFacadeImpl {
             throw wrap(JobQueueError.unknownJob(id))
         }
         guard Self.retryableStatuses.contains(previous.status) else {
-            throw AppFacadeError.notAllowed(reason: "retryJob: повтор допустим только из failed и cancelled, "
-                + "задача \(id) — \(previous.status.rawValue)")
+            // MEE-492: `reason` — текст для человека (§3.1), без имени метода и идентификатора.
+            throw AppFacadeError.notAllowed(reason: "Повторить можно только упавшую или отменённую задачу, "
+                + "а эта \(Self.statusText(previous.status))")
         }
         let currentSettings = try await settings()
         let submission = JobSubmission.standard(previous.payload, runAfter: clock()).applyingPowerRule(currentSettings)
@@ -105,6 +106,17 @@ extension AppFacadeImpl {
 
     /// Инв. 32: статусы C-013, из которых повтор допустим.
     private static let retryableStatuses: Set<JobStatus> = [.failed, .cancelled]
+
+    /// Хвост `reason` отказа `retryJob`: «а эта …».
+    private static func statusText(_ status: JobStatus) -> String {
+        switch status {
+        case .pending: return "ещё ждёт очереди"
+        case .running: return "ещё выполняется"
+        case .succeeded: return "уже выполнена"
+        case .failed: return "упала"
+        case .cancelled: return "отменена"
+        }
+    }
 
     /// Инв. 12 (IR-144): запись есть и `.finalized`, иначе `notFound` / `notAllowed`.
     private func requireFinalizedRecording(_ recordingId: UUID) async throws {
@@ -120,9 +132,7 @@ extension AppFacadeImpl {
             throw AppFacadeError.notFound(entity: "Recording", id: recordingId.uuidString)
         }
         guard record.status == .finalized else {
-            throw AppFacadeError.notAllowed(
-                reason: "retranscribe: запись \(recordingId) не завершена (\(record.status.rawValue))"
-            )
+            throw AppFacadeError.notAllowed(reason: "Запись ещё не завершена — распознать её заново пока нельзя")
         }
     }
 

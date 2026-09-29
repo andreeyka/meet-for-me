@@ -53,7 +53,7 @@ final class AdHocRecordingsEventsTests: XCTestCase {
 
     // MARK: - (б) смена RecordingStatus
 
-    private func makeFacade(coordinator: ObservedTestSessionCoordinator) -> AppFacadeImpl {
+    func makeFacade(coordinator: ObservedTestSessionCoordinator) -> AppFacadeImpl {
         let repositories = InMemoryRepositories()
         return AppFacadeImpl(
             meetings: repositories.meetings, recordings: repositories.recordings,
@@ -68,11 +68,89 @@ final class AdHocRecordingsEventsTests: XCTestCase {
         )
     }
 
-    private func snapshot(_ sessionId: UUID, state: MeetingStatus, estimate: Double = 1) -> SessionSnapshot {
+    func snapshot(
+        _ sessionId: UUID, state: MeetingStatus, recordingId: UUID? = UUID(), origin: SessionOrigin = .adHoc,
+        meetingId: UUID? = nil, estimate: Double = 1
+    ) -> SessionSnapshot {
         SessionSnapshot(
-            sessionId: sessionId, origin: .adHoc, meetingId: nil, state: state, recordingId: UUID(),
+            sessionId: sessionId, origin: origin, meetingId: meetingId, state: state, recordingId: recordingId,
             target: nil, estimate: estimate, enteredStateAt: epoch, updatedAt: epoch
         )
+    }
+
+    func meetingsChangedCount(_ events: [AppEvent]) -> Int {
+        events.filter { $0 == .meetingsChanged }.count
+    }
+
+    func statusChangedCount(_ events: [AppEvent]) -> Int {
+        events.filter { if case .statusChanged = $0 { return true } else { return false } }.count
+    }
+
+    /// Вектор (б) при автостарте (MEE-492): сессия сама вошла в `.recording`, затем в `stopping` —
+    /// на каждую смену `RecordingStatus` ровно один `meetingsChanged`, и каждый раньше своего
+    /// `statusChanged`.
+    func test_inv34b_autoStartRecordingThenStoppingPublishesMeetingsChangedPerRecordingStatus() async {
+        let coordinator = ObservedTestSessionCoordinator()
+        let facade = makeFacade(coordinator: coordinator)
+        let stream = facade.events()
+        let sessionId = UUID()
+        let recordingId = UUID()
+
+        coordinator.send(.session(snapshot(sessionId, state: .recording, recordingId: recordingId, origin: .scheduled)))
+        coordinator.send(.session(snapshot(sessionId, state: .stopping, recordingId: recordingId, origin: .scheduled)))
+
+        let events = await collectEvents(stream, count: 5, timeoutSeconds: 1)
+        XCTAssertEqual(events.count, 4, "\(events)")
+        XCTAssertEqual(events.first, .meetingsChanged, "\(events)")
+        XCTAssertEqual(events.dropFirst(2).first, .meetingsChanged, "stopping: \(events)")
+        XCTAssertEqual(statusChangedCount(events), 2, "\(events)")
+    }
+
+    /// Ad-hoc сессия (встречи нет): смена состояния без смены `RecordingStatus` `meetingsChanged` не
+    /// даёт (MEE-492) — `processing → ready`, запись уже `finalized`. Каждая смена даёт свой
+    /// `statusChanged`. Строки встреч — `AdHocRecordingsEventsTests+MeetingRow.swift`.
+    func test_inv34b_adHocSessionChangeWithoutRecordingStatusChangePublishesNoMeetingsChanged() async {
+        let coordinator = ObservedTestSessionCoordinator()
+        let facade = makeFacade(coordinator: coordinator)
+        let stream = facade.events()
+        let sessionId = UUID()
+        let recordingId = UUID()
+
+        for state in [MeetingStatus.recording, .stopping, .processing, .ready] {
+            coordinator.send(.session(snapshot(sessionId, state: state, recordingId: recordingId)))
+        }
+
+        let events = await collectEvents(stream, count: 8, timeoutSeconds: 1)
+        XCTAssertEqual(statusChangedCount(events), 4, "по одному на смену состояния: \(events)")
+        XCTAssertEqual(meetingsChangedCount(events), 3, "recording, stopping, finalized — и только: \(events)")
+        XCTAssertNotEqual(events.last, .meetingsChanged, "ready после processing: \(events)")
+    }
+
+    /// Stop даёт `meetingsChanged` один раз (MEE-492): команда и снимок сессии о входе в `stopping`
+    /// — одно изменение, в каком бы порядке они ни пришли.
+    func test_inv34b_stopRecordingAndSessionSnapshotPublishMeetingsChangedOnce() async throws {
+        for snapshotFirst in [false, true] {
+            let coordinator = ObservedTestSessionCoordinator()
+            let facade = makeFacade(coordinator: coordinator)
+            let stream = facade.events()
+            let recordingId = UUID()
+            let stopping = snapshot(UUID(), state: .stopping, recordingId: recordingId)
+            var events: [AppEvent] = []
+
+            if snapshotFirst {
+                coordinator.send(.session(stopping))
+                events += await collectEvents(stream, count: 2, timeoutSeconds: 1)
+                try await facade.stopRecording(recordingId: recordingId)
+            } else {
+                try await facade.stopRecording(recordingId: recordingId)
+                coordinator.send(.session(stopping))
+            }
+            events += await collectEvents(stream, count: 4 - events.count, timeoutSeconds: 1)
+
+            XCTAssertEqual(meetingsChangedCount(events), 1, "snapshotFirst=\(snapshotFirst): \(events)")
+            XCTAssertEqual(events.first, .meetingsChanged, "snapshotFirst=\(snapshotFirst): \(events)")
+            XCTAssertEqual(statusChangedCount(events), 2, "snapshotFirst=\(snapshotFirst): \(events)")
+        }
     }
 
     /// Смена состояния сессии, с которой `RecordingStatus` записи меняется (`stopping`, дальше

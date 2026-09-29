@@ -143,18 +143,19 @@ struct MeetingsWindowState: Equatable, Sendable {
     }
 
     /// Кнопка «Повторить загрузку»: перечитывается только то, что отказало (MEE-487 п. 8) —
-    /// отказ карточки не сбрасывает загруженный список, и наоборот.
+    /// отказ карточки не сбрасывает загруженный список, и наоборот. Прерванное чтение
+    /// (`interrupted`, MEE-492 п. C1) перечитывается так же, как отказавшее.
     mutating func retryReads() -> [MeetingsLoad] {
         var loads: [MeetingsLoad] = []
-        if case .failed = list {
+        if list.needsRetry {
             list = .loading
             loads.append(reloadList())
         }
-        if case .failed = adHocList {
+        if adHocList.needsRetry {
             adHocList = .loading
             loads.append(reloadAdHoc())
         }
-        if case .failed = detail {
+        if detail.needsRetry {
             detail = .loading
             loads += reloadDetail()
         }
@@ -166,7 +167,7 @@ struct MeetingsWindowState: Equatable, Sendable {
 
     /// «Повторить загрузку» у отказа чтения транскрипта (MEE-487 п. 6).
     mutating func retryTranscript() -> [MeetingsLoad] {
-        guard case .failed = transcript else { return [] }
+        guard transcript.needsRetry else { return [] }
         return reloadTranscript(resetting: true)
     }
 

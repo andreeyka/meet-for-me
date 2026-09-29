@@ -57,6 +57,8 @@ struct TranscriptPresentation: Equatable, Sendable {
     /// Заглушка вместо текста.
     var placeholder: String?
     var isError = false
+    /// У заглушки есть «Повторить загрузку»: отказ или прерванное чтение (MEE-492 п. C1).
+    var canRetry = false
     /// Блок транскрипта вообще не показывается (запись не выбрана или транскрипта нет —
     /// тогда показан блок обработки).
     var isHidden = true
@@ -76,6 +78,10 @@ struct TranscriptPresentation: Equatable, Sendable {
         case .failed(let error):
             placeholder = FacadeErrorText.line(error)
             isError = true
+            canRetry = true
+        case .interrupted:
+            placeholder = InterruptedReadText.placeholder
+            canRetry = true
         case .loaded(let view):
             segments = view.segments.map(TranscriptSegmentRow.init(segment:))
             if segments.isEmpty { placeholder = "В транскрипте нет речи" }

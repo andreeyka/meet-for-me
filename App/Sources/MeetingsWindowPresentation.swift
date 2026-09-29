@@ -64,9 +64,14 @@ struct MeetingRow: Equatable, Sendable, Identifiable {
 struct MeetingsListPresentation: Equatable, Sendable {
     var weekTitle: String
     var rows: [MeetingRow] = []
-    /// Заглушка на месте таблицы: загрузка, пустая неделя или ошибка списка встреч.
+    /// Заглушка на месте таблицы: загрузка, пустая неделя, прерванное чтение или ошибка списка.
     var placeholder: String?
     var isError = false
+    /// У заглушки есть «Повторить загрузку»: отказ или прерванное чтение (MEE-492 п. C1).
+    var canRetry = false
+    /// Отказ чтения встреч при загруженных ad-hoc записях — строка НАД таблицей, в таблице
+    /// ad-hoc строки (MEE-492 п. C2).
+    var meetingsError: String?
     /// Отказ второго чтения (`adHocRecordings`) при загруженных встречах — строка под таблицей.
     var adHocError: String?
     var selectedRowId: String?
@@ -74,28 +79,53 @@ struct MeetingsListPresentation: Equatable, Sendable {
     init(state: MeetingsWindowState) {
         weekTitle = MeetingsFormat.weekTitle(state.week)
         selectedRowId = state.selectedRow.map(Self.rowId)
-        switch state.list {
-        case .loading:
+        switch (state.list, state.adHocList) {
+        case (.loading, _):
             placeholder = "Загрузка…"
-        case .failed(let error):
+        case (.failed(let error), .loaded(let recordings)) where !recordings.isEmpty:
+            // Встречи отказали, ad-hoc пришли — показываем, что есть, а отказ — над таблицей.
+            meetingsError = FacadeErrorText.line(error)
+            fillRows(meetings: [], adHoc: recordings)
+        case (.interrupted, .loaded(let recordings)) where !recordings.isEmpty:
+            // То же при прерванном чтении встреч (ревью РП #213).
+            meetingsError = "Встречи: " + InterruptedReadText.placeholder.lowercased()
+            fillRows(meetings: [], adHoc: recordings)
+        case (.failed(let error), _):
             placeholder = FacadeErrorText.line(error)
             isError = true
-        case .loaded(let items):
-            rows = items.map(MeetingRow.init(item:))
-            switch state.adHocList {
-            case .loaded(let recordings):
-                rows += recordings.map(MeetingRow.init(adHoc:))
-            case .failed(let error):
-                adHocError = "\(MeetingRow.adHocTitle): " + FacadeErrorText.line(error)
-            case .loading:
-                break
-            }
-            // Равные начала — по id строки: порядок не прыгает между перечитываниями.
-            rows.sort { ($0.start, $0.id) < ($1.start, $1.id) }
+            canRetry = true
+        case (.interrupted, _):
+            placeholder = InterruptedReadText.placeholder
+            canRetry = true
+        case (.loaded(let items), let adHoc):
+            let (recordings, error) = Self.adHocPart(adHoc)
+            adHocError = error
+            fillRows(meetings: items, adHoc: recordings)
             if rows.isEmpty, adHocError == nil {
-                placeholder = state.adHocList == .loading ? "Загрузка…" : "За эту неделю встреч нет"
+                placeholder = adHoc == .loading ? "Загрузка…" : "За эту неделю встреч нет"
             }
         }
+    }
+
+    /// Ad-hoc часть недели при загруженных встречах: строки и строка отказа под таблицей.
+    private static func adHocPart(_ content: AdHocListContent) -> (rows: [RecordingSummary], error: String?) {
+        switch content {
+        case .loaded(let loaded):
+            return (loaded, nil)
+        case .failed(let error):
+            return ([], "\(MeetingRow.adHocTitle): " + FacadeErrorText.line(error))
+        case .interrupted:
+            return ([], "\(MeetingRow.adHocTitle): " + InterruptedReadText.placeholder.lowercased())
+        case .loading:
+            return ([], nil)
+        }
+    }
+
+    /// Строки обоих видов одной осью. Равные начала — по id строки: порядок не прыгает между
+    /// перечитываниями.
+    private mutating func fillRows(meetings: [MeetingListItem], adHoc: [RecordingSummary]) {
+        rows = meetings.map(MeetingRow.init(item:)) + adHoc.map(MeetingRow.init(adHoc:))
+        rows.sort { ($0.start, $0.id) < ($1.start, $1.id) }
     }
 
     static func rowId(_ kind: MeetingRow.Kind) -> String {
@@ -133,9 +163,11 @@ struct MeetingCardPresentation: Equatable, Sendable {
     var attendees: [String] = []
     var recordings: [RecordingRow] = []
     var selectedRecordingId: UUID?
-    /// Заглушка вместо карточки: ничего не выбрано, загрузка, нет встречи, ошибка.
+    /// Заглушка вместо карточки: ничего не выбрано, загрузка, нет встречи, прервано, ошибка.
     var placeholder: String?
     var isError = false
+    /// У заглушки есть «Повторить загрузку» (MEE-492 п. C1).
+    var canRetry = false
     var actionError: String?
     /// Отказ чтения очереди (`jobs(status:)`) — блок обработки неполон, карточка остаётся.
     var processingError: String?
@@ -150,6 +182,10 @@ struct MeetingCardPresentation: Equatable, Sendable {
             } else if case .failed(let error) = state.adHocList {
                 placeholder = FacadeErrorText.line(error)
                 isError = true
+                canRetry = true
+            } else if state.adHocList == .interrupted {
+                placeholder = InterruptedReadText.placeholder
+                canRetry = true
             } else {
                 placeholder = "Загрузка…"
             }
@@ -166,6 +202,10 @@ struct MeetingCardPresentation: Equatable, Sendable {
         case .failed(let error):
             placeholder = FacadeErrorText.line(error)
             isError = true
+            canRetry = true
+        case .interrupted:
+            placeholder = InterruptedReadText.placeholder
+            canRetry = true
         case .loaded(let detail):
             fill(detail, state: state)
         }

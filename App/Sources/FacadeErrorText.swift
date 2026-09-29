@@ -38,11 +38,9 @@ enum FacadeErrorText {
         }
     }
 
-    /// «Ошибка: <текст>. <совет>» — одна строка. Без совета, но с правом (`permissionKind`,
-    /// C-016 §3.1: отказ вызван одним системным правом) — называем право.
+    /// «Ошибка: <текст>. <совет>» — одна строка. Оба текста — фасада (C-016 v13 инв. 37, §3.1):
+    /// своих подписей поверх UI не дописывает (MEE-492 — снята подпись права к ошибке).
     static func line(_ view: AppErrorView) -> String {
-        let suggestion = view.recoverySuggestion
-            ?? view.permissionKind.map { "Нужно право: \(permissionTitle($0)) — Системные настройки" }
-        return "Ошибка: \(view.message)\(suggestion.map { ". \($0)" } ?? "")"
+        "Ошибка: \(view.message)\(view.recoverySuggestion.map { ". \($0)" } ?? "")"
     }
 }

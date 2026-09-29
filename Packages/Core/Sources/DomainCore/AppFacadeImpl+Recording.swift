@@ -27,7 +27,7 @@ extension AppFacadeImpl {
         }
         let sessions = await sessionCoordinator.sessions()
         guard !sessions.contains(where: { $0.state == .recording }) else {
-            throw AppFacadeError.notAllowed(reason: "уже идёт запись другой сессии")
+            throw AppFacadeError.notAllowed(reason: "Уже идёт другая запись — сначала остановите её")
         }
         do {
             let recordingId = try await sessionCoordinator.startRecording(meetingId: meetingId, now: clock())
@@ -35,8 +35,13 @@ extension AppFacadeImpl {
             // ровно здесь — публикация после успешного старта, не до (отказавший старт не
             // менял состояния, которому стоило бы сообщать подписчикам).
             // Инв. 34 (а), IR-146: у записи появилась строка (`status == .recording`) — при любом
-            // `meetingId`, до возврата и не позже `statusChanged`.
-            publish(.meetingsChanged)
+            // `meetingId`, до возврата и не позже `statusChanged`. Снимок сессии о том же входе в
+            // `.recording` второго `meetingsChanged` не даст (MEE-492).
+            if let meetingId { recordingMeetingIds[recordingId] = meetingId }
+            publishMeetingsChangedIfRowsChanged(
+                recordingId: recordingId, recordingStatus: .recording,
+                meetingId: meetingId, meetingStatus: meetingId.map { _ in .recording }
+            )
             publish(.statusChanged(await status()))
             return recordingId
         } catch let error as SessionError {
@@ -56,8 +61,13 @@ extension AppFacadeImpl {
             try await sessionCoordinator.stopRecording(recordingId: recordingId, now: clock())
             // К33: симметрично со стороной старта — публикация после успешной остановки.
             // Инв. 34 (б): `RecordingStatus` записи сменился на `stopping` — `meetingsChanged` не позже
-            // `statusChanged` для того же изменения.
-            publish(.meetingsChanged)
+            // `statusChanged` для того же изменения. Снимок сессии о том же входе в `stopping` —
+            // пришёл он раньше или придёт позже — второго `meetingsChanged` не даст (MEE-492).
+            let meetingId = recordingMeetingIds[recordingId]
+            publishMeetingsChangedIfRowsChanged(
+                recordingId: recordingId, recordingStatus: .stopping,
+                meetingId: meetingId, meetingStatus: meetingId.map { _ in .stopping }
+            )
             publish(.statusChanged(await status()))
         } catch let error as SessionError {
             throw wrap(error)
@@ -81,7 +91,10 @@ extension AppFacadeImpl {
     public func skipMeeting(meetingId: UUID) async throws {
         do {
             try await sessionCoordinator.skip(meetingId: meetingId, now: clock())
-            publish(.meetingsChanged)
+            // MEE-492: снимок `skipped` той же встречи второго `meetingsChanged` не даст.
+            publishMeetingsChangedIfRowsChanged(
+                recordingId: nil, recordingStatus: nil, meetingId: meetingId, meetingStatus: .skipped
+            )
             publish(.statusChanged(await status()))
         } catch let error as SessionError {
             throw wrap(error)
@@ -100,12 +113,14 @@ extension AppFacadeImpl {
             return .notFound(entity: "Prompt", id: promptId.uuidString)
         case .noRecordingInProgress(let recordingId):
             return .notFound(entity: "Recording", id: recordingId.uuidString)
-        case .alreadyRecording(let sessionId):
-            return .notAllowed(reason: "цель уже записывается другой сессией \(sessionId.uuidString)")
+        // MEE-492 (решение РП по ревью #213): `reason` — текст для человека (§3.1), без UUID
+        // сессии и `rawValue` состояния. Журнала в domain-core нет; диагностика — по `code`.
+        case .alreadyRecording:
+            return .notAllowed(reason: "Этот созвон уже записывается")
         case .nothingToRecord:
-            return .notAllowed(reason: "нет звучащей цели для записи")
-        case .sessionIsTerminal(let sessionId, let state):
-            return .notAllowed(reason: "сессия \(sessionId.uuidString) в терминальном состоянии \(state.rawValue)")
+            return .notAllowed(reason: "Нечего записывать: ни одно приложение созвона сейчас не звучит")
+        case .sessionIsTerminal:
+            return .notAllowed(reason: "Эта запись уже завершена")
         case .capture(let captureError):
             return wrap(captureError)
         }
@@ -130,24 +145,27 @@ extension AppFacadeImpl {
     func wrap(_ error: CaptureError) -> AppFacadeError {
         let description = String(describing: error)
         let name = description.split(separator: "(", maxSplits: 1).first.map(String.init) ?? description
-        let permissionKind: PermissionKind?
-        let recoverySuggestion: String?
+        var permissionKind: PermissionKind?
+        var message = description
+        var recoverySuggestion: String?
         switch error {
         case .microphoneDenied:
             permissionKind = .microphone
-            recoverySuggestion = nil
         case .systemAudioDenied:
             permissionKind = .systemAudioRecording
-            recoverySuggestion = nil
         case .systemAudioPromptTimedOut, .microphonePromptTimedOut:
-            permissionKind = nil
             recoverySuggestion = "Начните запись заново и ответьте на системный запрос вовремя"
         default:
-            permissionKind = nil
-            recoverySuggestion = nil
+            break
+        }
+        if let permissionKind {
+            // MEE-492 (ревью РП): отказ права — тот же человеческий текст и совет, что у
+            // `facade.permissionRequired`, а не имя случая.
+            message = AppFacadeError.permissionMissingText(permissionKind)
+            recoverySuggestion = AppFacadeError.permissionSuggestion(permissionKind)
         }
         return .underlying(AppErrorView(
-            code: "capture.\(name)", message: description,
+            code: "capture.\(name)", message: message,
             recoverySuggestion: recoverySuggestion, permissionKind: permissionKind
         ))
     }
