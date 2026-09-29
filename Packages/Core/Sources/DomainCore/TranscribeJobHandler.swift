@@ -25,9 +25,11 @@ public struct TranscribeJobHandler: JobHandler {
     public let type: JobType = .transcribe
 
     private let port: TranscriptionServicePort
+    private let transcripts: TranscriptRepository
 
-    public init(port: TranscriptionServicePort) {
+    public init(port: TranscriptionServicePort, transcripts: TranscriptRepository) {
         self.port = port
+        self.transcripts = transcripts
     }
 
     public func run(
@@ -41,15 +43,28 @@ public struct TranscribeJobHandler: JobHandler {
             recordingId: recordingId, profileId: profileId, language: language,
             wantWordTimestamps: true, diarizeSystemChannel: true
         )
+        let transcript: Transcript
         do {
-            _ = try await port.transcribe(spec) { transcriptionProgress in
+            transcript = try await port.transcribe(spec) { transcriptionProgress in
                 progress(transcriptionProgress.fraction)
             }
-            return .success
         } catch let error as TranscriptionServiceError {
             return Self.outcome(for: error, attempts: job.attempts)
         } catch {
             return .permanentFailure(error: "\(error)")
+        }
+        return await save(transcript)
+    }
+
+    /// C-012 v11 (IR-145): `transcribe` возвращает значение и не сохраняет, очередь результат
+    /// не интерпретирует (C-013) — сохраняет обработчик, один раз, и только затем `.success`.
+    /// Отказ `save` — состояние системы (диск, база), а не свойство запроса: `.retry(after: 30)`.
+    private func save(_ transcript: Transcript) async -> JobOutcome {
+        do {
+            _ = try await transcripts.save(transcript)
+            return .success
+        } catch {
+            return .retry(after: 30, error: "save: \(error)")
         }
     }
 
@@ -69,6 +84,8 @@ public struct TranscribeJobHandler: JobHandler {
         case .messageTooLarge(let bytes):
             return .permanentFailure(error: "messageTooLarge(\(bytes))")
         case .invalidRequest(let message):
+            return .permanentFailure(error: message)
+        case .recordingNotReady(_, let message):
             return .permanentFailure(error: message)
         case .engineFailure(let code, let message):
             return outcomeForEngineFailure(code: code, message: message)

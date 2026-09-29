@@ -43,6 +43,7 @@ final class ErrorDictionaryEngineFacadeTests: XCTestCase {
             (.messageTooLarge(bytes: 1), "messageTooLarge"),
             (.invalidRequest(message: "m"), "invalidRequest"),
             (.modelsNotReady(profileId: "p", message: "m"), "modelsNotReady"),
+            (.recordingNotReady(recordingId: UUID(), message: "m"), "recordingNotReady"),
             (.timedOut(seconds: 5), "timedOut"),
             (.cancelled, "cancelled")
         ]

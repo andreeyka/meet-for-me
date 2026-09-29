@@ -174,8 +174,12 @@ extension CompositionRoot {
     static func registerHandlers(_ partial: PartialGraph, facade: AppFacadeImpl) async {
         let storage = partial.context.storage
         await registerOrCrash(
-            TranscribeJobHandler(port: TemporaryTranscriptionServiceStub()), into: partial.jobQueue
+            TranscribeJobHandler(
+                port: TemporaryTranscriptionServiceStub(), transcripts: storage.transcriptRepository()
+            ),
+            into: partial.jobQueue
         )
+        await registerOrCrash(DiarizeJobHandler(), into: partial.jobQueue)
         await registerOrCrash(
             AttributeJobHandler(
                 port: partial.attribution,
