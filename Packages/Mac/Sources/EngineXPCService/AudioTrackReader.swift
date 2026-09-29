@@ -35,6 +35,16 @@
 //  совпал с `AudioRef` (`sampleRate` или число каналов) — `unsupportedRequest(message:)` с
 //  заявленным и найденным значениями. Оба перманентны (C-012 §4); `runtimeFailure` остаётся
 //  только за сбоем самого преобразования (конвертер, буфер), к файлу отношения не имеющим.
+//  «Чтение оборвалось» — и бросок `AVAudioFile.read`, и пустое чтение (`frameLength == 0`) до
+//  конца вырезки: конвертер принимает пустой ответ источника за конец потока, так что без
+//  отказа дорожка молча обрезалась бы. По той же причине невыделенный буфер блока — не конец
+//  потока, а `runtimeFailure` (MEE-491).
+//
+//  ФАЙЛ БЕЗ ЕДИНОГО КАДРА. Заголовок разобран и совпал с `AudioRef`, а `data` пуст
+//  (`length == 0`): `read(AudioRef)` отдаёт `[]` без ошибки — файл открылся и прочитан до
+//  конца, ни одна причина инв. 17 не наступила. Вырезка из такого файла — `unsupportedRequest`
+//  по инв. 16 (ни одного кадра после обрезки). Контракт этот случай для `read(AudioRef)` не
+//  называет; вопрос архитектору — IR-154 (MEE-491).
 
 import AVFoundation
 import EngineKit
@@ -48,10 +58,21 @@ public enum AudioTrackReader {
     /// Кадров исходной частоты на блок чтения: секунда при 48 кГц.
     static let blockFrames: AVAudioFrameCount = 48_000
 
+    /// Выделение буфера блока исходной частоты. Отказ `AVAudioPCMBuffer` синтетическим файлом
+    /// не вызвать, поэтому тест подменяет выделение отказом (MEE-491).
+    typealias BufferAllocator = (AVAudioFormat, AVAudioFrameCount) -> AVAudioPCMBuffer?
+
+    static let systemAllocator: BufferAllocator = { AVAudioPCMBuffer(pcmFormat: $0, frameCapacity: $1) }
+
     /// Вся дорожка, от кадра 0 файла до конца (`offsetMs` ничего не отрезает — инв. 16).
+    /// Файл без единого кадра — `[]` без ошибки (шапка, «Файл без единого кадра»).
     public static func read(_ ref: AudioRef) throws -> [Float] {
+        try read(ref, allocate: systemAllocator)
+    }
+
+    static func read(_ ref: AudioRef, allocate: @escaping BufferAllocator) throws -> [Float] {
         let file = try open(ref)
-        return try convert(file, frames: 0..<file.length, path: ref.fileURL.path)
+        return try convert(file, frames: 0..<file.length, path: ref.fileURL.path, allocate: allocate)
     }
 
     /// Вырезка `startMs..<endMs` на шкале записи (инв. 16).
@@ -62,7 +83,7 @@ public enum AudioTrackReader {
             startMs: slice.startMs, endMs: slice.endMs, offsetMs: ref.offsetMs,
             sampleRate: ref.sampleRate, fileLength: file.length
         )
-        return try convert(file, frames: range, path: ref.fileURL.path)
+        return try convert(file, frames: range, path: ref.fileURL.path, allocate: systemAllocator)
     }
 
     // MARK: - Шкала (инв. 16)
@@ -123,7 +144,8 @@ public enum AudioTrackReader {
     // MARK: - Преобразование
 
     private static func convert(
-        _ file: AVAudioFile, frames: Range<AVAudioFramePosition>, path: String
+        _ file: AVAudioFile, frames: Range<AVAudioFramePosition>, path: String,
+        allocate: @escaping BufferAllocator
     ) throws -> [Float] {
         guard !frames.isEmpty else { return [] }
         file.framePosition = frames.lowerBound
@@ -136,7 +158,9 @@ public enum AudioTrackReader {
             )
         }
         converter.downmix = true
-        let source = BlockSource(file: file, remaining: AVAudioFramePosition(frames.count))
+        let source = BlockSource(
+            file: file, remaining: AVAudioFramePosition(frames.count), path: path, allocate: allocate
+        )
         return try convert(from: source, with: converter, into: target, path: path)
     }
 
@@ -169,9 +193,10 @@ public enum AudioTrackReader {
                 inputStatus.pointee = .endOfStream
                 return nil
             }
-            if readError != nil {
-                // Чтение оборвалось посреди файла — инв. 17: `audioUnreadable`.
-                throw EngineError.audioUnreadable(path: path)
+            if let readError {
+                // Отказ источника уже назван по инв. 17 (`BlockSource.next`): `audioUnreadable`
+                // за обрыв чтения, `runtimeFailure` за невыделенный буфер.
+                throw readError
             }
             if status == .error {
                 let reason = conversionError?.localizedDescription ?? "неизвестная ошибка"
@@ -186,14 +211,29 @@ public enum AudioTrackReader {
 }
 
 /// Источник блоков исходной частоты для `AVAudioConverter`: каждый вызов — новый буфер (конвертер
-/// вправе держать предыдущий), конец — пустое чтение либо исчерпанный остаток вырезки.
-private final class BlockSource {
+/// вправе держать предыдущий), конец — достигнутый `AVAudioFile.length` либо исчерпанный остаток
+/// вырезки. Всё прочее — отказ, а не конец: `nil` конвертер принял бы за конец потока.
+final class BlockSource {
     let file: AVAudioFile
     private(set) var remaining: AVAudioFramePosition?
+    private let path: String
+    private let allocate: AudioTrackReader.BufferAllocator
+    private let readBlock: BlockReader
 
-    init(file: AVAudioFile, remaining: AVAudioFramePosition?) {
+    /// Чтение блока из файла. Пустое чтение раньше `length` синтетическим CAF не вызвать (на
+    /// обрезанном файле Core Audio бросает), поэтому тест подменяет чтение пустым (MEE-491).
+    typealias BlockReader = (AVAudioFile, AVAudioPCMBuffer, AVAudioFrameCount) throws -> Void
+
+    init(
+        file: AVAudioFile, remaining: AVAudioFramePosition?, path: String,
+        allocate: @escaping AudioTrackReader.BufferAllocator = AudioTrackReader.systemAllocator,
+        readBlock: @escaping BlockReader = { try $0.read(into: $1, frameCount: $2) }
+    ) {
         self.file = file
         self.remaining = remaining
+        self.path = path
+        self.allocate = allocate
+        self.readBlock = readBlock
     }
 
     var expectedFrames: AVAudioFramePosition? {
@@ -202,6 +242,10 @@ private final class BlockSource {
         return min(remaining, tail)
     }
 
+    /// `nil` — только конец: кадров до `length` (и до конца вырезки) не осталось. Невыделенный
+    /// буфер — `runtimeFailure`; бросок чтения и пустое чтение раньше конца — `audioUnreadable`
+    /// (инв. 17, MEE-491).
+    ///
     /// Конец потока определяется по `AVAudioFile.length`, а не по ошибке чтения: чтение за
     /// концом файла Core Audio отдаёт ошибкой, и её вид зависит от версии ОС (`eofErr` −39 на
     /// macOS 27, `_GenericObjCError` 0 на macOS 14). У CAF с длиной −1 `length` выводится из
@@ -212,11 +256,18 @@ private final class BlockSource {
         frames = min(frames, AVAudioFramePosition(AudioTrackReader.blockFrames))
         guard frames > 0 else { return nil }
         let capacity = AVAudioFrameCount(frames)
-        guard let buffer = AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: capacity) else {
-            return nil
+        guard let buffer = allocate(file.processingFormat, capacity) else {
+            throw EngineError.runtimeFailure(
+                message: "не выделен буфер блока на \(capacity) кадров: \(path)"
+            )
         }
-        try file.read(into: buffer, frameCount: capacity)
-        guard buffer.frameLength > 0 else { return nil }
+        do {
+            try readBlock(file, buffer, capacity)
+        } catch {
+            throw EngineError.audioUnreadable(path: path)
+        }
+        // Пустое чтение до конца вырезки — обрыв чтения, инв. 17 (не конец потока).
+        guard buffer.frameLength > 0 else { throw EngineError.audioUnreadable(path: path) }
         if let remaining { self.remaining = remaining - AVAudioFramePosition(buffer.frameLength) }
         return buffer
     }

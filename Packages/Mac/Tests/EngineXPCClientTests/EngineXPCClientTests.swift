@@ -19,7 +19,7 @@ final class EngineXPCClientTests: XCTestCase {
     // MARK: - К21: рукопожатие версии протокола
 
     func test_k21_pingPongProtocolVersionMatch() async throws {
-        let fixture = XPCFixture()
+        let fixture = XPCFixture.transportOnly()
         configureReadyProfile(fixture.modelCatalog)
 
         let version = try await fixture.client.ping()
@@ -30,7 +30,7 @@ final class EngineXPCClientTests: XCTestCase {
     func test_k21_protocolVersionMismatchBlocksWorkRequestBeforeSending() async throws {
         let service = TestEngineXPCService()
         service.protocolVersionOverride = EngineWire.protocolVersion + 1
-        let fixture = XPCFixture(service: service)
+        let fixture = XPCFixture.transportOnly(service: service)
         configureReadyProfile(fixture.modelCatalog)
 
         do {
@@ -47,7 +47,7 @@ final class EngineXPCClientTests: XCTestCase {
     // MARK: - К25: превышение размера сообщения ловится до транспорта
 
     func test_k25_oversizedRequestThrowsMessageTooLargeBeforeTransport() async throws {
-        let fixture = XPCFixture()
+        let fixture = XPCFixture.transportOnly()
         configureReadyProfile(fixture.modelCatalog)
         // Рукопожатие сперва, чтобы изолировать счётчик отправок от одного лишнего ping.
         _ = try await fixture.client.ping()
@@ -69,7 +69,7 @@ final class EngineXPCClientTests: XCTestCase {
     // MARK: - К46: modelsNotReady до отправки запроса движку
 
     func test_k46_resolveFailureGivesModelsNotReadyWithoutTransportSend() async throws {
-        let fixture = XPCFixture()
+        let fixture = XPCFixture.transportOnly()
         fixture.modelCatalog.failResolve(.unknownProfile(id: "p1"), forProfileId: "p1")
         _ = try await fixture.client.ping()
         let sendsBeforeAttempt = fixture.service.sendCount
@@ -84,7 +84,7 @@ final class EngineXPCClientTests: XCTestCase {
     }
 
     func test_k46_beginUseFailureGivesModelsNotReadyWithoutTransportSend() async throws {
-        let fixture = XPCFixture()
+        let fixture = XPCFixture.transportOnly()
         configureReadyProfile(fixture.modelCatalog)
         fixture.modelCatalog.forcedBeginUseError = .insufficientDiskSpace(requiredBytes: 1, availableBytes: 0)
         _ = try await fixture.client.ping()
@@ -101,7 +101,7 @@ final class EngineXPCClientTests: XCTestCase {
 
     /// К46 (второй вход): `embed` — тот же порядок, `beginUse` до отправки.
     func test_k46_embedResolveFailureGivesModelsNotReadyWithoutTransportSend() async throws {
-        let fixture = XPCFixture()
+        let fixture = XPCFixture.transportOnly()
         fixture.modelCatalog.failResolve(.unknownProfile(id: "p1"), forProfileId: "p1")
         _ = try await fixture.client.ping()
         let sendsBeforeAttempt = fixture.service.sendCount
@@ -118,7 +118,7 @@ final class EngineXPCClientTests: XCTestCase {
     // MARK: - К53: beginUse/endUse парны на успехе, отказе и обеих команд
 
     func test_k53_transcribeSuccessPairsBeginUseWithEndUse() async throws {
-        let fixture = XPCFixture()
+        let fixture = XPCFixture.transportOnly()
         configureReadyProfile(fixture.modelCatalog)
 
         _ = try await fixture.client.transcribe(makeSpec()) { _ in }
@@ -129,7 +129,7 @@ final class EngineXPCClientTests: XCTestCase {
     }
 
     func test_k53_embedSuccessPairsBeginUseWithEndUse() async throws {
-        let fixture = XPCFixture()
+        let fixture = XPCFixture.transportOnly()
         configureReadyProfile(fixture.modelCatalog, embeddingModelId: "emb-1")
 
         _ = try await fixture.client.embed(recordingId: UUID(), startMs: 0, endMs: 1000, profileId: "p1")
@@ -139,7 +139,7 @@ final class EngineXPCClientTests: XCTestCase {
     }
 
     func test_k53_engineErrorStillReleasesModelUseToken() async throws {
-        let fixture = XPCFixture()
+        let fixture = XPCFixture.transportOnly()
         configureReadyProfile(fixture.modelCatalog)
         fixture.service.forcedTransportFault = (
             code: EngineTransportFault.invalidRequest.rawValue, userInfo: [NSLocalizedDescriptionKey: "boom"]
@@ -173,7 +173,7 @@ final class EngineXPCClientTests: XCTestCase {
     /// обёртку входом, который действительно ломает `requireInt` сегодня: `endMs` вне
     /// представимого диапазона.
     func test_inv11_embedRequestValidationErrorWrappedAsServiceUnavailableNotRawDomainError() async throws {
-        let fixture = XPCFixture()
+        let fixture = XPCFixture.transportOnly()
         configureReadyProfile(fixture.modelCatalog, embeddingModelId: "emb-1")
 
         do {
