@@ -16,7 +16,7 @@ struct ModelJobFixture {
     let queue: FakeJobQueue
     let repositories: InMemoryRepositories
 
-    init(withQueue: Bool = true) {
+    init() {
         let repositories = InMemoryRepositories()
         let catalog = FakeModelCatalogPort()
         let queue = FakeJobQueue()
@@ -36,7 +36,8 @@ struct ModelJobFixture {
             attribution: FakeAttributionPort(),
             settings: repositories.settings,
             connectors: repositories.connectors,
-            jobQueue: withQueue ? queue : nil,
+            jobQueue: queue,
+            fileLayout: FileLayout(root: FileManager.default.temporaryDirectory),
             clock: { Date() }
         )
     }
@@ -197,26 +198,6 @@ final class JobCommandsTests: XCTestCase {
             XCTAssertEqual(submission.conditions.requiresProfileReady, standard.conditions.requiresProfileReady)
             XCTAssertEqual(submission.priority, standard.priority)
             XCTAssertEqual(submission.maxAttempts, standard.maxAttempts)
-        }
-    }
-
-    /// Без очереди каждая команда группы Н отказывает `notAllowed` — и чтение, и три команды.
-    func test_groupNWithoutJobQueueThrowsNotAllowed() async throws {
-        let fixture = ModelJobFixture(withQueue: false)
-        let commands: [(String, () async throws -> Void)] = [
-            ("retranscribe", { _ = try await fixture.facade.retranscribe(recordingId: UUID(), profileId: "p1") }),
-            ("cancelJob", { try await fixture.facade.cancelJob(id: UUID()) }),
-            ("retryJob", { _ = try await fixture.facade.retryJob(id: UUID()) }),
-            ("jobs(status:)", { _ = try await fixture.facade.jobs(status: .failed) })
-        ]
-        for (name, command) in commands {
-            do {
-                try await command()
-                XCTFail("\(name): без очереди — отказ")
-            } catch AppFacadeError.notAllowed {
-            } catch {
-                XCTFail("\(name): ожидался notAllowed, получено \(error)")
-            }
         }
     }
 

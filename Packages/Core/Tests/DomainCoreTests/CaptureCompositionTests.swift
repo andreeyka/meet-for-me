@@ -50,6 +50,8 @@ final class CaptureCompositionTests: XCTestCase {
             settings: repositories.settings,
             connectors: repositories.connectors,
             capture: capture,
+            jobQueue: FakeJobQueue(),
+            fileLayout: FileLayout(root: FileManager.default.temporaryDirectory),
             clock: { [epoch] in epoch }
         )
         return Fixture(facade: facade, repositories: repositories, coordinator: coordinator, capture: capture)

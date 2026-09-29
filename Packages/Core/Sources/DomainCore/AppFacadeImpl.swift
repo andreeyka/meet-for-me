@@ -62,9 +62,11 @@ public actor AppFacadeImpl: AppFacade {
     /// К42 (MEE-449): источник снимков состава захвата и уровней; `nil` — фасад их не
     /// наблюдает, и поля `ActiveSessionView` остаются «ещё не наблюдали» (инв. 27).
     let capture: AudioCapturePort?
-    /// Группа Н (MEE-420): очередь задач; `nil` — команды обработки отказывают `notAllowed`
-    /// (`AppFacadeImpl+Jobs.swift`).
-    let jobQueue: JobQueue?
+    /// Очередь задач — обязательная зависимость (C-016 v11 инв. 31, IR-144): режима «фасад без
+    /// очереди» нет. Нужна командам группы Н и подписке на `JobQueue.events()`.
+    let jobQueue: JobQueue
+    /// Раскладка файлов (C-010 §1): `AudioTrackRef.fileURL` в `meeting(id:)` (IR-142, MEE-462).
+    let fileLayout: FileLayout
     let clock: @Sendable () -> Date
 
     nonisolated let broadcaster = AppEventBroadcaster()
@@ -97,7 +99,8 @@ public actor AppFacadeImpl: AppFacade {
         settings: SettingsRepository,
         connectors: ConnectorRepository,
         capture: AudioCapturePort? = nil,
-        jobQueue: JobQueue? = nil,
+        jobQueue: JobQueue,
+        fileLayout: FileLayout,
         clock: @escaping @Sendable () -> Date = { Date() }
     ) {
         self.meetingRepository = meetings
@@ -114,6 +117,7 @@ public actor AppFacadeImpl: AppFacade {
         self.connectors = connectors
         self.capture = capture
         self.jobQueue = jobQueue
+        self.fileLayout = fileLayout
         self.clock = clock
         // Возврат РП (находка 4): подписка на смену прав живёт весь срок жизни фасада —
         // `permissions.changes()` вызван ЗДЕСЬ, синхронно, до возврата из `init` (`AsyncStream`
@@ -144,12 +148,11 @@ public actor AppFacadeImpl: AppFacade {
             }
         }
         // Инв. 31 (MEE-462): окончательно упавшая задача → `AppEvent.failure` — тот же приём.
-        if let jobEvents = jobQueue?.events() {
-            Task { [weak self] in
-                for await event in jobEvents {
-                    guard let self else { return }
-                    await self.handleJobEvent(event)
-                }
+        let jobEvents = jobQueue.events()
+        Task { [weak self] in
+            for await event in jobEvents {
+                guard let self else { return }
+                await self.handleJobEvent(event)
             }
         }
         // К42 (MEE-449): тот же приём — поток захвата взят синхронно, до возврата из `init`.

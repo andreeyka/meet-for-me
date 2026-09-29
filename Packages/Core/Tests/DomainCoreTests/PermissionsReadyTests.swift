@@ -42,6 +42,8 @@ final class PermissionsReadyTests: XCTestCase {
             attribution: FakeAttributionPort(),
             settings: repositories.settings,
             connectors: repositories.connectors,
+            jobQueue: FakeJobQueue(),
+            fileLayout: FileLayout(root: FileManager.default.temporaryDirectory),
             clock: { Date(timeIntervalSince1970: 0) }
         )
         return Fixture(facade: facade, permissions: permissions)

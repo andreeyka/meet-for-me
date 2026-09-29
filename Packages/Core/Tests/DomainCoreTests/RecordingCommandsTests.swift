@@ -45,6 +45,8 @@ final class RecordingCommandsTests: XCTestCase {
             attribution: FakeAttributionPort(),
             settings: repositories.settings,
             connectors: repositories.connectors,
+            jobQueue: FakeJobQueue(),
+            fileLayout: FileLayout(root: FileManager.default.temporaryDirectory),
             clock: { clock.now() }
         )
         return Fixture(facade: facade, repositories: repositories, sessionCoordinator: sessionCoordinator)

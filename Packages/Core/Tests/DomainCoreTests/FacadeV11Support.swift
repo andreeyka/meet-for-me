@@ -42,6 +42,7 @@ struct FacadeV11Fixture {
             connectors: repositories.connectors,
             capture: capture,
             jobQueue: jobQueue,
+            fileLayout: FileLayout(root: FileManager.default.temporaryDirectory),
             clock: { clock }
         )
     }
@@ -61,6 +62,7 @@ func recordingSession(
 final class V11TestSessionCoordinator: SessionCoordinator, @unchecked Sendable {
     private let lock = NSLock()
     private var snapshots: [SessionSnapshot] = []
+    private var startError: SessionError?
 
     private func locked<Value>(_ body: () -> Value) -> Value {
         lock.lock()
@@ -72,11 +74,19 @@ final class V11TestSessionCoordinator: SessionCoordinator, @unchecked Sendable {
         locked { snapshots = list }
     }
 
+    /// К29: отказ `startRecording`, каким машина сессии отдаёт отказ `AudioCapturePort.start()`.
+    func failStartRecording(with error: SessionError) {
+        locked { startError = error }
+    }
+
     func sessions() async -> [SessionSnapshot] { locked { snapshots } }
     func session(id: UUID) async -> SessionSnapshot? { await sessions().first { $0.sessionId == id } }
     func prompts() async -> [SessionPrompt] { [] }
     func changes() -> AsyncStream<SessionChange> { AsyncStream { _ in } }
-    func startRecording(meetingId: UUID?, now: Date) async throws -> UUID { UUID() }
+    func startRecording(meetingId: UUID?, now: Date) async throws -> UUID {
+        if let error = locked({ startError }) { throw error }
+        return UUID()
+    }
     func stopRecording(recordingId: UUID, now: Date) async throws {}
     func skip(meetingId: UUID, now: Date) async throws {}
     func answer(promptId: UUID, _ answer: SessionPromptAnswer, now: Date) async throws {}

@@ -38,6 +38,8 @@ final class SessionObservationTests: XCTestCase {
             attribution: FakeAttributionPort(),
             settings: repositories.settings,
             connectors: repositories.connectors,
+            jobQueue: FakeJobQueue(),
+            fileLayout: FileLayout(root: FileManager.default.temporaryDirectory),
             clock: { [epoch] in epoch }
         )
     }

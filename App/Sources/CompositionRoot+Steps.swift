@@ -157,7 +157,8 @@ extension CompositionRoot {
             settings: storage.settingsRepository(),
             connectors: storage.connectorRepository(),
             capture: capture,
-            jobQueue: partial.jobQueue
+            jobQueue: partial.jobQueue,
+            fileLayout: partial.context.fileLayout
         )
     }
 

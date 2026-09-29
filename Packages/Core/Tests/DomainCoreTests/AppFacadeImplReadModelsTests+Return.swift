@@ -163,7 +163,9 @@ extension AppFacadeImplReadModelsTests {
             sessionCoordinator: NoOpSessionCoordinator(),
             attribution: FakeAttributionPort(),
             settings: repositories.settings,
-            connectors: repositories.connectors
+            connectors: repositories.connectors,
+            jobQueue: FakeJobQueue(),
+            fileLayout: FileLayout(root: FileManager.default.temporaryDirectory)
         )
 
         do {

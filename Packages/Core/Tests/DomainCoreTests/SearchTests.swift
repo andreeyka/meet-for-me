@@ -31,7 +31,9 @@ final class SearchTests: XCTestCase {
             sessionCoordinator: SearchTestSessionCoordinator(),
             attribution: FakeAttributionPort(),
             settings: repositories.settings,
-            connectors: repositories.connectors
+            connectors: repositories.connectors,
+            jobQueue: FakeJobQueue(),
+            fileLayout: FileLayout(root: FileManager.default.temporaryDirectory)
         )
         return Fixture(facade: facade, repositories: repositories)
     }
