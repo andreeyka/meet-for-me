@@ -109,19 +109,28 @@ final class AdHocRecordingsEventsTests: XCTestCase {
 
     // MARK: - (в) JobEvent.succeeded задачи transcribe
 
+    /// `meetingsChanged` ровно один раз и раньше `statusChanged` того же события (инв. 34 (б), 35 (е));
+    /// `transcriptChanged` нет. `statusChanged` от наблюдения очереди разрешён.
     func test_inv34c_transcribeSucceededPublishesMeetingsChangedAndNoTranscriptChanged() async {
         let fixture = FacadeV11Fixture()
         let stream = fixture.facade.events()
 
         fixture.jobQueue.emit(.succeeded(jobId: UUID(), type: .transcribe))
 
-        let events = await collectEvents(stream, count: 2, timeoutSeconds: 1)
-        XCTAssertEqual(events, [.meetingsChanged])
+        let events = await collectEvents(stream, count: 3, timeoutSeconds: 1)
+        let meetingsChangedIndices = events.indices.filter { events[$0] == .meetingsChanged }
+        XCTAssertEqual(meetingsChangedIndices.count, 1, "meetingsChanged ровно один раз: \(events)")
         XCTAssertFalse(hasTranscriptChanged(events), "новый транскрипт `transcriptChanged` не публикует")
+        let statusChangedIndex = events.firstIndex { if case .statusChanged = $0 { return true } else { return false } }
+        if let meetings = meetingsChangedIndices.first, let status = statusChangedIndex {
+            XCTAssertLessThan(meetings, status, "meetingsChanged раньше statusChanged: \(events)")
+        }
     }
 
-    /// Прочие события очереди не источник: `succeeded` другой задачи, `failed` и `cancelled` `transcribe`
-    /// `meetingsChanged` не дают. Барьер — настоящее `succeeded` `transcribe` в конце.
+    /// Прочие события очереди не источник: `succeeded` другой задачи, `started`, `cancelled` и
+    /// `failed(willRetry: true)` `transcribe` `meetingsChanged` не дают. Барьер — настоящее `succeeded`
+    /// `transcribe` в конце: его `statusChanged` пятый (каждое из пяти событий даёт по одному, инв. 35 (е)),
+    /// до него считаются только `meetingsChanged`.
     func test_inv34c_otherJobEventsDoNotPublishMeetingsChanged() async {
         let fixture = FacadeV11Fixture()
         let stream = fixture.facade.events()
@@ -133,7 +142,26 @@ final class AdHocRecordingsEventsTests: XCTestCase {
         fixture.jobQueue.emit(.failed(jobId: jobId, type: .transcribe, error: "временный", willRetry: true))
         fixture.jobQueue.emit(.succeeded(jobId: jobId, type: .transcribe))
 
-        let events = await collectEvents(stream, count: 3, timeoutSeconds: 1)
+        let events = await collectMeetingsChanged(stream, untilStatusChanges: 5, timeoutSeconds: 1)
         XCTAssertEqual(events, [.meetingsChanged], "ровно одно — на барьере")
     }
+}
+
+/// Только `.meetingsChanged` — до барьера: `untilStatusChanges`-го `statusChanged` (по образцу
+/// `collectStatusChanges` в `SessionObservationTests.swift`, с обратным фильтром).
+private func collectMeetingsChanged(
+    _ stream: AsyncStream<AppEvent>, untilStatusChanges barrier: Int, timeoutSeconds: UInt64 = 5
+) async -> [AppEvent] {
+    let iterator = stream.makeAsyncIterator()
+    var collected: [AppEvent] = []
+    var statusChanges = 0
+    while statusChanges < barrier {
+        guard let event = await nextEventOrNil(iterator, seconds: timeoutSeconds) else { break }
+        switch event {
+        case .meetingsChanged: collected.append(event)
+        case .statusChanged: statusChanges += 1
+        default: continue
+        }
+    }
+    return collected
 }
