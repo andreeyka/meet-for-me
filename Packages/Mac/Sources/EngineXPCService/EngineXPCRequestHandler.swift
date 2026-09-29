@@ -44,9 +44,12 @@
 //  кооперативная (`Task.cancel()`); граница «в течение 5с» (инв. 7) названа контрактом и
 //  MEE-370 «предметом теста реализатора» — не проверяется здесь отдельным таймером.
 //
-//  Ответ САМОЙ команды `.cancel(jobId)` (`reply(nil, nil)`) контрактом не специфицирован —
-//  тот же выбор, что уже сделан `LoopbackEngineTransport.receive` (`.cancel` не кладёт ничего
-//  в `repliesSent`), и единственный настоящий клиент (`sendCancelFrame`) его не читает вовсе.
+//  Ответ САМОЙ команды `.cancel(jobId)` — закодированный `EngineReply.cancelled(jobId)` (инв. 7
+//  C-012, MEE-443; раньше был `reply(nil, nil)`) — для любого `jobId`, в том числе неизвестного
+//  или уже завершённого (инв. 6 — успешный no-op, не отказ). Исходный запрос отменённой задачи
+//  при этом получает свой `.cancelled(jobId)` на СВОЁ реплай-замыкание. Единственный настоящий
+//  клиент (`sendCancelFrame`) ответ на кадр `cancel` не читает (`{ _, _ in }`) — правка его не
+//  задевает.
 
 import DomainCore
 import EngineKit
@@ -121,8 +124,19 @@ public final class EngineXPCRequestHandler: @unchecked Sendable {
                 try await engines.postProcessor.process(payload, progress: progress)
             }, wrap: { .outputs(jobId, $0) })
         case .cancel(let jobId):
+            // MEE-443 (решение архитектора `b6860e82` в MEE-435): инв. 7 C-012 — «после
+            // `cancel(jobId)` сервис … отвечает `cancelled(jobId)`». Прежний `reply(nil, nil)`
+            // нарушал и его, и общее правило §3 («ровно один из двух параметров не nil»).
+            // Отказ кодирования — тем же приёмом, что у `.ping` ниже: транспортный `NSError`,
+            // не молчание.
             cancelIfLive(jobId)
-            reply(nil, nil)
+            do {
+                reply(try EngineWire.encode(EngineReply.cancelled(jobId)), nil)
+            } catch {
+                reply(nil, Self.transportFault(.invalidRequest, [
+                    NSLocalizedDescriptionKey: "кодирование ответа: \(error)"
+                ]))
+            }
         case .ping:
             // Возврат РП по MEE-438 (12:15 UTC): раньше `try?` тихо превращал отказ кодирования
             // `.pong` в `reply(nil, nil)` — то самое нарушение протокола ответа («ни данные, ни

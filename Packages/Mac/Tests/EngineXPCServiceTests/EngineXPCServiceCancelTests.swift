@@ -2,8 +2,9 @@
 //  или уже завершённого `jobId` — успешный no-op; настоящая отмена прерывает фейковый движок
 //  (кооперативно, через `Task.cancel()`) и присылает `.cancelled(jobId)` ИМЕННО на реплай-
 //  замыкание ИСХОДНОГО запроса (не на реплай самой команды `.cancel`, у которой свой,
-//  отдельный вызов `send`). Точная граница «в течение 5с» (инв. 7) контрактом и MEE-370 названа
-//  «предметом теста реализатора» — не проверяется отдельным таймером здесь, только сам факт,
+//  отдельный вызов `send`; на него самого — тоже `.cancelled(jobId)`, MEE-443). Точная
+//  граница «в течение 5с» (инв. 7) контрактом и MEE-370 названа «предметом теста
+//  реализатора» — не проверяется отдельным таймером здесь, только сам факт,
 //  что кооперативная отмена доходит и завершает исходный запрос.
 //
 //  Через `rawServiceProxy`, в обход `EngineXPCClient`: сам клиент (К27/К28, MEE-431) уже
@@ -34,6 +35,19 @@ final class EngineXPCServiceCancelTests: XCTestCase {
         return (jobId, .transcribe(jobId, request))
     }
 
+    /// MEE-443, инв. 7 C-012: реплай САМОЙ команды `cancel(jobId)` — закодированный
+    /// `EngineReply.cancelled(jobId)` (ровно один параметр не nil, §3), не `reply(nil, nil)`.
+    private static func assertCancelledReply(
+        _ data: Data?, _ error: NSError?, jobId: EngineJobId,
+        file: StaticString = #filePath, line: UInt = #line
+    ) {
+        XCTAssertNil(error, "ответ на cancel — не транспортный отказ", file: file, line: line)
+        guard let data else {
+            return XCTFail("ответ на cancel пуст — нарушение §3 и инв. 7", file: file, line: line)
+        }
+        XCTAssertEqual(try? EngineWire.decode(EngineReply.self, from: data), .cancelled(jobId), file: file, line: line)
+    }
+
     // MARK: - Инв. 6: неизвестный jobId — успешный no-op
 
     func test_cancelUnknownJobIdIsSuccessfulNoOp() async {
@@ -42,13 +56,13 @@ final class EngineXPCServiceCancelTests: XCTestCase {
             let (proxy, connection) = fixture.rawServiceProxy()
             defer { connection.invalidate() }
 
-            guard let cancelData = try? EngineWire.encode(EngineRequest.cancel(EngineJobId(rawValue: UUID()))) else {
+            let unknownJobId = EngineJobId(rawValue: UUID())
+            guard let cancelData = try? EngineWire.encode(EngineRequest.cancel(unknownJobId)) else {
                 return XCTFail("не удалось закодировать cancel")
             }
             let (data, error) = await send(proxy, cancelData)
 
-            XCTAssertNil(data)
-            XCTAssertNil(error)
+            Self.assertCancelledReply(data, error, jobId: unknownJobId)
         }
     }
 
@@ -76,8 +90,7 @@ final class EngineXPCServiceCancelTests: XCTestCase {
                 return XCTFail("не удалось закодировать cancel")
             }
             let (cancelData, cancelError) = await send(proxy, cancelFrameData)
-            XCTAssertNil(cancelData)
-            XCTAssertNil(cancelError)
+            Self.assertCancelledReply(cancelData, cancelError, jobId: jobId)
 
             let (data, error) = await originalReply
             XCTAssertNil(error)
@@ -110,8 +123,7 @@ final class EngineXPCServiceCancelTests: XCTestCase {
                 return XCTFail("не удалось закодировать cancel")
             }
             let (cancelData, cancelError) = await send(proxy, cancelFrameData)
-            XCTAssertNil(cancelData)
-            XCTAssertNil(cancelError)
+            Self.assertCancelledReply(cancelData, cancelError, jobId: jobId)
         }
     }
 
@@ -146,7 +158,8 @@ final class EngineXPCServiceCancelTests: XCTestCase {
             guard let cancelData = try? EngineWire.encode(EngineRequest.cancel(requests[1].jobId)) else {
                 return XCTFail("не удалось закодировать cancel")
             }
-            _ = await send(proxy, cancelData)
+            let (cancelReplyData, cancelReplyError) = await send(proxy, cancelData)
+            Self.assertCancelledReply(cancelReplyData, cancelReplyError, jobId: requests[1].jobId)
 
             let (data0, error0) = await reply0
             let (data1, error1) = await reply1
