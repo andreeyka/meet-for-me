@@ -91,6 +91,17 @@ final class EditSegmentTextTests: XCTestCase {
         XCTAssertEqual(
             fixture.repositories.log.count(port: "TranscriptRepository", method: Self.applyTextCorrectionsMethod), 0
         )
+
+        // MEE-448 (сверка покрытия `484179e8`): второй вызов идёт тем же `updateSegmentText`
+        // с `isUserEdited: true` на уже помеченной строке, и текст второй правки применён —
+        // не пропущен, как пропустил бы его `applyTextCorrections` (инв. 32 C-010).
+        let updateCalls = fixture.repositories.log.calls(port: "TranscriptRepository")
+            .filter { $0.method == Self.updateSegmentTextMethod }
+        let second = try XCTUnwrap(updateCalls.last)
+        XCTAssertEqual(second.arguments, [String(fixture.segmentId), "вторая правка", "true"])
+        let row = try await fixture.segmentRow()
+        XCTAssertEqual(row.segment.text, "вторая правка", "текст второй правки применён")
+        XCTAssertTrue(row.isUserEdited)
     }
 
     // MARK: - Приёмка РП 10:35 UTC: неизвестный сегмент → storage.notFound

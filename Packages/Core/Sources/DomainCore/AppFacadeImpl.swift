@@ -44,10 +44,10 @@
 //  `settings()`/`updateSettings()` (группа Ж) реализованы отдельным файлом,
 //  `AppFacadeImpl+Settings.swift` (MEE-425, слито в main после этого PR) —
 //  `AppSettings.slice1Defaults` объявлен (`AppSettings.swift`, IR-105 закрыт C-016 v10).
-//  Группа Д (этот PR) тем не менее использует контрактный литерал
-//  `voiceProfilesEnabled = false` напрямую, в обход `settings()` — см.
-//  `AppFacadeImpl+Attribution.swift`: та работа шла параллельно с MEE-425 и слиянием
-//  сюда не переписана, чтобы не тянуть в этот PR чужие изменения задним числом.
+//  Группа Д берёт `voiceProfilesEnabled` из `settings()` — значение из `SettingsRepository`,
+//  а не литерал (см. `AppFacadeImpl+Attribution.swift` и
+//  `SpeakerAssignmentTests.test_voiceProfilesEnabledIsReadFromSettingsNotHardcoded`);
+//  отказ `settings()` пробрасывается наружу как есть.
 
 import Foundation
 
