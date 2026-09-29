@@ -6,10 +6,12 @@
 //  меню (шапка `StatusMenu.swift`), подписка и таймер переживают это только на объекте,
 //  которым владеет делегат.
 //
-//  Пока идёт запись — опрос `status()` раз в секунду: время записи должно идти, а уровни
-//  (`ActiveSessionView.micLevel`/`systemLevel`) фасад не публикует отдельным
-//  `AppEvent.statusChanged` — только отдаёт в следующем `status()` (`AppFacadeImpl+ActiveSession`,
-//  `.levels` не публикует). Без записи опроса нет: хватает `events()` и обновления на открытии.
+//  Пока идёт запись — тик раз в секунду (MEE-478 п. 5). Время записи тикает локально (`now`),
+//  без похода в фасад. Уровни (`ActiveSessionView.micLevel`/`systemLevel`) фасад отдельным
+//  `AppEvent.statusChanged` не публикует — только в следующем `status()`
+//  (`AppFacadeImpl+ActiveSession`, `.levels` не публикует; вопрос IR-147 п. 3, MEE-476), поэтому
+//  `status()` опрашивается тем же тиком, но только пока меню открыто: закрытому меню уровни не
+//  нужны. Без записи тика нет: хватает `events()` и обновления на открытии.
 //
 //  П7: только `AppFacade`, ни `Storage`, ни движка, ни адаптеров.
 //
@@ -27,6 +29,8 @@ final class MenuBarController: ObservableObject {
     private let facade: AppFacade
     private var eventsTask: Task<Void, Never>?
     private var tickTask: Task<Void, Never>?
+    /// Меню открыто (`StatusMenu` `.onAppear`/`.onDisappear`). Только оно включает опрос `status()`.
+    private var isMenuOpen = false
 
     init(facade: AppFacade) {
         self.facade = facade
@@ -63,6 +67,15 @@ final class MenuBarController: ObservableObject {
         state.apply(status: await facade.status())
         now = Date()
         updateTicker()
+    }
+
+    func menuOpened() {
+        isMenuOpen = true
+        Task { await refresh() }
+    }
+
+    func menuClosed() {
+        isMenuOpen = false
     }
 
     func dismissError() {
@@ -108,7 +121,11 @@ final class MenuBarController: ObservableObject {
                 while !Task.isCancelled {
                     try? await Task.sleep(nanoseconds: 1_000_000_000)
                     guard let self, !Task.isCancelled else { return }
-                    await self.refresh()
+                    if self.isMenuOpen {
+                        await self.refresh()
+                    } else {
+                        self.now = Date()
+                    }
                 }
             }
         } else if !recording, let task = tickTask {

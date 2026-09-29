@@ -1,7 +1,7 @@
 //  StatusMenu — меню-бар (MEE-433 минимум статуса; MEE-473 ручной старт/стоп, активная
 //  сессия, права на запись, отказы, идущие задачи) + пункт «Завершить» (М1, возврат РП — без
-//  Dock-иконки у приложения нет штатного выхода). Окно встреч, просмотр транскрипта,
-//  настройки и полный мастер прав — отдельные задачи; этот файл — не они.
+//  Dock-иконки у приложения нет штатного выхода). Окно встреч и просмотр транскрипта —
+//  `MeetingsWindow*.swift` (MEE-474); настройки и полный мастер прав — отдельные задачи.
 //
 //  Вид ничего не решает сам: что показать и какая команда уходит по нажатию — в
 //  `MenuBarPresentation` (чистая модель, `MenuBarModel.swift`/`MenuBarPresentation.swift`),
@@ -10,7 +10,11 @@
 //  и `.task` внутри него не гарантированно переживает это пересоздание.
 //
 //  `.onAppear` — обновление на каждом открытии меню сверх подписки (наблюдаемость на случай
-//  пропущенного снимка), не `.task(id:)`: тот привязан к разовому условию.
+//  пропущенного снимка), не `.task(id:)`: тот привязан к разовому условию. `.onDisappear`
+//  выключает опрос `status()` на время записи (MEE-478 п. 5, `MenuBarController`).
+//
+//  «Открыть встречи…» — окно «Встречи» (MEE-474), им владеет `AppDelegate`
+//  (`MeetingsWindowPresenter`).
 
 import AppKit
 import DomainCore
@@ -23,6 +27,8 @@ struct StatusMenu: View {
         Group {
             if let menu = appDelegate.menu {
                 StatusMenuContent(controller: menu)
+                Divider()
+                Button("Открыть встречи…") { appDelegate.showMeetings() }
             } else {
                 Text("Запуск…")
             }
@@ -43,7 +49,7 @@ private struct StatusMenuContent: View {
             if let placeholder = presentation.placeholder {
                 Text(placeholder)
             }
-            ForEach(presentation.sessionLines, id: \.self) { Text($0) }
+            ForEach(presentation.sessionLines) { Text($0.text) }
             if let action = presentation.recordingAction {
                 actionButton(action)
             }
@@ -51,10 +57,10 @@ private struct StatusMenuContent: View {
                 Divider()
                 actionButton(action)
             }
-            ForEach(presentation.permissionLines, id: \.self) { Text($0) }
+            ForEach(presentation.permissionLines) { Text($0.text) }
             if !presentation.jobLines.isEmpty {
                 Divider()
-                ForEach(presentation.jobLines, id: \.self) { Text($0) }
+                ForEach(presentation.jobLines) { Text($0.text) }
             }
             if let errorLine = presentation.errorLine {
                 Divider()
@@ -67,9 +73,8 @@ private struct StatusMenuContent: View {
                 Task { await controller.refresh() }
             }
         }
-        .onAppear {
-            Task { await controller.refresh() }
-        }
+        .onAppear { controller.menuOpened() }
+        .onDisappear { controller.menuClosed() }
     }
 
     private func actionButton(_ action: MenuAction) -> some View {
