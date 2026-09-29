@@ -22,7 +22,7 @@ final class EngineXPCServiceEndToEndTests: XCTestCase {
     }
 
     func test_pingReturnsRealServiceVersionAndMatchingProtocolVersion() async throws {
-        let fixture = RealServiceFixture(serviceVersion: "meet-for-me-engine-xpc-test")
+        let fixture = RealServiceFixture.transportOnly(serviceVersion: "meet-for-me-engine-xpc-test")
 
         let version = try await fixture.client.ping()
 
@@ -30,7 +30,7 @@ final class EngineXPCServiceEndToEndTests: XCTestCase {
     }
 
     func test_transcribeSucceedsThroughRealProductionServiceDispatch() async throws {
-        let fixture = RealServiceFixture()
+        let fixture = RealServiceFixture.transportOnly()
         configureReadyServiceProfile(fixture.modelCatalog)
 
         let transcript = try await fixture.client.transcribe(makeSpec()) { _ in }
@@ -40,7 +40,7 @@ final class EngineXPCServiceEndToEndTests: XCTestCase {
     }
 
     func test_embedSucceedsThroughRealProductionServiceDispatch() async throws {
-        let fixture = RealServiceFixture()
+        let fixture = RealServiceFixture.transportOnly()
         configureReadyServiceProfile(fixture.modelCatalog, embeddingModelId: "emb-1")
 
         let vector = try await fixture.client.embed(
@@ -55,7 +55,7 @@ final class EngineXPCServiceEndToEndTests: XCTestCase {
     /// миллисекунды — если бы сервис не нормализовал его сам (полагаясь на то, что вход уже
     /// выровнен), это значение прошло бы насквозь как есть.
     func test_transcriptCreatedAtIsRoundedToMillisecondByRealService() async throws {
-        let fixture = RealServiceFixture()
+        let fixture = RealServiceFixture.transportOnly()
         configureReadyServiceProfile(fixture.modelCatalog)
         let unrounded = Date(timeIntervalSince1970: 1_700_000_000.123_449)
         fixture.transcription.forcedResult = {
@@ -94,7 +94,7 @@ final class EngineXPCServiceEndToEndTests: XCTestCase {
     /// `test_serviceDoesNotPushProgressAfterSendingFinalReply` ниже, минуя эту фильтрацию
     /// клиента (`rawServiceProxy`, видит кадры сервиса как есть).
     func test_progressFlowsFromRealServiceThroughRealClient() async throws {
-        let fixture = RealServiceFixture()
+        let fixture = RealServiceFixture.transportOnly()
         configureReadyServiceProfile(fixture.modelCatalog)
         fixture.transcription.progressScript = [
             .started(stage: .asr), .advanced(stage: .asr, fraction: 0.5), .finished(stage: .asr)
@@ -119,7 +119,7 @@ final class EngineXPCServiceEndToEndTests: XCTestCase {
     /// сервиса, а не по тому, что клиент решил из них показать.
     func test_serviceDoesNotPushProgressAfterSendingFinalReply() async {
         await withDeadline {
-            let fixture = RealServiceFixture()
+            let fixture = RealServiceFixture.transportOnly()
             fixture.transcription.progressScript = [
                 .started(stage: .asr), .advanced(stage: .asr, fraction: 0.5), .finished(stage: .asr)
             ]

@@ -80,6 +80,85 @@ final class JobQueueEventsInv35Tests: XCTestCase {
         XCTAssertEqual(events, [.jobProgressed(jobId: known.id, type: .diarize, fraction: 0.2)])
     }
 
+    /// MEE-488, п. 1: поздний `progressed` после `succeeded` — пара забыта, `job(id:)` вернёт
+    /// завершённую задачу; она не идёт, поэтому доля не публикуется. Барьер — `cancelled`.
+    func test_35e_lateProgressAfterSucceededIsDropped() async {
+        let fixture = FacadeV11Fixture()
+        let job = inv35Job(.transcode(recordingId: UUID()), status: .succeeded)
+        fixture.jobQueue.setJobs([job])
+        let stream = fixture.facade.events()
+
+        fixture.jobQueue.emit(.started(jobId: job.id, type: .transcode))
+        fixture.jobQueue.emit(.progressed(jobId: job.id, fraction: 0.2))
+        fixture.jobQueue.emit(.succeeded(jobId: job.id, type: .transcode))
+        fixture.jobQueue.emit(.progressed(jobId: job.id, fraction: 0.9))
+        fixture.jobQueue.emit(.cancelled(jobId: UUID(), type: .transcode))
+        let events = await collectEvents(stream, count: 6, timeoutSeconds: 1)
+
+        XCTAssertEqual(progressed(events), [0.2])
+        XCTAssertEqual(statusChangedCount(events), 3, "started, succeeded и барьер")
+        XCTAssertEqual(events.count, 4)
+    }
+
+    /// MEE-488, п. 1: без пары `job(id:)` принимается только в `running`; задача в любом
+    /// другом статусе — не публикуется. Барьер — `cancelled`.
+    func test_35e_progressWithoutStartedAcceptsOnlyRunningJob() async {
+        let fixture = FacadeV11Fixture()
+        let statuses: [JobStatus] = [.pending, .succeeded, .failed, .cancelled]
+        let jobs = statuses.map { inv35Job(.transcode(recordingId: UUID()), status: $0) }
+        fixture.jobQueue.setJobs(jobs)
+        let stream = fixture.facade.events()
+
+        for job in jobs {
+            fixture.jobQueue.emit(.progressed(jobId: job.id, fraction: 0.5))
+        }
+        fixture.jobQueue.emit(.cancelled(jobId: UUID(), type: .transcode))
+        let events = await collectEvents(stream, count: 3, timeoutSeconds: 1)
+
+        XCTAssertEqual(progressed(events), [])
+        XCTAssertEqual(events.count, 1, "только барьер")
+        XCTAssertEqual(fixture.jobQueue.callLog.count(port: FakeJobQueue.portName, method: "job(id:)"), jobs.count)
+    }
+
+    /// MEE-488, п. 5: `NaN` первым событием задачи после `started` не публикуется и не
+    /// становится наблюдённой долей: `runningJobs` барьера несёт `0`, а следующее число —
+    /// первое опубликованное.
+    func test_35e_nanAsFirstProgressIsDroppedWithoutTouchingFraction() async {
+        let fixture = FacadeV11Fixture()
+        let job = inv35Job(.transcode(recordingId: UUID()), status: .running)
+        fixture.jobQueue.setJobs([job])
+        let stream = fixture.facade.events()
+
+        fixture.jobQueue.emit(.started(jobId: job.id, type: .transcode))
+        fixture.jobQueue.emit(.progressed(jobId: job.id, fraction: .nan))
+        fixture.jobQueue.emit(.submitted(jobId: UUID(), type: .transcode))
+        fixture.jobQueue.emit(.progressed(jobId: job.id, fraction: 0.004))
+        let events = await collectEvents(stream, count: 4, timeoutSeconds: 1)
+
+        XCTAssertEqual(events.count, 3)
+        guard events.count == 3, case .statusChanged(let barrier) = events[1] else {
+            return XCTFail("пришло \(events)")
+        }
+        XCTAssertEqual(barrier.runningJobs.map(\.fraction), [0])
+        XCTAssertEqual(events[2], .jobProgressed(jobId: job.id, type: .transcode, fraction: 0.004))
+    }
+
+    /// MEE-488, п. 5: `NaN` первым событием задачи без `started` отбрасывается до `job(id:)` —
+    /// в очередь не ходит и не публикуется. Барьер — `cancelled`.
+    func test_35e_nanWithoutStartedSkipsJobLookup() async {
+        let fixture = FacadeV11Fixture()
+        let job = inv35Job(.transcode(recordingId: UUID()), status: .running)
+        fixture.jobQueue.setJobs([job])
+        let stream = fixture.facade.events()
+
+        fixture.jobQueue.emit(.progressed(jobId: job.id, fraction: .nan))
+        fixture.jobQueue.emit(.cancelled(jobId: UUID(), type: .transcode))
+        let events = await collectEvents(stream, count: 2, timeoutSeconds: 1)
+
+        XCTAssertEqual(events.count, 1, "только барьер")
+        XCTAssertEqual(fixture.jobQueue.callLog.count(port: FakeJobQueue.portName, method: "job(id:)"), 0)
+    }
+
     // MARK: - (35е) statusChanged
 
     /// `submitted`, `started`, `succeeded`, `failed`, `cancelled` — по одному `statusChanged`.

@@ -86,13 +86,20 @@ extension AppFacadeImpl {
     /// (д): `type` — из пары `started`; пары нет — `job(id:)`; задачи нет — не публикуется.
     /// Не число — отбрасывается; прочее приводится к `0...1`. Первое по задаче — всегда,
     /// дальше — при приращении не меньше `0.01` к последней опубликованной доле.
+    ///
+    /// Возврат через `job(id:)` принимает только `status == .running` (MEE-488, п. 1):
+    /// поздний `progressed` после `succeeded`/`cancelled`/окончательного `failed` пару уже
+    /// не найдёт, а завершённая задача в очереди есть — без этой проверки доля ушла бы в
+    /// `jobProgressed` и осела бы в `observedFraction` задачи, которой нет в `runningJobs`.
+    /// Цена — одно чтение `job(id:)` на каждый `progressed` неизвестной задачи (MEE-488, п. 1,
+    /// отмечено: пара забывается на завершении, кэша отказов нет).
     private func observeProgress(jobId: UUID, fraction raw: Double) async {
         guard !raw.isNaN else { return }
         let fraction = min(max(raw, 0), 1)
         let type: JobType
         if let known = jobObservation.types[jobId] {
             type = known
-        } else if let job = try? await jobQueue.job(id: jobId) {
+        } else if let job = try? await jobQueue.job(id: jobId), job.status == .running {
             type = job.type
             jobObservation.types[jobId] = type
         } else {
@@ -110,6 +117,13 @@ extension AppFacadeImpl {
     // MARK: - Инв. 35 (а)–(г): сводка очереди для `status()`
 
     /// (г): любое чтение состава бросило — пустой `runningJobs` и нули.
+    ///
+    /// ОТМЕЧЕНО (MEE-488, пп. 2–3), не исправляется:
+    ///  • четыре чтения `jobs(status:)` не атомарны — задача, сменившая статус между ними,
+    ///    может быть учтена дважды или ни разу, и `failedJobCount` на одно событие разойдётся
+    ///    с очередью; следующий `statusChanged` его выправит. Приемлемо.
+    ///  • на каждый вызов читаются все `succeeded`, а `unrepairedFailures` — O(F·C). Цена
+    ///    растёт с историей очереди; замер — отдельно, если история станет заметной.
     func jobQueueSummary() async -> JobQueueSummary {
         do {
             let running = try await jobQueue.jobs(status: .running)
