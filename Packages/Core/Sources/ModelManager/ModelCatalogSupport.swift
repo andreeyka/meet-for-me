@@ -94,17 +94,57 @@ enum Verification {
     case failed(ModelCatalogError)
 }
 
+/// Порядок версий по semver 2.0.0 (C-014 §1: `ModelDescriptor.version` — semver), §11.
+///
+/// MEE-458 п.1: pre-release младше релиза того же ядра (`3.0.0-beta` < `3.0.0`); два
+/// pre-release сравниваются по идентификаторам через точку — числовой числом, числовой
+/// младше буквенно-цифрового, буквенные — строкой ASCII, при равных общих — длиннее старше.
+/// Метаданные сборки (`+…`) в порядке не участвуют. Ядро разной длины (`1.0` против `1.0.0`)
+/// сравнивается как прежде: при равных общих компонентах старше длинное.
 enum ModelVersionOrder {
-    /// «Новее» по semver: числовые компоненты сравниваются числом, прочие — строкой.
     static func isNewer(_ lhs: String, than rhs: String) -> Bool {
-        let left = lhs.split(separator: ".")
-        let right = rhs.split(separator: ".")
-        for (leftPart, rightPart) in zip(left, right) where leftPart != rightPart {
-            if let leftNumber = Int(leftPart), let rightNumber = Int(rightPart) {
-                return leftNumber > rightNumber
-            }
-            return leftPart > rightPart
+        compare(lhs, rhs) == .orderedDescending
+    }
+
+    static func compare(_ lhs: String, _ rhs: String) -> ComparisonResult {
+        let left = split(lhs)
+        let right = split(rhs)
+        let core = compareIdentifiers(left.core, right.core, numericBelowText: false)
+        if core != .orderedSame { return core }
+        switch (left.preRelease, right.preRelease) {
+        case (nil, nil): return .orderedSame
+        case (nil, _): return .orderedDescending
+        case (_, nil): return .orderedAscending
+        case let (leftPre?, rightPre?): return compareIdentifiers(leftPre, rightPre, numericBelowText: true)
         }
-        return left.count > right.count
+    }
+
+    private static func split(_ version: String) -> (core: [Substring], preRelease: [Substring]?) {
+        let withoutBuild = version.split(separator: "+", maxSplits: 1, omittingEmptySubsequences: false).first ?? ""
+        let halves = withoutBuild.split(separator: "-", maxSplits: 1, omittingEmptySubsequences: false)
+        let core = (halves.first ?? "").split(separator: ".")
+        let preRelease = halves.count == 2 ? halves[1].split(separator: ".") : nil
+        return (core, preRelease)
+    }
+
+    /// `numericBelowText`: правило semver §11.4.3 для pre-release; в ядре — прежнее сравнение
+    /// строкой, если хоть одна часть не число.
+    private static func compareIdentifiers(
+        _ left: [Substring], _ right: [Substring], numericBelowText: Bool
+    ) -> ComparisonResult {
+        for (leftPart, rightPart) in zip(left, right) where leftPart != rightPart {
+            switch (Int(leftPart), Int(rightPart)) {
+            case let (leftNumber?, rightNumber?):
+                return leftNumber > rightNumber ? .orderedDescending : .orderedAscending
+            case (_?, nil) where numericBelowText:
+                return .orderedAscending
+            case (nil, _?) where numericBelowText:
+                return .orderedDescending
+            default:
+                return leftPart > rightPart ? .orderedDescending : .orderedAscending
+            }
+        }
+        if left.count == right.count { return .orderedSame }
+        return left.count > right.count ? .orderedDescending : .orderedAscending
     }
 }

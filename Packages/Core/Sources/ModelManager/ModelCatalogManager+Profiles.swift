@@ -22,7 +22,10 @@ extension ModelCatalogManager {
             throw ModelCatalogError.builtInProfileImmutable(id: profile.id)
         }
         guard catalog.models.contains(where: { $0.id == profile.asrModelId }) else {
-            throw ModelCatalogError.unknownModel(id: profile.asrModelId, version: "")
+            // MEE-458 п.2: версии здесь нет ни у кого — профиль называет модель только `id`
+            // (C-014 §3), а в каталоге нет ни одной версии этого `id`. Пустая строка —
+            // «версия не названа», не пропущенное значение; см. `unnamedVersion`.
+            throw ModelCatalogError.unknownModel(id: profile.asrModelId, version: Self.unnamedVersion)
         }
         userProfiles[profile.id] = profile
         hub.yield(.profilesChanged)
@@ -60,7 +63,8 @@ extension ModelCatalogManager {
         var missing: [ModelDescriptor] = []
         for modelId in Self.modelIds(of: profile) where readyBundle(modelId: modelId) == nil {
             guard let descriptor = newestCatalogDescriptor(modelId: modelId) else {
-                throw ModelCatalogError.unknownModel(id: modelId, version: "")
+                // MEE-458 п.2: тот же случай — профиль без версии, каталог без этого `id`.
+                throw ModelCatalogError.unknownModel(id: modelId, version: Self.unnamedVersion)
             }
             missing.append(descriptor)
         }
@@ -68,6 +72,11 @@ extension ModelCatalogManager {
     }
 
     // MARK: - Справки
+
+    /// `version` в `unknownModel`, когда модель названа профилем (только `id`, C-014 §3) и в
+    /// каталоге нет ни одной её версии: взять версию неоткуда. Контракт отдельного значения
+    /// для этого случая не вводит — пустая строка, как и прежде, но названная.
+    static let unnamedVersion = ""
 
     func effectiveProfiles() -> [TranscriptionProfile] {
         let builtIn = catalog.profiles.map { userProfiles[$0.id] ?? $0 }
