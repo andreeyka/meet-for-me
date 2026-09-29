@@ -64,6 +64,8 @@ extension InMemoryMeetingRepository {
         recordings?.reassignFromDeletedMeetings(losing, to: record.event.id)
         meetingOutputs?.reassignFromDeletedMeetings(losing, to: record.event.id)
         commitAbsorbing(record: record, sources: sources, meetingIds: meetingIds)
+        persons?.unlinkMeetings(losing)
+        persons?.linkMeeting(record.event)
     }
 
     /// Все условия отказа шагов (1)-(3), проверенные ДО первой мутации состояния —

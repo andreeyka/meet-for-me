@@ -84,6 +84,8 @@ public final class InMemoryMeetingRepository: MeetingRepository, @unchecked Send
     /// здесь `meeting_outputs`, `save(_:absorbing:)` переносит их на победителя. Ставится
     /// контейнером `InMemoryRepositories`.
     weak var meetingOutputs: InMemoryMeetingOutputRepository?
+    /// Инвариант 36 (C-010 v27): связи «встреча → люди»; ставится контейнером.
+    weak var persons: InMemoryPersonRepository?
 
     public init(log: PortCallLog = PortCallLog()) {
         self.log = log
@@ -177,9 +179,7 @@ public final class InMemoryMeetingRepository: MeetingRepository, @unchecked Send
         self.recordings = recordings
     }
 
-    // Подключение каскада `meetingOutputs` — `InMemoryMeetingRepository+Absorbing.swift`
-    // (тот же файл, что несёт `save(_:absorbing:)`, единственный его потребитель кроме
-    // `delete(meetingIds:)` ниже).
+    // Подключение `meetingOutputs` — в `+Absorbing.swift`, `persons` — в `+Persons.swift`.
 
     // MARK: - Оснастка
 
@@ -264,6 +264,7 @@ public final class InMemoryMeetingRepository: MeetingRepository, @unchecked Send
                 event: record.event, dedupKey: record.dedupKey, status: record.status, sources: sources
             )
         }
+        persons?.linkMeeting(record.event)
     }
 
     /// IR-126 (MEE-372), C-010 v18, инвариант 31 (решение РП, приёмка MEE-384) — то же
@@ -393,5 +394,6 @@ public final class InMemoryMeetingRepository: MeetingRepository, @unchecked Send
         // Инвариант 7: `meeting_outputs` каскадно удаляются (`ON DELETE CASCADE`, не
         // `SET NULL`, в отличие от `recordings`).
         meetingOutputs?.cascadeDelete(meetingIds: Set(meetingIds))
+        persons?.unlinkMeetings(Set(meetingIds))
     }
 }

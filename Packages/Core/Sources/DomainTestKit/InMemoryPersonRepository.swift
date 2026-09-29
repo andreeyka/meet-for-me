@@ -50,6 +50,8 @@ public enum PersonRepositoryMethod: String, Sendable, CaseIterable {
     case me
     case addNameForms
     case nameForms
+    case attendees
+    case organizer
 }
 
 /// Фейк репозитория персон. Всё поведение задаёт тест.
@@ -59,12 +61,17 @@ public final class InMemoryPersonRepository: PersonRepository, @unchecked Sendab
     public static let portName = "PersonRepository"
 
     private let lock = NSLock()
-    private let log: PortCallLog
+    let log: PortCallLog
 
-    private var records: [UUID: PersonRecord] = [:]
-    private var order: [UUID] = []
+    // Internal, не private: `InMemoryPersonRepository+Meetings.swift` (деление по объёму).
+    var records: [UUID: PersonRecord] = [:]
+    var order: [UUID] = []
     /// Инвариант 5: нормализованный (нижний регистр) email → владелец. Один email — один человек.
-    private var emailOwner: [String: UUID] = [:]
+    var emailOwner: [String: UUID] = [:]
+    /// Инвариант 36 (C-010 v27): строки `attendees` и `meetings.organizer_person_id`, которые
+    /// ведёт `InMemoryMeetingRepository` контейнера (`InMemoryPersonRepository+Meetings.swift`).
+    var meetingAttendees: [UUID: [UUID]] = [:]
+    var meetingOrganizers: [UUID: UUID] = [:]
     private var nameFormsByPerson: [UUID: [NameForm]] = [:]
     private var failures: [PersonRepositoryMethod: (id: String?, error: StorageError)] = [:]
 
@@ -75,7 +82,7 @@ public final class InMemoryPersonRepository: PersonRepository, @unchecked Sendab
     /// Журнал, в который пишет этот фейк. Тот же объект, что передали в инициализатор.
     public var callLog: PortCallLog { log }
 
-    private func locked<Value>(_ body: () -> Value) -> Value {
+    func locked<Value>(_ body: () -> Value) -> Value {
         lock.lock()
         defer { lock.unlock() }
         return body()
@@ -115,7 +122,7 @@ public final class InMemoryPersonRepository: PersonRepository, @unchecked Sendab
 
     // MARK: - Оснастка
 
-    private func failureIfAny(_ method: PersonRepositoryMethod, id: String?) -> StorageError? {
+    func failureIfAny(_ method: PersonRepositoryMethod, id: String?) -> StorageError? {
         locked { () -> StorageError? in
             guard let failure = failures[method] else { return nil }
             guard let wanted = failure.id else { return failure.error }
