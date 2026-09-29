@@ -1,4 +1,4 @@
-//  TranscriptRepositorySpeakersMigrationTests — миграция `v1-slice3` и неизменность
+//  SpeakersMigrationV1Slice3Tests — миграция `v1-slice3` и неизменность
 //  `speakers_json` под правками сегментов, C-010 v28 §3.2 и инвариант 38 (IR-153,
 //  MEE-490), MEE-505 критерии 1, 5, 7. Владелец: DEV-2.
 //
@@ -12,7 +12,7 @@ import GRDB
 import DomainCore
 @testable import Storage
 
-final class TranscriptRepositorySpeakersMigrationTests: StorageAsyncTestCase {
+final class SpeakersMigrationV1Slice3Tests: StorageAsyncTestCase {
 
     // MARK: - Критерий 1
 

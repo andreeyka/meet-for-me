@@ -2,7 +2,7 @@
 //  через `transcripts.speakers_json`, C-010 v28 инвариант 38 (IR-153, MEE-490),
 //  MEE-505 критерии 2, 3, 4, 6, 8. Владелец: DEV-2.
 //
-//  Критерии 1, 5, 7 — в `TranscriptRepositorySpeakersMigrationTests.swift`.
+//  Критерии 1, 5, 7 — в `SpeakersMigrationV1Slice3Tests.swift`.
 
 import XCTest
 import GRDB
