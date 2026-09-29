@@ -156,7 +156,8 @@ extension CompositionRoot {
             attribution: partial.attribution,
             settings: storage.settingsRepository(),
             connectors: storage.connectorRepository(),
-            capture: capture
+            capture: capture,
+            jobQueue: partial.jobQueue
         )
     }
 

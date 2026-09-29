@@ -51,6 +51,7 @@ public final class FakeJobQueue: JobQueue, @unchecked Sendable {
     private var recordingDidStartCalls = 0
     private var recordingDidStopCalls = 0
     private var submitFailure: JobQueueError?
+    private var cancelFailure: JobQueueError?
     private var continuations: [AsyncStream<JobEvent>.Continuation] = []
 
     public init(log: PortCallLog = PortCallLog()) {
@@ -90,6 +91,11 @@ public final class FakeJobQueue: JobQueue, @unchecked Sendable {
     /// Идентификатор, который `submit` вернёт `n`-м по счёту, если наперёд ничего не задано.
     public static func deterministicId(_ number: Int) -> UUID {
         InMemoryTranscriptRepository.deterministicId(number)
+    }
+
+    /// Заставить `cancel(jobId:)` бросить заданную ошибку; `nil` снимает отказ (К38 MEE-401).
+    public func failCancel(with error: JobQueueError?) {
+        locked { cancelFailure = error }
     }
 
     /// Заставить `submit` бросить заданную ошибку; `nil` снимает отказ.
@@ -174,11 +180,13 @@ public final class FakeJobQueue: JobQueue, @unchecked Sendable {
 
     public func cancel(jobId: UUID) async throws {
         log.record(port: Self.portName, method: "cancel(jobId:)", arguments: [jobId.uuidString])
-        // Вызов записывается ВСЕГДА, и `unknownJob` фейк не бросает ни на одном входе:
-        // отмена задачи, состава которой тест не задавал, есть незаполненный фейк, а не
-        // утверждение об очереди. Заставить `cancel` отказать тест может тем же способом,
-        // каким это делают другие фейки, — и такого способа здесь нет намеренно: ни один
-        // пункт плана на отказе `cancel` не стоит.
+        // Вызов записывается ВСЕГДА. Сам по себе `unknownJob` фейк не бросает: отмена задачи,
+        // состава которой тест не задавал, есть незаполненный фейк, а не утверждение об
+        // очереди. Отказ задаёт тест явно — `failCancel(with:)` (MEE-420, К38 перечня MEE-401:
+        // `cancelJob` на несуществующей задаче); отказавшая отмена в `cancellations` не попадает.
+        if let failure = locked({ cancelFailure }) {
+            throw failure
+        }
         locked { cancelled.append(jobId) }
     }
 

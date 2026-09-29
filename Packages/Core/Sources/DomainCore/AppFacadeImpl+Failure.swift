@@ -23,7 +23,8 @@
 //  компонент наблюдает «упавшую синхронизацию/задачу/движок» и передаёт её фасаду, по
 //  какому входу (порт, поток, callback) и при каких условиях. В том, что фасад держит
 //  сегодня, такого входа нет: `CalendarPort` отдаёт наружу только `changes()` (встречи, не
-//  результаты фоновой синхронизации), `JobQueue` фасаду не передан (группа Н), к
+//  результаты фоновой синхронизации), `JobQueue` передан фасаду только командам группы Н
+//  (MEE-420; поток `JobQueue.events()` фасад не наблюдает — IR-143, MEE-457), к
 //  `TranscriptionServicePort` фасад не обращается ни одним методом §4. Поэтому
 //  `publishFailure(_:)` — готовый и проверенный механизм без вызывающего в продакшене;
 //  места вызова ждут ответа архитектора (вопрос в отчёте MEE-450), а не выбраны здесь.
@@ -56,9 +57,19 @@ extension AppFacadeImpl {
         case let attributionError as AttributionError: wrapped = wrap(attributionError)
         case let permissionsError as PermissionsError: wrapped = wrap(permissionsError)
         case let serviceError as TranscriptionServiceError: wrapped = wrap(serviceError)
-        default: wrapped = wrapUnexpected(error)
+        default: wrapped = wrapCatalogOrQueue(error)
         }
         return Self.errorView(for: wrapped)
+    }
+
+    /// Источники групп М/Н (MEE-420) — тот же `wrap`, что у их синхронных команд; прочее —
+    /// `app.internalError`. Вынесено из `errorView(for:)` по сложности (SwiftLint), не по смыслу.
+    private func wrapCatalogOrQueue(_ error: Error) -> AppFacadeError {
+        switch error {
+        case let catalogError as ModelCatalogError: return wrap(catalogError)
+        case let queueError as JobQueueError: return wrap(queueError)
+        default: return wrapUnexpected(error)
+        }
     }
 
     // MARK: - `facade.*` (§3.1, строка `AppFacadeError`)

@@ -75,6 +75,7 @@ public final class FakeModelCatalogPort: ModelCatalogPort, @unchecked Sendable {
     var downloadFailures: [ModelKey: ModelCatalogError] = [:]
     var deleteFailures: [ModelKey: ModelCatalogError] = [:]
     var resolveFailures: [String: ModelCatalogError] = [:]
+    var profileFailures: [String: ModelCatalogError] = [:]
 
     /// Отказ `beginUse`, не привязанный к конкретному набору бандлов — контракт уже даёт
     /// естественный отказ `notDownloaded` по состоянию (инвариант 22); это — способ
@@ -198,6 +199,7 @@ public final class FakeModelCatalogPort: ModelCatalogPort, @unchecked Sendable {
     /// инвариант 13 называет его один; необязательные роли инвариантом не покрыты (инв. 9:
     /// «нет в каталоге» для них не ошибка ни на `resolve`, ни здесь).
     public func saveProfile(_ profile: TranscriptionProfile) async throws {
+        if let error = locked({ profileFailures[profile.id] }) { throw error }
         let known = locked { descriptorsByKey.keys.contains { $0.id == profile.asrModelId } }
         guard known else {
             throw ModelCatalogError.unknownModel(id: profile.asrModelId, version: "")
@@ -208,6 +210,7 @@ public final class FakeModelCatalogPort: ModelCatalogPort, @unchecked Sendable {
 
     /// Погашение неизвестного `id` — без эффекта, тем же правилом, что `endUse` (инвариант 23).
     public func deleteProfile(id: String) async throws {
+        if let error = locked({ profileFailures[id] }) { throw error }
         let existed = locked { profilesById.removeValue(forKey: id) != nil }
         if existed { pushEvent(.profilesChanged) }
     }

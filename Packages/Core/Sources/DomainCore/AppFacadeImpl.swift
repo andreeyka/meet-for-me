@@ -18,17 +18,10 @@
 //  «активная сессия» проверяется явным чтением `sessions()`, не сведена в отдельный throw
 //  у фейка/машины на этот случай.
 //
-//  ЧТО НЕ РЕАЛИЗОВАНО ЭТИМ PR, И ПОЧЕМУ ЭТО НЕ НЕДОДЕЛКА. Оставшиеся методы протокола
-//  (группы М/Н плана, «группы М-Х не трогать» — РП, MEE-441) бросают `notImplemented(_:)` —
-//  самоописывающийся отказ, а не молчаливая заглушка: вызвать их сегодня физически некому —
-//  `App/` (композиционный корень, единственное место, что создаёт `AppFacadeImpl`) не
-//  существует ни одним файлом (план MEE-410 §7, слой 3), и до его появления эти методы
-//  мертвы для продакшена, а не только для тестов. Реализация каждой группы — предмет своего
-//  PR, по прямому разрешению постановки МЕЕ-420 («можно разбить фасад на несколько PR по
-//  группам плана»). Группа О (МЕЕ-441) — `AppFacadeImpl+Calendar.swift`; группа П —
-//  `AppFacadeImpl+StorageExport.swift`; группа Ф — `AppFacadeImpl+RenamePerson.swift`;
-//  `skipMeeting` (группа Х, К47) — `AppFacadeImpl+Recording.swift`, рядом со
-//  `startRecording`/`stopRecording` (то же «Команды записи» перечня).
+//  Группы плана MEE-410 реализованы по файлам: О — `AppFacadeImpl+Calendar.swift`, П —
+//  `AppFacadeImpl+StorageExport.swift`, Ф — `AppFacadeImpl+RenamePerson.swift`, Х —
+//  `AppFacadeImpl+Recording.swift`, М — `AppFacadeImpl+Models.swift`, Н — `AppFacadeImpl+Jobs.swift`
+//  (MEE-420). Заглушек `notImplemented` больше нет.
 //
 //  `status()` — честно неполная реализация: `activeSession` собирается из `SessionCoordinator`
 //  и потока `AudioCapturePort.events()` (группа Р, К42, MEE-449 — `AppFacadeImpl+ActiveSession.
@@ -69,6 +62,9 @@ public actor AppFacadeImpl: AppFacade {
     /// К42 (MEE-449): источник снимков состава захвата и уровней; `nil` — фасад их не
     /// наблюдает, и поля `ActiveSessionView` остаются «ещё не наблюдали» (инв. 27).
     let capture: AudioCapturePort?
+    /// Группа Н (MEE-420): очередь задач; `nil` — команды обработки отказывают `notAllowed`
+    /// (`AppFacadeImpl+Jobs.swift`).
+    let jobQueue: JobQueue?
     let clock: @Sendable () -> Date
 
     nonisolated let broadcaster = AppEventBroadcaster()
@@ -101,6 +97,7 @@ public actor AppFacadeImpl: AppFacade {
         settings: SettingsRepository,
         connectors: ConnectorRepository,
         capture: AudioCapturePort? = nil,
+        jobQueue: JobQueue? = nil,
         clock: @escaping @Sendable () -> Date = { Date() }
     ) {
         self.meetingRepository = meetings
@@ -116,6 +113,7 @@ public actor AppFacadeImpl: AppFacade {
         self.settingsRepository = settings
         self.connectors = connectors
         self.capture = capture
+        self.jobQueue = jobQueue
         self.clock = clock
         // Возврат РП (находка 4): подписка на смену прав живёт весь срок жизни фасада —
         // `permissions.changes()` вызван ЗДЕСЬ, синхронно, до возврата из `init` (`AsyncStream`
@@ -154,11 +152,6 @@ public actor AppFacadeImpl: AppFacade {
                 }
             }
         }
-    }
-
-    /// Отказ методов, которых эта часть PR не реализует — см. заголовок файла.
-    func notImplemented(_ method: String, group: String) -> AppFacadeError {
-        .notAllowed(reason: "AppFacadeImpl.\(method) — реализация группы «\(group)» плана MEE-410 ждёт своего PR")
     }
 
     // MARK: - Чтение: сквозные обёртки, дословно однозначные (§«Поведение»)

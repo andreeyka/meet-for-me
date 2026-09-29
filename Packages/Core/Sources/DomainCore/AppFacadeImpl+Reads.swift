@@ -261,8 +261,4 @@ extension AppFacadeImpl {
                 + "organizer в C-010 не назван (MEE-449)"
         )
     }
-
-    public func jobs(status: JobStatus) async throws -> [Job] {
-        throw notImplemented("jobs(status:)", group: "Н (команды обработки)")
-    }
 }

@@ -18,9 +18,8 @@
 //   6. updateSettings, меняющий recordingPolicy так, что permissionsReady пересчитывается —
 //      settingsChanged И statusChanged ОДНИМ вызовом (инв. 26).
 //      — test_k33_updateSettings_policyChangingReadiness_publishesBothInOrder
-//  ДВА ИЗ ШЕСТИ — ВНЕ ЗОНЫ: (4) downloadModel/deleteModel → modelsChanged — методы группы Н
-//  (`AppFacadeImpl+Reads.swift` и соседи, не реализованы, бросают `notImplemented`, владеет
-//  DEV-2 после MEE-431/MEE-420) — не публикуют ничего, потому что не существуют телом.
+//  (4) downloadModel/deleteModel → modelsChanged — группа М реализована (MEE-420):
+//      — test_k33_downloadAndDeleteModel_publishModelsChanged (`EventsTests+Models.swift`).
 //  (5) setConnectorEnabled → meetingsChanged — метод группы О, тот же статус; ЗАМЕНА,
 //  дословно допустимая перечнем («или успешная syncCalendars») —
 //  test_k33_syncCalendars_publishesMeetingsChangedAndStatusChanged — уже реализованный, в
