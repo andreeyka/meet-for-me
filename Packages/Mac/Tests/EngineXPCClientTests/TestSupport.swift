@@ -213,16 +213,19 @@ final class XPCFixture: NSObject {
     private let lock = NSLock()
     private var acceptedConnections: [NSXPCConnection] = []
 
+    /// `wrapCatalog` — К27 (гонка, MEE-451): обёртка над тем же `modelCatalog`, чтобы тест
+    /// мог встать в `endUse` (результат уже у клиента) и отменить `Task` именно там.
     init(
         service: TestEngineXPCService = TestEngineXPCService(),
-        clock: @escaping @Sendable () -> Date = { Date() }
+        clock: @escaping @Sendable () -> Date = { Date() },
+        wrapCatalog: (FakeModelCatalogPort) -> ModelCatalogPort = { $0 }
     ) {
         self.service = service
         let listener = NSXPCListener.anonymous()
         self.listener = listener
         self.client = EngineXPCClient(
             makeConnection: { NSXPCConnection(listenerEndpoint: listener.endpoint) },
-            modelCatalog: modelCatalog, clock: clock
+            modelCatalog: wrapCatalog(modelCatalog), clock: clock
         )
         super.init()
         listener.delegate = self
