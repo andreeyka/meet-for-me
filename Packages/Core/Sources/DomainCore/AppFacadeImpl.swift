@@ -143,6 +143,15 @@ public actor AppFacadeImpl: AppFacade {
                 await self.handleSessionChange(change)
             }
         }
+        // Инв. 31 (MEE-462): окончательно упавшая задача → `AppEvent.failure` — тот же приём.
+        if let jobEvents = jobQueue?.events() {
+            Task { [weak self] in
+                for await event in jobEvents {
+                    guard let self else { return }
+                    await self.handleJobEvent(event)
+                }
+            }
+        }
         // К42 (MEE-449): тот же приём — поток захвата взят синхронно, до возврата из `init`.
         if let captureEvents = capture?.events() {
             Task { [weak self] in

@@ -18,16 +18,12 @@
 //   • §3.1, строка `TranscriptionServiceError`: префикс `engine.`, а `engineFailure(code:
 //     message:)` разворачивается на три сегмента — `engine.engineFailure.<code>`.
 //
-//  ЧЕГО КОНТРАКТ НЕ НАЗЫВАЕТ, И ЧТО ПОЭТОМУ ЗДЕСЬ НЕ СДЕЛАНО. Три примера из §«Поведение» —
-//  примеры, а не перечень мест: ни издание v10, ни перечень MEE-401 не говорят, какой
-//  компонент наблюдает «упавшую синхронизацию/задачу/движок» и передаёт её фасаду, по
-//  какому входу (порт, поток, callback) и при каких условиях. В том, что фасад держит
-//  сегодня, такого входа нет: `CalendarPort` отдаёт наружу только `changes()` (встречи, не
-//  результаты фоновой синхронизации), `JobQueue` передан фасаду только командам группы Н
-//  (MEE-420; поток `JobQueue.events()` фасад не наблюдает — IR-143, MEE-457), к
-//  `TranscriptionServicePort` фасад не обращается ни одним методом §4. Поэтому
-//  `publishFailure(_:)` — готовый и проверенный механизм без вызывающего в продакшене;
-//  места вызова ждут ответа архитектора (вопрос в отчёте MEE-450), а не выбраны здесь.
+//  КТО ВЫЗЫВАЕТ `publishFailure(_:)` — инв. 31 (C-016 v11, IR-143, MEE-462). Источников два:
+//  (1) `JobQueue.events()` — `.failed(willRetry: false)` → `AppFacadeError.jobFailed`, код
+//  `facade.jobFailed` (`handleJobEvent`, ниже); отказ движка доезжает этим же путём;
+//  (2) `AudioCapturePort.events()` — `.failed(CaptureError)` → `capture.<case>`
+//  (`handleCaptureEvent`, `AppFacadeImpl+ActiveSession.swift`). Не источники: ручной
+//  `syncCalendars()` (его результат и есть синхронный ответ) и фоновая синхронизация.
 
 import Foundation
 
@@ -72,12 +68,22 @@ extension AppFacadeImpl {
         }
     }
 
+    // MARK: - Инв. 31, источник (1): окончательно упавшая задача
+
+    /// `.failed(willRetry: false)` → ровно один `failure` с `facade.jobFailed`; `message` —
+    /// `error` дословно. `willRetry: true` не публикуется: исход ещё наступит. Прочие события
+    /// очереди фасад здесь не разбирает.
+    func handleJobEvent(_ event: JobEvent) async {
+        guard case let .failed(jobId, type, error, willRetry) = event, !willRetry else { return }
+        await publishFailure(AppFacadeError.jobFailed(jobId: jobId, type: type, message: error))
+    }
+
     // MARK: - `facade.*` (§3.1, строка `AppFacadeError`)
 
     /// `facade.<имя case>`; `underlying` кода не образует — вложенный `AppErrorView` проходит
     /// без изменений (§3.1, «Три строки…», п. 2). `permissionKind` (инв. 23, §3.1): у
     /// `facade.permissionRequired` — «тем `PermissionKind`, который несёт сам случай», у
-    /// прочих четырёх — `nil`. `switch` без `default:` — новый случай `AppFacadeError`
+    /// прочих — `nil`. `switch` без `default:` — новый случай `AppFacadeError`
     /// обязан стать ошибкой компиляции, а не молча уехать в чужой код.
     static func errorView(for error: AppFacadeError) -> AppErrorView {
         let name: String
@@ -92,6 +98,7 @@ extension AppFacadeImpl {
             permissionKind = kind
         case .profileNotReady: name = "profileNotReady"
         case .settingsUnreadable: name = "settingsUnreadable"
+        case .jobFailed: name = "jobFailed"
         }
         return AppErrorView(
             code: "facade.\(name)", message: String(describing: error),

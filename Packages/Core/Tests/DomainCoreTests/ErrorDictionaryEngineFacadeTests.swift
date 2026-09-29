@@ -80,6 +80,11 @@ final class ErrorDictionaryEngineFacadeTests: XCTestCase {
             Row(
                 error: AppFacadeError.settingsUnreadable(key: "k"),
                 expectedCode: "facade.settingsUnreadable", expectedPermissionKind: nil
+            ),
+            // C-016 v11, инв. 31 (MEE-462): новый случай — тем же правилом `facade.<case>`.
+            Row(
+                error: AppFacadeError.jobFailed(jobId: UUID(), type: .transcribe, message: "m"),
+                expectedCode: "facade.jobFailed", expectedPermissionKind: nil
             )
         ]
     }
@@ -116,11 +121,23 @@ final class ErrorDictionaryEngineFacadeTests: XCTestCase {
         XCTAssertFalse(transport?.code.hasPrefix("engine.engineFailure.") ?? true)
     }
 
-    /// К27: пять строк `facade.*`; колонка `permissionKind` — у `facade.permissionRequired`
-    /// тот `PermissionKind`, что несёт сам случай (§3.1), у остальных `nil`.
+    /// §3.1, «Три строки…», п. 1 (v11, IR-143): код движка вне перечня `EngineError` действующего
+    /// у клиента издания C-011 («сервис новее клиента») проходит тем же правилом дословно,
+    /// а не сводится к `app.internalError`.
+    func test_dictionary_engineFailureUnknownCodePassesVerbatim() async throws {
+        let fixture = FailureFixture()
+        let view = await fixture.asyncView(
+            for: TranscriptionServiceError.engineFailure(code: "quantumDecoherence", message: "m")
+        )
+        XCTAssertEqual(view?.code, "engine.engineFailure.quantumDecoherence")
+        XCTAssertNil(view?.permissionKind)
+    }
+
+    /// К27: шесть строк `facade.*` (v11 добавил `jobFailed`); колонка `permissionKind` — у
+    /// `facade.permissionRequired` тот `PermissionKind`, что несёт сам случай (§3.1), у остальных `nil`.
     func test_k27_facadeRows_codeAndPermissionKind() async throws {
         let rows = facadeRows
-        XCTAssertEqual(rows.count, 5)
+        XCTAssertEqual(rows.count, 6)
         await assertRows(rows)
     }
 
