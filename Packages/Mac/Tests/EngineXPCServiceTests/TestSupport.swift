@@ -95,17 +95,13 @@ final class RealServiceFixture: NSObject {
     private let listener: NSXPCListener
     private let delegate: TestServiceConnectionDelegate
 
-    /// Стенд для тестов стороны сервиса и провода: хранилище записей —
-    /// `AnyIdFinalizedRecordingRepository`, любая запись пригодна. Хранилище выбирается явно —
-    /// этой фабрикой или `recordings:` у `init` (MEE-488, п. 10; тот же приём, что
-    /// `XPCFixture.transportOnly` в `EngineXPCClientTests`), чтобы тест поведения по записи не
-    /// получил «всегда готовую» запись молча.
+    /// Стенд сервиса и провода: любая запись пригодна (`AnyIdFinalizedRecordingRepository`).
+    /// Хранилище выбирается явно — здесь или `recordings:` у `init` (MEE-488, п. 10; как
+    /// `XPCFixture.transportOnly`).
     static func transportOnly(
         serviceVersion: String = "test-real-service", clock: @escaping @Sendable () -> Date = { Date() }
     ) -> RealServiceFixture {
-        RealServiceFixture(
-            serviceVersion: serviceVersion, clock: clock, recordings: AnyIdFinalizedRecordingRepository()
-        )
+        RealServiceFixture(serviceVersion: serviceVersion, clock: clock, recordings: AnyIdFinalizedRecordingRepository())
     }
 
     init(
