@@ -50,21 +50,15 @@ final class EngineXPCClientReplyFieldTests: XCTestCase {
         return ("", "")
     }
 
-    /// Расхождение с перечнем (MEE-370, К2, ответ на macos-14): перечень ждёт `message`,
-    /// начинающийся `C-003.Transcript.Word инв. N, confidence:` (сведение C-012 §3.3 —
-    /// `message: error.description` вложенного `DomainValidationError`). Клиент же пишет
-    /// `"\(engineError)"` всего `EngineError` (`EngineXPCClient+ErrorMapping.swift`,
-    /// `outcome(for:expectedJobId:)`), и строка начинается с имени случая `invalidResult(`.
-    /// Продовый код MEE-451 не правит — префикс закреплён ожидаемым отказом, остальное
-    /// (код, отсутствие составного пути) проверяется строго.
+    /// К2 (macos-14): `message` начинается с `C-003.Transcript.Word инв. N, confidence:` —
+    /// `description` вложенного `DomainValidationError` (C-012 §3.3). Расхождение, найденное
+    /// MEE-451, исправлено в MEE-454; ожидаемый отказ снят.
     private func assertK2Message(
         _ message: String, invariant: Int, file: StaticString = #filePath, line: UInt = #line
     ) {
         let prefix = "C-003.Transcript.Word инв. \(invariant), confidence:"
-        XCTAssertTrue(message.contains(prefix), "вложенная ошибка обязана дойти: \(message)", file: file, line: line)
         XCTAssertFalse(message.contains("segments["), "путь не составной: \(message)", file: file, line: line)
         XCTAssertFalse(message.contains("words["), "путь не составной: \(message)", file: file, line: line)
-        XCTExpectFailure("MEE-451: клиент кладёт в message описание EngineError, а не DomainValidationError")
         XCTAssertTrue(message.hasPrefix(prefix), "message: \(message)", file: file, line: line)
     }
 
