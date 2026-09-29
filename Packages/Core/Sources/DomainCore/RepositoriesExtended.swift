@@ -190,6 +190,11 @@ public protocol PersonRepository: Sendable {
     func me() async throws -> PersonRecord?
     func addNameForms(_ forms: [NameForm]) async throws
     func nameForms(personIds: [UUID]) async throws -> [NameForm]
+    /// C-010 v27, IR-142, инвариант 36: люди строк `attendees` встречи — по возрастанию
+    /// `displayName` (сравнение строк Swift, без локали), при равенстве — по `id`; встречи нет — `[]`.
+    func attendees(meetingId: UUID) async throws -> [PersonRecord]
+    /// C-010 v27, инвариант 36: человек из `meetings.organizer_person_id`; встречи или организатора нет — `nil`.
+    func organizer(meetingId: UUID) async throws -> PersonRecord?
 }
 
 public protocol SpeakerProfileRepository: Sendable {

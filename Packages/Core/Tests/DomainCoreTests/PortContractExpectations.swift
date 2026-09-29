@@ -85,7 +85,8 @@ extension PortDeclarationTests {
         "func search(query: String, limit: Int, offset: Int) async throws -> [SearchHit]"
     ]
 
-    /// C-010 (MEE-18) v7, «Определение» §5 — дописаны MEE-319.
+    /// C-010 (MEE-18) v7, «Определение» §5 — дописаны MEE-319; `attendees`/`organizer` —
+    /// C-010 v27, IR-142, инвариант 36 (MEE-460).
     static let personRepository = [
         "func upsert(displayName: String, emails: [String]) async throws -> UUID",
         "func person(id: UUID) async throws -> PersonRecord?",
@@ -95,7 +96,9 @@ extension PortDeclarationTests {
         "func setMe(personId: UUID) async throws",
         "func me() async throws -> PersonRecord?",
         "func addNameForms(_ forms: [NameForm]) async throws",
-        "func nameForms(personIds: [UUID]) async throws -> [NameForm]"
+        "func nameForms(personIds: [UUID]) async throws -> [NameForm]",
+        "func attendees(meetingId: UUID) async throws -> [PersonRecord]",
+        "func organizer(meetingId: UUID) async throws -> PersonRecord?"
     ]
 
     static let speakerProfileRepository = [

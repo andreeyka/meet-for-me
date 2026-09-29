@@ -10,8 +10,9 @@
 //   • «Что вне контракта»: `retryJob` не переиспользует прежний `jobId` — новая задача.
 //   • §«Поведение»: какую задачу ставить, решает не фасад. Подача `retranscribe` —
 //     `JobSubmission.standard(_:runAfter:)` (таблица §4 C-013) с правилом §4 C-013
-//     «только от сети» из действующих настроек — тем же путём, что цепочка
-//     `SessionMachine.submitChain`; `language` — `nil`, как у цепочки.
+//     «только от сети» из действующих настроек — общим `JobSubmission.applyingPowerRule`
+//     (`JobSubmissionPowerRule.swift`), тем же, что у цепочки `SessionMachine.submitChain`;
+//     `language` — `nil`, как у цепочки.
 //   • Инв. 19, §3.1: `JobQueueError` — `jobs.<имя case>`, `permissionKind` — `nil`.
 //
 //  ЧТО КОНТРАКТ НЕ НАЗЫВАЕТ, И КАК ЭТО РЕШЕНО ЗДЕСЬ (вопросы — в отчёте MEE-420).
@@ -55,9 +56,7 @@ extension AppFacadeImpl {
         }
         let currentSettings = try await settings()
         let payload = JobPayload.transcribe(recordingId: recordingId, profileId: profileId, language: nil)
-        let submission = Self.applyingPowerRule(
-            JobSubmission.standard(payload, runAfter: clock()), settings: currentSettings
-        )
+        let submission = JobSubmission.standard(payload, runAfter: clock()).applyingPowerRule(currentSettings)
         let jobId = try await submit(submission, to: queue)
         publish(.statusChanged(await status()))
         return jobId
@@ -108,23 +107,6 @@ extension AppFacadeImpl {
         } catch {
             throw wrapQueueFailure(error)
         }
-    }
-
-    /// Правило §4 C-013: «обрабатывать только от сети» поднимает `requiresACPower` при
-    /// постановке — тот же ход, что `SessionMachine.submitChain`.
-    static func applyingPowerRule(_ submission: JobSubmission, settings: AppSettings) -> JobSubmission {
-        guard settings.processOnACPowerOnly, !submission.conditions.requiresACPower else { return submission }
-        return JobSubmission(
-            payload: submission.payload, priority: submission.priority, maxAttempts: submission.maxAttempts,
-            runAfter: submission.runAfter,
-            conditions: JobConditions(
-                requiresACPower: true,
-                forbidWhileRecording: submission.conditions.forbidWhileRecording,
-                maxThermalPressure: submission.conditions.maxThermalPressure,
-                requiresProfileReady: submission.conditions.requiresProfileReady
-            ),
-            dedupKey: submission.dedupKey
-        )
     }
 
     // MARK: - `jobs.*` (§3.1, строка `JobQueueError`)

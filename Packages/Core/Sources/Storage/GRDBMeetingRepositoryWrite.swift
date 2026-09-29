@@ -93,8 +93,10 @@ extension GRDBMeetingRepository {
         let now = EpochTime.seconds(Date())
         let sources = try sourcesIncludingOwnIdentity(of: event, declared: record.sources)
         let dedupText = try record.dedupKey.map { try StorageJSON.encodeToText($0) }
+        // Инв. 36 (б), C-010 v27: люди без адреса, уже связанные с ЭТОЙ встречей до сохранения.
+        var noAddress = try linkedPersonsWithoutAddress(meetingIdText: idText, db: db)
         let organizerId = try event.organizer.map {
-            try resolveOrCreatePersonId($0, db: db, now: now)
+            try resolveOrCreatePersonId($0, noAddress: &noAddress, db: db, now: now)
         }
         let input = MeetingRowInput(
             idText: idText, event: event, status: record.status,
@@ -102,7 +104,9 @@ extension GRDBMeetingRepository {
         )
         try upsertMeetingRow(input, db: db)
         try replaceMeetingSources(idText: idText, sources: sources, db: db)
-        try replaceAttendees(idText: idText, attendees: event.attendees, now: now, db: db)
+        try replaceAttendees(
+            idText: idText, attendees: event.attendees, noAddress: &noAddress, now: now, db: db
+        )
     }
 
     static func deleteMeetingRows(_ ids: [UUID], db: Database) throws {
@@ -221,46 +225,83 @@ extension GRDBMeetingRepository {
         }
     }
 
+    /// Два участника, сведённые к одному человеку (инв. 36: общий адрес либо одно имя без
+    /// адреса), дают одну строку — первичный ключ `(meeting_id, person_id)`; первая побеждает.
     private static func replaceAttendees(
-        idText: String, attendees: [MeetingEvent.Attendee], now: Int64, db: Database
+        idText: String, attendees: [MeetingEvent.Attendee], noAddress: inout [String: UUID], now: Int64,
+        db: Database
     ) throws {
         try db.execute(sql: "DELETE FROM attendees WHERE meeting_id = ?", arguments: [idText])
         for attendee in attendees {
-            let personId = try resolveOrCreatePersonId(attendee.person, db: db, now: now)
+            let personId = try resolveOrCreatePersonId(attendee.person, noAddress: &noAddress, db: db, now: now)
             try db.execute(
                 sql: """
                 INSERT INTO attendees (meeting_id, person_id, response_status, is_optional)
                 VALUES (?, ?, ?, ?)
+                ON CONFLICT (meeting_id, person_id) DO NOTHING
                 """,
                 arguments: [idText, personId.uuidString, attendee.responseStatus.rawValue, attendee.isOptional]
             )
         }
     }
 
-    /// Упрощённое связывание персон — без публичной поверхности `PersonRepository`
-    /// (часть 2 задачи МЕЕ-324). Существующий по email человек переиспользуется,
-    /// иначе заводится новая строка `persons` (без адреса, если его нет).
+    /// Правило связи участника (и организатора) с человеком — C-010 v27, инвариант 36:
+    /// (а) адрес есть и принадлежит человеку (`person_emails`) — этот человек; (б) адреса нет,
+    /// а у этой же встречи до сохранения уже был связанный человек без адреса с тем же
+    /// `displayName` — тот же человек; (в) иначе — новый (`displayName` — имя, без имени —
+    /// адрес; без адреса строки `person_emails` нет). Новый человек без адреса сразу попадает в
+    /// `noAddress`: два участника без адреса с одним именем в одном событии — один человек.
+    /// Между встречами по имени не отождествляется (граница правила, инв. 36).
     static func resolveOrCreatePersonId(
-        _ person: MeetingEvent.Person, db: Database, now: Int64
+        _ person: MeetingEvent.Person, noAddress: inout [String: UUID], db: Database, now: Int64
     ) throws -> UUID {
-        if let email = person.email,
-           let existing = try String.fetchOne(
-               db, sql: "SELECT person_id FROM person_emails WHERE email = ?", arguments: [email]
-           ),
-           let uuid = UUID(uuidString: existing) {
-            return uuid
+        let displayName = person.name ?? person.email ?? ""
+        if let email = person.email {
+            if let existing = try String.fetchOne(
+                db, sql: "SELECT person_id FROM person_emails WHERE email = ?", arguments: [email]
+            ), let uuid = UUID(uuidString: existing) {
+                return uuid
+            }
+        } else if let known = noAddress[displayName] {
+            return known
         }
         let id = UUID()
         try db.execute(
             sql: "INSERT INTO persons (id, display_name, is_me, created_at, updated_at) VALUES (?, ?, 0, ?, ?)",
-            arguments: [id.uuidString, person.name ?? person.email ?? "", now, now]
+            arguments: [id.uuidString, displayName, now, now]
         )
         if let email = person.email {
             try db.execute(
                 sql: "INSERT INTO person_emails (email, person_id) VALUES (?, ?)",
                 arguments: [email, id.uuidString]
             )
+        } else {
+            noAddress[displayName] = id
         }
         return id
+    }
+
+    /// Люди без единого адреса, связанные со встречей строками `attendees` или
+    /// `meetings.organizer_person_id`, — по `display_name` (инв. 36 (б)). При двух людях с
+    /// одним именем (данные до v27) берётся первый по `id` — выбор детерминирован.
+    static func linkedPersonsWithoutAddress(meetingIdText: String, db: Database) throws -> [String: UUID] {
+        let rows = try Row.fetchAll(
+            db,
+            sql: """
+            SELECT p.id AS id, p.display_name AS name FROM persons p
+            WHERE (p.id IN (SELECT person_id FROM attendees WHERE meeting_id = ?)
+                   OR p.id = (SELECT organizer_person_id FROM meetings WHERE id = ?))
+              AND NOT EXISTS (SELECT 1 FROM person_emails e WHERE e.person_id = p.id)
+            ORDER BY p.id
+            """,
+            arguments: [meetingIdText, meetingIdText]
+        )
+        var result: [String: UUID] = [:]
+        for row in rows {
+            let name: String = row["name"]
+            guard result[name] == nil, let id = UUID(uuidString: row["id"] as String) else { continue }
+            result[name] = id
+        }
+        return result
     }
 }

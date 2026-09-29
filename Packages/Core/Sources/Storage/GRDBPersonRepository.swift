@@ -123,7 +123,7 @@ final class GRDBPersonRepository: PersonRepository {
 
     // MARK: - Оснастка
 
-    private func withDatabase<T>(
+    func withDatabase<T>(
         entity: String, id: String, _ body: @escaping @Sendable (Database) throws -> T
     ) async throws -> T {
         do {
@@ -188,7 +188,7 @@ final class GRDBPersonRepository: PersonRepository {
         return id
     }
 
-    private static func personRecord(id: String, db: Database) throws -> PersonRecord? {
+    static func personRecord(id: String, db: Database) throws -> PersonRecord? {
         guard let row = try Row.fetchOne(db, sql: "SELECT * FROM persons WHERE id = ?", arguments: [id]) else {
             return nil
         }
