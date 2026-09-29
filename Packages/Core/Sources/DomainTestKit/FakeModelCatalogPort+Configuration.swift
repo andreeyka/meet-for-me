@@ -49,6 +49,12 @@ extension FakeModelCatalogPort {
         locked { resolveFailures[profileId] = error }
     }
 
+    /// Отказ `saveProfile`/`deleteProfile` для профиля с этим `id` (MEE-420, К35: например,
+    /// `builtInProfileImmutable`, инв. 12 C-014 — сам фейк встроенность профиля не проверяет).
+    public func failProfileCommand(_ error: ModelCatalogError?, forProfileId profileId: String) {
+        locked { profileFailures[profileId] = error }
+    }
+
     /// Проталкивает `ModelCatalogEvent` в поток(и) `events()`, ровно как есть.
     public func pushEvent(_ event: ModelCatalogEvent) {
         let targets = locked { eventContinuations }

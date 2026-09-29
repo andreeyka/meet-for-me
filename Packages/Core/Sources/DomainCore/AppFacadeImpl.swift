@@ -69,6 +69,9 @@ public actor AppFacadeImpl: AppFacade {
     /// К42 (MEE-449): источник снимков состава захвата и уровней; `nil` — фасад их не
     /// наблюдает, и поля `ActiveSessionView` остаются «ещё не наблюдали» (инв. 27).
     let capture: AudioCapturePort?
+    /// Группа Н (MEE-420): очередь задач; `nil` — команды обработки отказывают `notAllowed`
+    /// (`AppFacadeImpl+Jobs.swift`).
+    let jobQueue: JobQueue?
     let clock: @Sendable () -> Date
 
     nonisolated let broadcaster = AppEventBroadcaster()
@@ -97,6 +100,7 @@ public actor AppFacadeImpl: AppFacade {
         settings: SettingsRepository,
         connectors: ConnectorRepository,
         capture: AudioCapturePort? = nil,
+        jobQueue: JobQueue? = nil,
         clock: @escaping @Sendable () -> Date = { Date() }
     ) {
         self.meetingRepository = meetings
@@ -112,6 +116,7 @@ public actor AppFacadeImpl: AppFacade {
         self.settingsRepository = settings
         self.connectors = connectors
         self.capture = capture
+        self.jobQueue = jobQueue
         self.clock = clock
         // Возврат РП (находка 4): подписка на смену прав живёт весь срок жизни фасада —
         // `permissions.changes()` вызван ЗДЕСЬ, синхронно, до возврата из `init` (`AsyncStream`
