@@ -27,6 +27,7 @@ import Attribution
 import Capture
 import DomainCore
 import Foundation
+import ModelManager
 import Storage
 
 /// Готовый граф: единственное, что получает `MeetForMeApp` наружу.
@@ -84,17 +85,23 @@ enum CompositionRoot {
         let adapters = try makeSystemAdapters()
         let calendarPort = makeCalendarPort(context: context, adapters: adapters)
         let attribution = SpeakerAttribution()
-        let modelCatalog = TemporaryModelCatalogStub()
+        // MEE-467 (C-014 v7, MEE-22; MEE-462 п.4): один `SettingsRepository` на граф — его же
+        // получают фасад (шаг 7) и `ModelCatalogManager` (строка пользовательских профилей,
+        // инв. 37), и из него же читается снимок настроек на старте.
+        let settings = context.storage.settingsRepository()
+        let modelCatalog = ModelCatalogManager(
+            rootDirectory: context.fileLayout.root, catalogURL: modelCatalogURL, settings: settings
+        )
         let jobQueue = JobQueueEngine(
             repository: context.storage.jobRepository(), modelCatalog: modelCatalog,
             powerPort: adapters.power, clock: { Date() }
         )
         let partial = PartialGraph(
             context: context, adapters: adapters, calendarPort: calendarPort,
-            attribution: attribution, modelCatalog: modelCatalog, jobQueue: jobQueue
+            attribution: attribution, settings: settings, modelCatalog: modelCatalog, jobQueue: jobQueue
         )
 
-        let startupSettings = try await loadSettingsForStartup(from: context.storage.settingsRepository())
+        let startupSettings = try await loadSettingsForStartup(from: settings)
         // MEE-449 (К42): один экземпляр захвата на машину сессии и фасад — фасад читает из его
         // потока снимки состава и уровни для `AppStatus.activeSession` (C-016 инв. 27).
         let capture = AudioCaptureImpl(power: adapters.power)
@@ -114,6 +121,13 @@ enum CompositionRoot {
             sessionMachine: sessionMachine, jobQueue: jobQueue
         )
     }
+
+    /// Адрес актуального `catalog.json` на CDN (C-014 §6) — ЗАГЛУШКА до MEE-452: CDN ещё нет.
+    /// Домен `.invalid` не разрешается никогда (RFC 2606 §2), поэтому `refreshCatalog()` на нём
+    /// законно отказывает `ModelCatalogError.manifestUnreachable`, и действующим остаётся
+    /// встроенный (или ранее сохранённый) каталог — инв. 14 C-014 v7. Сеть при старте не
+    /// трогается: `ModelCatalogManager` читает каталог только с диска и из бандла.
+    static let modelCatalogURL = URL(string: "https://catalog.invalid/meet-for-me/catalog.json")!
 
     /// `~/Library/Application Support/<bundle-id>` — каталог должен существовать (модуль
     /// `Storage` его не создаёт, см. `FileLayout` докстринг), composition root заводит его сам.
