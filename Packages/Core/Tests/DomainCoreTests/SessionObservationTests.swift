@@ -19,6 +19,21 @@ import XCTest
 import DomainCore
 import DomainTestKit
 
+/// Только `.statusChanged`: `meetingsChanged` на той же смене (инв. 34 (б), MEE-482) проверяют
+/// `AdHocRecordingsEventsTests`, а здесь предмет — «ровно одно `statusChanged`» (MEE-456).
+private func collectStatusChanges(
+    _ stream: AsyncStream<AppEvent>, count: Int, timeoutSeconds: UInt64 = 5
+) async -> [AppEvent] {
+    let iterator = stream.makeAsyncIterator()
+    var collected: [AppEvent] = []
+    while collected.count < count {
+        guard let event = await nextEventOrNil(iterator, seconds: timeoutSeconds) else { break }
+        if case .meetingsChanged = event { continue }
+        collected.append(event)
+    }
+    return collected
+}
+
 final class SessionObservationTests: XCTestCase {
 
     private let epoch = Date(timeIntervalSince1970: 1_800_000_000)
@@ -73,13 +88,13 @@ final class SessionObservationTests: XCTestCase {
         coordinator.send(.promptRaised(prompt))
         coordinator.send(.promptWithdrawn(promptId: prompt.promptId))
 
-        let collectedFirst = await collectEvents(events, count: 1)
+        let collectedFirst = await collectStatusChanges(events, count: 1)
         // Барьер — настоящая смена; ставится после того, как первое событие собрано, чтобы
         // `status()` первого ответа прочёл состояние ДО `setSessions` барьера.
         let stopping = snapshot(sessionId, state: .stopping, recordingId: recordingId)
         coordinator.setSessions([stopping])
         coordinator.send(.session(stopping))
-        let collectedAfter = await collectEvents(events, count: 3, timeoutSeconds: 1)
+        let collectedAfter = await collectStatusChanges(events, count: 3, timeoutSeconds: 1)
 
         guard case .statusChanged(let first)? = collectedFirst.first else {
             return XCTFail("ожидалось .statusChanged, пришло \(collectedFirst)")
@@ -103,9 +118,9 @@ final class SessionObservationTests: XCTestCase {
         let sessionId = UUID()
 
         coordinator.send(.session(snapshot(sessionId, state: .processing, recordingId: UUID())))
-        _ = await collectEvents(events, count: 1)
+        _ = await collectStatusChanges(events, count: 1)
         coordinator.send(.session(snapshot(sessionId, state: .ready, recordingId: UUID())))
-        let collected = await collectEvents(events, count: 1)
+        let collected = await collectStatusChanges(events, count: 1)
 
         guard case .statusChanged? = collected.first else {
             return XCTFail("ожидалось .statusChanged на входе в .ready, пришло \(collected)")
@@ -115,7 +130,7 @@ final class SessionObservationTests: XCTestCase {
 
 /// Свой координатор (см. шапку файла): отдаёт заданный список сессий и один поток смен,
 /// в который тест шлёт значения сам.
-private final class ObservedTestSessionCoordinator: SessionCoordinator, @unchecked Sendable {
+final class ObservedTestSessionCoordinator: SessionCoordinator, @unchecked Sendable {
     private let lock = NSLock()
     private var snapshots: [SessionSnapshot] = []
     private let stream: AsyncStream<SessionChange>

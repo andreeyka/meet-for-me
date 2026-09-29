@@ -79,7 +79,7 @@ private actor AppEventRaceOutcome {
 /// `nil` — ни одного события не пришло за окно (ожидаемый исход у «событий больше нет»
 /// векторов, не провал теста самим по себе — в отличие от `nextOrFail`, этот вариант не
 /// `XCTFail`'ит на таймауте, вызывающая сторона решает сама).
-private func nextEventOrNil(
+func nextEventOrNil(
     _ iterator: AsyncStream<AppEvent>.AsyncIterator, seconds: UInt64
 ) async -> AppEvent? {
     let outcome = AppEventRaceOutcome()
@@ -155,10 +155,12 @@ final class EventsTests: XCTestCase {
         let stream = fixture.facade.events()
         _ = try await fixture.facade.startRecording(meetingId: nil)
 
-        let events = await collectEvents(stream, count: 1)
-        XCTAssertEqual(events.count, 1)
-        guard case .statusChanged = events.first else {
-            return XCTFail("ожидался .statusChanged, получено \(String(describing: events.first))")
+        // Инв. 34 (а), IR-146: `meetingsChanged` идёт первым, `statusChanged` — следом.
+        let events = await collectEvents(stream, count: 2)
+        XCTAssertEqual(events.count, 2, "\(events)")
+        XCTAssertEqual(events.first, .meetingsChanged)
+        guard case .statusChanged = events.last else {
+            return XCTFail("ожидался .statusChanged, получено \(String(describing: events.last))")
         }
     }
 
@@ -334,13 +336,15 @@ final class EventsTests: XCTestCase {
         let streamB = fixture.facade.events()
         _ = try await fixture.facade.startRecording(meetingId: nil)
 
-        async let eventsA = collectEvents(streamA, count: 1)
-        async let eventsB = collectEvents(streamB, count: 1)
+        // `startRecording` публикует `meetingsChanged` и следом `statusChanged` (инв. 34 (а)).
+        async let eventsA = collectEvents(streamA, count: 2)
+        async let eventsB = collectEvents(streamB, count: 2)
         let (resultA, resultB) = await (eventsA, eventsB)
 
-        XCTAssertEqual(resultA.count, 1, "подписчик A: \(resultA)")
-        XCTAssertEqual(resultB.count, 1, "подписчик B: \(resultB)")
-        guard case .statusChanged = resultA.first, case .statusChanged = resultB.first else {
+        XCTAssertEqual(resultA.count, 2, "подписчик A: \(resultA)")
+        XCTAssertEqual(resultB.count, 2, "подписчик B: \(resultB)")
+        guard case .statusChanged = resultA.last, case .statusChanged = resultB.last,
+              resultA.first == .meetingsChanged, resultB.first == .meetingsChanged else {
             return XCTFail(
                 "оба подписчика ожидали ровно .statusChanged (не .transcriptChanged до подписки): " +
                 "A=\(resultA) B=\(resultB)"

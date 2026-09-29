@@ -24,6 +24,16 @@ extension FakeAppFacade {
         get { locked { storedMeetingDetailValue } }
         set { locked { storedMeetingDetailValue = newValue } }
     }
+    /// Набор, который отдаёт `adHocRecordings(from:to:)` (C-016 v12).
+    public var adHocRecordingsValue: [RecordingSummary] {
+        get { locked { storedAdHocRecordingsValue } }
+        set { locked { storedAdHocRecordingsValue = newValue } }
+    }
+    /// Вызовы `adHocRecordings(from:to:)` с аргументами, в порядке вызова. Это чтение, поэтому
+    /// в `recordedCommands` (команды) оно не попадает.
+    public var adHocRecordingsCalls: [AdHocRecordingsCall] {
+        locked { storedAdHocRecordingsCalls }
+    }
     public var transcriptValue: TranscriptView? {
         get { locked { storedTranscriptValue } }
         set { locked { storedTranscriptValue = newValue } }

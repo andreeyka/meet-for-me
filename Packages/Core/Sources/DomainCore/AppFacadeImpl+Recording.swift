@@ -34,6 +34,9 @@ extension AppFacadeImpl {
             // К33 (МЕЕ-437, группа Л, инв. 15/16): `activeSession` в `AppStatus` меняется
             // ровно здесь — публикация после успешного старта, не до (отказавший старт не
             // менял состояния, которому стоило бы сообщать подписчикам).
+            // Инв. 34 (а), IR-146: у записи появилась строка (`status == .recording`) — при любом
+            // `meetingId`, до возврата и не позже `statusChanged`.
+            publish(.meetingsChanged)
             publish(.statusChanged(await status()))
             return recordingId
         } catch let error as SessionError {
@@ -52,6 +55,9 @@ extension AppFacadeImpl {
         do {
             try await sessionCoordinator.stopRecording(recordingId: recordingId, now: clock())
             // К33: симметрично со стороной старта — публикация после успешной остановки.
+            // Инв. 34 (б): `RecordingStatus` записи сменился на `stopping` — `meetingsChanged` не позже
+            // `statusChanged` для того же изменения.
+            publish(.meetingsChanged)
             publish(.statusChanged(await status()))
         } catch let error as SessionError {
             throw wrap(error)

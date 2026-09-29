@@ -74,6 +74,10 @@ extension AppFacadeImpl {
     /// не публикуется: исход ещё наступит. Затем то же событие идёт в наблюдение очереди
     /// (инв. 35 (д), (е), C-016 v13) — `AppFacadeImpl+JobObservation.swift`.
     func handleJobEvent(_ event: JobEvent) async {
+        // Инв. 34 (в), IR-146: `transcribe` завершилась — у записи появился транскрипт. `transcriptChanged`
+        // не публикуется: идентификатора нового транскрипта UI не знает. Идёт первой — `meetingsChanged`
+        // раньше `statusChanged` из наблюдения очереди (инв. 34 (б)).
+        if case .succeeded(_, .transcribe) = event { publish(.meetingsChanged) }
         if let error = Self.jobFailedError(for: event) {
             await publishFailure(error)
         }

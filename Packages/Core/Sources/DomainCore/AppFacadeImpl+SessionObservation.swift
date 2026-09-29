@@ -5,9 +5,10 @@
 //
 //  ТЕКСТ КОНТРАКТА. «`AppStatus` пересчитывается и публикуется не реже чем при каждом
 //  изменении: старт и стоп записи, смена состояния сессии, …». Источник смены —
-//  `SessionCoordinator.changes()` (C-018 §3.1). Требования к порядку `.statusChanged`
-//  относительно других событий C-016 не ставит; инв. 15 («до возврата управления») — про
-//  команды, и для `startRecording`/`stopRecording`/`skipMeeting` уже исполнен в них самих.
+//  `SessionCoordinator.changes()` (C-018 §3.1). Порядок задаёт инв. 34 (б) (C-016 v12):
+//  при смене `RecordingStatus` `meetingsChanged` идёт не позже `statusChanged` того же
+//  изменения. Инв. 15 («до возврата управления») — про команды, и для
+//  `startRecording`/`stopRecording`/`skipMeeting` уже исполнен в них самих.
 //
 //  ЧТО СЧИТАЕТСЯ СМЕНОЙ. `.session(snapshot)` с `state`, отличным от последнего известного
 //  фасаду для этого `sessionId` (либо сессия видна впервые). Снимок с тем же `state` (новая
@@ -35,6 +36,9 @@ extension AppFacadeImpl {
         } else {
             knownSessionStates[snapshot.sessionId] = snapshot.state
         }
+        // Инв. 34 (б), IR-146: `RecordingStatus` записи меняется вместе с состоянием сессии
+        // (`stopping`, `finalized`, `failed`), и `meetingsChanged` идёт не позже `statusChanged`.
+        publish(.meetingsChanged)
         publish(.statusChanged(await status()))
     }
 }

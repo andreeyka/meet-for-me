@@ -43,7 +43,39 @@ extension AppFacadeImpl {
         }
     }
 
-    private func recordingSummary(for record: RecordingRecord) async throws -> RecordingSummary {
+    /// C-016 v12, инв. 33 (IR-146, MEE-482): записи без встречи. Источник — `RecordingRepository.adHoc()`
+    /// (любой `status`, в том числе запись с удалённой встречей); окно — пересечение `[startedAt, endedAt)`
+    /// с `[from, to)`, как у `meetings(from:to:)`, у незавершённой записи правая граница открыта;
+    /// порядок — `startedAt`, затем `recordingId.uuidString`. Модель строит `recordingSummary(for:)`
+    /// — тот же код, что у `MeetingDetail.recordings`. Чтение без побочных эффектов: событий нет.
+    public func adHocRecordings(from: Date, to: Date) async throws -> [RecordingSummary] {
+        do {
+            let inWindow = try await recordings.adHoc().filter { record in
+                let manifest = record.manifest
+                return manifest.startedAt < to && (manifest.endedAt.map { $0 > from } ?? true)
+            }
+            let ordered = inWindow.sorted { lhs, rhs in
+                if lhs.manifest.startedAt != rhs.manifest.startedAt {
+                    return lhs.manifest.startedAt < rhs.manifest.startedAt
+                }
+                return lhs.manifest.recordingId.uuidString < rhs.manifest.recordingId.uuidString
+            }
+            var summaries: [RecordingSummary] = []
+            summaries.reserveCapacity(ordered.count)
+            for record in ordered {
+                summaries.append(try await recordingSummary(for: record))
+            }
+            return summaries
+        } catch let error as StorageError {
+            throw wrap(error)
+        } catch let error as AppFacadeError {
+            throw error
+        } catch {
+            throw wrapUnexpected(error)
+        }
+    }
+
+    func recordingSummary(for record: RecordingRecord) async throws -> RecordingSummary {
         let manifest = record.manifest
         let directory = fileLayout.recordingDirectory(manifest.directoryName)
         return RecordingSummary(
