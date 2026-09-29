@@ -22,12 +22,39 @@ import DomainCore
 
 extension ModelCatalogManager {
 
+    /// Параллельный вызов для той же модели не начинает вторую загрузку и не возвращается
+    /// раньше первой: он ждёт идущую и получает её исход — успех только после `downloaded`,
+    /// иначе ту же ошибку (инв. 4; возврат РП `e64cbd81`, п. 1).
     public func download(id: String, version: String) async throws {
         let key = ModelKey(id: id, version: version)
-        guard let descriptor = catalogDescriptor(key) else {
-            throw ModelCatalogError.unknownModel(id: id, version: version)
+        if let running = runningDownloads[key] {
+            return try await running.value
         }
-        guard sessions[key] == nil else { return }
+        let task = Task { () throws -> Void in
+            do {
+                try await self.performDownload(key)
+            } catch {
+                self.finishRun(key)
+                throw error
+            }
+            self.finishRun(key)
+        }
+        runningDownloads[key] = task
+        try await withTaskCancellationHandler {
+            try await task.value
+        } onCancel: {
+            task.cancel()
+        }
+    }
+
+    private func finishRun(_ key: ModelKey) {
+        runningDownloads[key] = nil
+    }
+
+    private func performDownload(_ key: ModelKey) async throws {
+        guard let descriptor = catalogDescriptor(key) else {
+            throw ModelCatalogError.unknownModel(id: key.id, version: key.version)
+        }
         switch currentState(key) {
         case .downloaded, .loaded:
             return
@@ -84,8 +111,13 @@ extension ModelCatalogManager {
         let finalURL = ModelDisk.fileURL(in: directory, name: file.name)
         let partURL = ModelDisk.partURL(in: directory, name: file.name)
         if ModelDisk.exists(finalURL) {
-            try checkFile(finalURL, file)          // файл уже на диске: докачивать нечего, только сверка
-            return
+            // Готовый файл на диске: годен — докачивать нечего. Негоден (испорчен после сверки,
+            // ручная установка) — удаляется и качается с нуля в этой же попытке (§6 п. 6,
+            // `error → downloading` инв. 6; возврат РП `e64cbd81`, п. 2).
+            if (try? checkFile(finalURL, file)) != nil {
+                return
+            }
+            try ModelDisk.remove(finalURL)
         }
         var restarted = false
         while true {

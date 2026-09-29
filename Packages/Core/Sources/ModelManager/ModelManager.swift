@@ -33,6 +33,7 @@ public actor ModelCatalogManager: ModelCatalogPort {
     var catalog: ModelCatalogFile
     var userProfiles: [String: TranscriptionProfile] = [:]
     var sessions: [ModelKey: DownloadSession] = [:]
+    var runningDownloads: [ModelKey: Task<Void, Error>] = [:]
     var failures: [ModelKey: ModelCatalogError] = [:]
     var verified: [ModelKey: Verification] = [:]
     var useCounts: [ModelKey: Int] = [:]

@@ -77,3 +77,24 @@ extension CatalogParsingTests {
         XCTAssertEqual(ids, [CatalogFixtures.asrModelId, CatalogFixtures.vadModelId])
     }
 }
+
+// MARK: - К3, доп. векторы через refreshCatalog (возврат РП `e64cbd81`, желательное)
+
+extension CatalogParsingTests {
+
+    func test_k03b_sha256WrongLengthAndUppercaseRejectedThroughRefresh() async throws {
+        let harness = makeHarness()
+        let manager = try harness.makeManager()
+        let text = String(bytes: CatalogFixtures.validCatalogJSON, encoding: .utf8) ?? ""
+        let valid = CatalogFixtures.validVocabSha256
+        for bad in [valid + "1", String(repeating: "A", count: 64)] {
+            XCTAssertTrue(text.contains(valid), "вектор: подменяемая строка есть")
+            let error = await refresh(manager, harness: harness,
+                                      with: Data(text.replacingOccurrences(of: valid, with: bad).utf8))
+            let message = manifestInvalidMessage(error)
+            XCTAssertTrue(message.contains("vocab.txt") && message.contains(bad), message)
+            let ids = await manager.models().map(\.id)
+            XCTAssertEqual(ids, ["base-asr"], "каталог отвергнут целиком")
+        }
+    }
+}

@@ -151,6 +151,7 @@ final class DownloadTests: XCTestCase {
         XCTAssertFalse(seen.value.isEmpty, "вектор непустоты: наблюдение изнутри receive последнего файла было")
         XCTAssertEqual(Set(seen.value), [false], "во время приёма последнего файла .manifest.json ещё нет")
         XCTAssertTrue(harness.exists(manifestURL), "после сверки всех sha256 — записан")
+        try await assertManifestNotRewritten(manifestURL, harness: harness, model: model, manager: manager)
 
         // Вход В: sha256 одного из файлов не сошёлся — .manifest.json нет.
         let broken = TestModel.gigaamLike(id: "gigaam-bad-manifest")
@@ -163,5 +164,25 @@ final class DownloadTests: XCTestCase {
             try await brokenManager.download(id: broken.descriptor.id, version: broken.descriptor.version)
         }
         XCTAssertFalse(second.exists(second.directory(broken).appendingPathComponent(".manifest.json")))
+    }
+
+    /// «Один раз» (§2.1): последующие вопросы о состоянии, в том числе новым экземпляром, файл
+    /// не переписывают — номер файла на томе и байты те же (запись атомарная: новый файл — новый номер).
+    private func assertManifestNotRewritten(_ url: URL, harness: ModelHarness, model: TestModel,
+                                            manager: ModelCatalogManager) async throws {
+        func identity() throws -> (number: Int, bytes: Data) {
+            let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
+            return ((attributes[.systemFileNumber] as? NSNumber)?.intValue ?? -1, try Data(contentsOf: url))
+        }
+        let before = try identity()
+        XCTAssertNotEqual(before.number, -1, "вектор: номер файла читается")
+        _ = await manager.state(id: model.descriptor.id, version: model.descriptor.version)
+        _ = await manager.diskUsage()
+        let restarted = try harness.makeManager()
+        let restartedState = await restarted.state(id: model.descriptor.id, version: model.descriptor.version)
+        XCTAssertEqual(restartedState, .downloaded)
+        let after = try identity()
+        XCTAssertEqual(after.number, before.number, ".manifest.json не переписан")
+        XCTAssertEqual(after.bytes, before.bytes)
     }
 }
