@@ -63,6 +63,10 @@ public actor JobQueueEngine: JobQueue {
     /// на время, пока `isRevisitLoopRunning` уже был `true`. Читается и снимается только
     /// самим циклом (`runRevisitPass()`), между заходами.
     var revisitPassRequested = false
+    /// MEE-496: восстановление по инварианту 10 (`start()`) ждёт тот же мьютекс
+    /// `isRevisitLoopRunning`, что и заход пересмотра, — не опросом, а сигналом: заход,
+    /// отпуская мьютекс (`releaseRevisitLoop()`), будит всех, кто ждёт здесь.
+    var revisitLoopWaiters: [CheckedContinuation<Void, Never>] = []
     var timerTask: Task<Void, Never>?
     var powerEventsTask: Task<Void, Never>?
 
