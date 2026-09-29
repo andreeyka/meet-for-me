@@ -37,7 +37,7 @@ final class EngineXPCServiceFaultTests: XCTestCase {
     // MARK: - §3.1 код 2: сервис сам ловит превышение размера входящего кадра
 
     func test_serviceIndependentlyRejectsOversizedIncomingRequest() async throws {
-        let fixture = RealServiceFixture()
+        let fixture = RealServiceFixture.transportOnly()
         let (proxy, connection) = fixture.rawServiceProxy()
         defer { connection.invalidate() }
         let hugeData = Data(count: EngineWire.maxMessageBytes + 1)
@@ -88,7 +88,7 @@ final class EngineXPCServiceFaultTests: XCTestCase {
     /// (i) confidence == 1.0000001 — инв. 7, `Transcript.Word` → «invariant: C-003.Transcript.Word
     /// инв. 7, confidence: …».
     func test_k32i_wordConfidenceOutOfRangeMapsToInvalidRequestWithInvariantPrefix() async throws {
-        let fixture = RealServiceFixture()
+        let fixture = RealServiceFixture.transportOnly()
         let (proxy, connection) = fixture.rawServiceProxy()
         defer { connection.invalidate() }
         let (_, request) = try makeBaseRequest()
@@ -108,7 +108,7 @@ final class EngineXPCServiceFaultTests: XCTestCase {
 
     /// (ii) слова не упорядочены по startMs — инв. 4, `Transcript.Segment`.
     func test_k32ii_unsortedWordsMapsToInvalidRequestWithInvariantPrefix() async throws {
-        let fixture = RealServiceFixture()
+        let fixture = RealServiceFixture.transportOnly()
         let (proxy, connection) = fixture.rawServiceProxy()
         defer { connection.invalidate() }
         let (_, request) = try makeBaseRequest()
@@ -132,7 +132,7 @@ final class EngineXPCServiceFaultTests: XCTestCase {
     /// (iii) confidence непредставим (`1e400`) — отсекается `decodeFinite` до `validate()` —
     /// `DecodingError`, префикс «decoding: », НЕ «invariant: ».
     func test_k32iii_unrepresentableConfidenceMapsToInvalidRequestWithDecodingPrefix() async throws {
-        let fixture = RealServiceFixture()
+        let fixture = RealServiceFixture.transportOnly()
         let (proxy, connection) = fixture.rawServiceProxy()
         defer { connection.invalidate() }
         let (_, request) = try makeBaseRequest()
@@ -150,7 +150,7 @@ final class EngineXPCServiceFaultTests: XCTestCase {
 
     /// (iv) createdAt в году 300000 — представимо, доходит до `validate()`, инв. 0, `Transcript`.
     func test_k32iv_createdAtYear300000MapsToInvalidRequestWithInvariantPrefix() async throws {
-        let fixture = RealServiceFixture()
+        let fixture = RealServiceFixture.transportOnly()
         let (proxy, connection) = fixture.rawServiceProxy()
         defer { connection.invalidate() }
         let (_, request) = try makeBaseRequest()

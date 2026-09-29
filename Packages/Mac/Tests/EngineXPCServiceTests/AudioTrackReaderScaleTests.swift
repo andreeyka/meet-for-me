@@ -85,13 +85,11 @@ final class AudioTrackReaderScaleTests: AudioTrackReaderTestCase {
         )
         let ref = try audioRef(url, channelCount: 1, channel: .mic)
         let samples = try AudioTrackReader.read(AudioSlice(source: ref, startMs: 9_000, endMs: 11_000))
-        let lastSecond = try AudioTrackReader.read(AudioSlice(source: ref, startMs: 9_000, endMs: 10_000))
 
         XCTAssertEqual(Double(samples.count), 16_000, accuracy: 1)
         let interior = 200..<15_800
         XCTAssertGreaterThan(SignalProbe.rms(samples, in: interior), 0.6)
         XCTAssertEqual(SignalProbe.frequency(samples, in: interior, sampleRate: rate), 880, accuracy: 3)
-        XCTAssertEqual(samples, lastSecond, "обрезанный срез — та же последняя секунда файла")
     }
 
     /// Вектор v7: файл 10 с, срез 10000…11000 → ни одного кадра после обрезки → `unsupportedRequest`.

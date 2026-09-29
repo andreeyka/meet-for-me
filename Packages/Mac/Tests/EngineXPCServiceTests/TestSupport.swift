@@ -95,7 +95,19 @@ final class RealServiceFixture: NSObject {
     private let listener: NSXPCListener
     private let delegate: TestServiceConnectionDelegate
 
-    init(serviceVersion: String = "test-real-service", clock: @escaping @Sendable () -> Date = { Date() }) {
+    /// Стенд сервиса и провода: любая запись пригодна (`AnyIdFinalizedRecordingRepository`).
+    /// Хранилище выбирается явно — здесь или `recordings:` у `init` (MEE-488, п. 10; как
+    /// `XPCFixture.transportOnly`).
+    static func transportOnly(
+        serviceVersion: String = "test-real-service", clock: @escaping @Sendable () -> Date = { Date() }
+    ) -> RealServiceFixture {
+        .init(serviceVersion: serviceVersion, clock: clock, recordings: AnyIdFinalizedRecordingRepository())
+    }
+
+    init(
+        serviceVersion: String = "test-real-service", clock: @escaping @Sendable () -> Date = { Date() },
+        recordings: RecordingRepository
+    ) {
         let listener = NSXPCListener.anonymous()
         self.listener = listener
         self.serviceVersion = serviceVersion
@@ -106,7 +118,7 @@ final class RealServiceFixture: NSObject {
         self.delegate = TestServiceConnectionDelegate(engines: bundle, serviceVersion: serviceVersion)
         self.client = EngineXPCClient(
             makeConnection: { NSXPCConnection(listenerEndpoint: listener.endpoint) },
-            modelCatalog: modelCatalog, recordings: AnyIdFinalizedRecordingRepository(),
+            modelCatalog: modelCatalog, recordings: recordings,
             fileLayout: temporaryLayout.layout, clock: clock
         )
         super.init()

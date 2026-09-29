@@ -52,7 +52,7 @@ final class EngineXPCServiceCancelTests: XCTestCase {
 
     func test_cancelUnknownJobIdIsSuccessfulNoOp() async {
         await withDeadline {
-            let fixture = RealServiceFixture()
+            let fixture = RealServiceFixture.transportOnly()
             let (proxy, connection) = fixture.rawServiceProxy()
             defer { connection.invalidate() }
 
@@ -70,7 +70,7 @@ final class EngineXPCServiceCancelTests: XCTestCase {
 
     func test_genuineCancelStopsFakeEngineAndRepliesCancelledOnOriginalCall() async {
         await withDeadline {
-            let fixture = RealServiceFixture()
+            let fixture = RealServiceFixture.transportOnly()
             fixture.transcription.simulatedWorkNanoseconds = 5_000_000_000   // 5с — заведомо дольше отмены
             let (proxy, connection) = fixture.rawServiceProxy()
             defer { connection.invalidate() }
@@ -105,7 +105,7 @@ final class EngineXPCServiceCancelTests: XCTestCase {
     /// запроса — тоже no-op, не отказ.
     func test_cancelAlreadyFinishedJobIdIsSuccessfulNoOp() async {
         await withDeadline {
-            let fixture = RealServiceFixture()
+            let fixture = RealServiceFixture.transportOnly()
             let (proxy, connection) = fixture.rawServiceProxy()
             defer { connection.invalidate() }
             guard let (jobId, request) = try? Self.makeTranscribeRequest() else {
@@ -135,7 +135,7 @@ final class EngineXPCServiceCancelTests: XCTestCase {
     /// настоящим круговым обменам одновременно.
     func test_concurrentJobsAreIsolatedByJobIdCancellingOneLeavesOthersUnaffected() async {
         await withDeadline(10) {
-            let fixture = RealServiceFixture()
+            let fixture = RealServiceFixture.transportOnly()
             fixture.transcription.simulatedWorkNanoseconds = 1_000_000_000   // 1с — время отменить среднюю
             let (proxy, connection) = fixture.rawServiceProxy()
             defer { connection.invalidate() }
