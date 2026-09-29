@@ -1,29 +1,36 @@
-//  AppFacadeImpl — команды обработки и чтение задач, группа Н плана MEE-410 (C-016 v10,
-//  MEE-25; К37, К38, строки `jobs.*` К27 перечня MEE-401; задача MEE-420).
+//  AppFacadeImpl — команды обработки и чтение задач, группа Н плана MEE-410 (C-016 v11,
+//  MEE-25; К37, К38, К65, строки `jobs.*` К27 перечня MEE-401; задачи MEE-420, MEE-465).
 //
 //  Модуль: domain-core · Владелец: DEV-2 · Слой: домен
 //
 //  ЧТО НАЗВАНО КОНТРАКТОМ.
-//   • Инв. 12: `retranscribe` с профилем, которому не хватает моделей, бросает
-//     `profileNotReady(profileId:missingModelIds:)` и задачу не ставит. Недостающие модели
-//     называет каталог (`ModelCatalogPort.missingModels(profileId:)`, C-014 инв. 10).
+//   • Инв. 12 (правка IR-144, MEE-463): `retranscribe` сначала читает запись
+//     `RecordingRepository.recording(id:)` (C-010): записи нет — `notFound(entity: "Recording",
+//     id:)`; запись не `.finalized` — `notAllowed(reason:)`. Порядок значим: запись раньше
+//     профиля. Затем — профиль: не хватает моделей — `profileNotReady(profileId:
+//     missingModelIds:)` (недостающие называет `ModelCatalogPort.missingModels(profileId:)`,
+//     C-014 инв. 10). Ни в одном отказе задача не ставится. Подача —
+//     `JobSubmission.standard(_:runAfter:)` (таблица §4 C-013) для `transcribe` с
+//     `language: nil` (язык даёт профиль, C-014 §3) и правилом «только от сети» из действующих
+//     настроек — общим `JobSubmission.applyingPowerRule` (`JobSubmissionPowerRule.swift`),
+//     тем же, что у цепочки `SessionMachine.submitChain`.
+//   • Инв. 32 (новый, IR-144): `retryJob` — задачи нет — `jobs.unknownJob` (тот же код, что
+//     у `cancelJob`); повтор допустим только из `failed` и `cancelled`, из `pending`,
+//     `running`, `succeeded` — `notAllowed(reason:)`. Подача собирается заново, а не
+//     копируется: `JobSubmission.standard(прежняя нагрузка, runAfter: сейчас)` и правило
+//     «только от сети» из ДЕЙСТВУЮЩИХ настроек; `dedupKey` — `nil`.
 //   • «Что вне контракта»: `retryJob` не переиспользует прежний `jobId` — новая задача.
-//   • §«Поведение»: какую задачу ставить, решает не фасад. Подача `retranscribe` —
-//     `JobSubmission.standard(_:runAfter:)` (таблица §4 C-013) с правилом §4 C-013
-//     «только от сети» из действующих настроек — общим `JobSubmission.applyingPowerRule`
-//     (`JobSubmissionPowerRule.swift`), тем же, что у цепочки `SessionMachine.submitChain`;
-//     `language` — `nil`, как у цепочки.
-//   • Инв. 19, §3.1: `JobQueueError` — `jobs.<имя case>`, `permissionKind` — `nil`.
+//   • Инв. 15: `retranscribe`/`cancelJob`/`retryJob` меняют очередь — публикуется
+//     `statusChanged` до возврата; отказ событий не публикует.
+//   • Инв. 19, §3.1: `JobQueueError` — `jobs.<имя case>`, `StorageError` — `storage.*`,
+//     `permissionKind` — `nil`.
 //
-//  ЧТО КОНТРАКТ НЕ НАЗЫВАЕТ, И КАК ЭТО РЕШЕНО ЗДЕСЬ (вопросы — в отчёте MEE-420).
+//  ЧТО КОНТРАКТ НЕ НАЗЫВАЕТ, И КАК ЭТО РЕШЕНО ЗДЕСЬ.
+//   • Отказ чтения записи в `retranscribe` (`StorageError`) — `storage.*` по словарю, прочее —
+//     `app.internalError`, как у прочих чтений фасада; задача не ставится.
+//   • Текст `reason` у `notAllowed` — для человека, критериев на него нет (§3.1).
 //   • Очередь — обязательный параметр `AppFacadeImpl.init` (C-016 v11 инв. 31, IR-144,
 //     MEE-462): режима «фасад без очереди» и отказа `notAllowed` на этот случай нет.
-//   • `retryJob` несуществующей задачи — `jobs.unknownJob`, тот же код, что отдаёт
-//     `cancelJob` от очереди (`JobQueueEngine.cancel`). Статус прежней задачи не
-//     проверяется: контракт не говорит, какие статусы допускают повтор. Подача повторяет
-//     прежнюю (нагрузка, приоритет, попытки, условия, `dedupKey`), `runAfter` — сейчас.
-//   • События: `retranscribe`/`cancelJob`/`retryJob` меняют очередь — публикуется
-//     `statusChanged` (инв. 15; `AppStatus` несёт состояние очереди).
 
 import Foundation
 
@@ -44,6 +51,7 @@ extension AppFacadeImpl {
 
     public func retranscribe(recordingId: UUID, profileId: String) async throws -> UUID {
         let queue = jobQueue
+        try await requireFinalizedRecording(recordingId)
         let missing: [ModelDescriptor]
         do {
             missing = try await modelCatalog.missingModels(profileId: profileId)
@@ -82,16 +90,41 @@ extension AppFacadeImpl {
         guard let previous else {
             throw wrap(JobQueueError.unknownJob(id))
         }
-        let submission = JobSubmission(
-            payload: previous.payload, priority: previous.priority, maxAttempts: previous.maxAttempts,
-            runAfter: clock(), conditions: previous.conditions, dedupKey: nil
-        )
+        guard Self.retryableStatuses.contains(previous.status) else {
+            throw AppFacadeError.notAllowed(reason: "retryJob: повтор допустим только из failed и cancelled, "
+                + "задача \(id) — \(previous.status.rawValue)")
+        }
+        let currentSettings = try await settings()
+        let submission = JobSubmission.standard(previous.payload, runAfter: clock()).applyingPowerRule(currentSettings)
         let jobId = try await submit(submission, to: queue)
         publish(.statusChanged(await status()))
         return jobId
     }
 
     // MARK: - Вспомогательное
+
+    /// Инв. 32: статусы C-013, из которых повтор допустим.
+    private static let retryableStatuses: Set<JobStatus> = [.failed, .cancelled]
+
+    /// Инв. 12 (IR-144): запись есть и `.finalized`, иначе `notFound` / `notAllowed`.
+    private func requireFinalizedRecording(_ recordingId: UUID) async throws {
+        let record: RecordingRecord?
+        do {
+            record = try await recordings.recording(id: recordingId)
+        } catch let error as StorageError {
+            throw wrap(error)
+        } catch {
+            throw wrapUnexpected(error)
+        }
+        guard let record else {
+            throw AppFacadeError.notFound(entity: "Recording", id: recordingId.uuidString)
+        }
+        guard record.status == .finalized else {
+            throw AppFacadeError.notAllowed(
+                reason: "retranscribe: запись \(recordingId) не завершена (\(record.status.rawValue))"
+            )
+        }
+    }
 
     private func submit(_ submission: JobSubmission, to queue: JobQueue) async throws -> UUID {
         do {

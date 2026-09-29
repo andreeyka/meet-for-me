@@ -1,6 +1,7 @@
-//  JobCommandsTests — план MEE-410, группа Н (К37, К38 перечня MEE-401; C-016 v10 инв. 12,
-//  «Что вне контракта»; задача MEE-420). Предмет — `AppFacadeImpl` на `FakeModelCatalogPort`
-//  и `FakeJobQueue`; координатор — `NoOpSessionCoordinator` этого таргета (страж К88).
+//  JobCommandsTests — план MEE-410, группа Н (К37, К38 перечня MEE-401; C-016 v11 инв. 12,
+//  «Что вне контракта»; задачи MEE-420, MEE-465). Предмет — `AppFacadeImpl` на
+//  `FakeModelCatalogPort` и `FakeJobQueue`; координатор — `NoOpSessionCoordinator` этого
+//  таргета (страж К88). Векторы К37 по правке IR-144 и К65 — `JobCommandsTests+RetryRetranscribe.swift`.
 //
 //  Модуль: domain-core · Владелец: DEV-2 · Слой: домен
 
@@ -61,6 +62,15 @@ struct ModelJobFixture {
         )
     }
 
+    /// Запись в `recordings` со статусом `status` (по умолчанию `.finalized` — `retranscribe`
+    /// по инв. 12 правки IR-144 требует завершённую запись); возвращает её `recordingId`.
+    @discardableResult
+    func seedRecording(status: RecordingStatus = .finalized) async throws -> UUID {
+        let manifest = RecordingManifestFixtures.hourlyTwoChannels
+        try await repositories.recordings.save(RecordingRecord(manifest: manifest, status: status))
+        return manifest.recordingId
+    }
+
     static func failedJob(id: UUID = UUID()) -> Job {
         let epoch = Date(timeIntervalSince1970: 0)
         return Job(
@@ -92,7 +102,7 @@ func underlyingView(file: StaticString = #filePath, line: UInt = #line,
 final class JobCommandsTests: XCTestCase {
 
     /// Профиль `p1`: asr скачан, vad — нет.
-    private func seedProfileMissingVad(_ fixture: ModelJobFixture) {
+    func seedProfileMissingVad(_ fixture: ModelJobFixture) {
         fixture.catalog.setCatalog([
             ModelJobFixture.descriptor("m-asr", role: .asr), ModelJobFixture.descriptor("m-vad", role: .vad)
         ])
@@ -102,13 +112,13 @@ final class JobCommandsTests: XCTestCase {
     }
 
     /// Профиль `p1`: все модели скачаны — `retranscribe` ставит задачу.
-    private func seedProfileReady(_ fixture: ModelJobFixture) {
+    func seedProfileReady(_ fixture: ModelJobFixture) {
         seedProfileMissingVad(fixture)
         fixture.catalog.setState(.downloaded, forId: "m-vad", version: "1.0.0")
     }
 
     /// Действующие настройки: срез-1 по умолчанию с заданным «обрабатывать только от сети».
-    private func setProcessOnACPowerOnly(_ value: Bool, in fixture: ModelJobFixture) async throws {
+    func setProcessOnACPowerOnly(_ value: Bool, in fixture: ModelJobFixture) async throws {
         let defaults = AppSettings.slice1Defaults
         try await fixture.facade.updateSettings(AppSettings(
             recordingPolicy: defaults.recordingPolicy, armLeadSeconds: defaults.armLeadSeconds,
@@ -125,7 +135,7 @@ final class JobCommandsTests: XCTestCase {
     func test_k37_retranscribeMissingModelsThrowsProfileNotReady() async throws {
         let fixture = ModelJobFixture()
         seedProfileMissingVad(fixture)
-        let recordingId = UUID()
+        let recordingId = try await fixture.seedRecording()
         do {
             _ = try await fixture.facade.retranscribe(recordingId: recordingId, profileId: "p1")
             XCTFail("ожидался profileNotReady")
@@ -185,7 +195,7 @@ final class JobCommandsTests: XCTestCase {
             let fixture = ModelJobFixture()
             seedProfileReady(fixture)
             try await setProcessOnACPowerOnly(acOnly, in: fixture)
-            let recordingId = UUID()
+            let recordingId = try await fixture.seedRecording()
             _ = try await fixture.facade.retranscribe(recordingId: recordingId, profileId: "p1")
             let submission = try XCTUnwrap(fixture.queue.submissions.first, "processOnACPowerOnly=\(acOnly)")
             XCTAssertEqual(submission.conditions.requiresACPower, expected, "processOnACPowerOnly=\(acOnly)")
@@ -207,8 +217,9 @@ final class JobCommandsTests: XCTestCase {
         seedProfileReady(fixture)
         let existing = ModelJobFixture.failedJob()
         fixture.queue.setJobs([existing])
+        let recordingId = try await fixture.seedRecording()
         let stream = fixture.facade.events()
-        _ = try await fixture.facade.retranscribe(recordingId: UUID(), profileId: "p1")
+        _ = try await fixture.facade.retranscribe(recordingId: recordingId, profileId: "p1")
         try await fixture.facade.cancelJob(id: existing.id)
         _ = try await fixture.facade.retryJob(id: existing.id)
         let events = await collectEvents(stream, count: 3)
