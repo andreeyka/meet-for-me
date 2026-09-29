@@ -73,6 +73,9 @@ extension AppFacadeImpl {
     /// `.failed(willRetry: false)` → ровно один `failure` с `facade.jobFailed`. `willRetry: true`
     /// не публикуется: исход ещё наступит. Прочие события очереди фасад здесь не разбирает.
     func handleJobEvent(_ event: JobEvent) async {
+        // Инв. 34 (в), IR-146: `transcribe` завершилась — у записи появился транскрипт. `transcriptChanged`
+        // не публикуется: идентификатора нового транскрипта UI не знает.
+        if case .succeeded(_, .transcribe) = event { publish(.meetingsChanged) }
         guard let error = Self.jobFailedError(for: event) else { return }
         await publishFailure(error)
     }

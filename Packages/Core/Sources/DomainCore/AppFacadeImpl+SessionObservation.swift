@@ -35,6 +35,9 @@ extension AppFacadeImpl {
         } else {
             knownSessionStates[snapshot.sessionId] = snapshot.state
         }
+        // Инв. 34 (б), IR-146: `RecordingStatus` записи меняется вместе с состоянием сессии
+        // (`stopping`, `finalized`, `failed`), и `meetingsChanged` идёт не позже `statusChanged`.
+        publish(.meetingsChanged)
         publish(.statusChanged(await status()))
     }
 }

@@ -25,10 +25,12 @@ extension EventsTests {
         let stream = fixture.facade.events()
         try await fixture.facade.stopRecording(recordingId: recordingId)
 
-        let events = await collectEvents(stream, count: 1)
-        XCTAssertEqual(events.count, 1, "\(events)")
-        guard case .statusChanged = events.first else {
-            return XCTFail("ожидался .statusChanged, получено \(String(describing: events.first))")
+        // Инв. 34 (б), IR-146: `meetingsChanged` не позже `statusChanged` для того же изменения.
+        let events = await collectEvents(stream, count: 2)
+        XCTAssertEqual(events.count, 2, "\(events)")
+        XCTAssertEqual(events.first, .meetingsChanged)
+        guard case .statusChanged = events.last else {
+            return XCTFail("ожидался .statusChanged, получено \(String(describing: events.last))")
         }
     }
 

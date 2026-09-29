@@ -52,6 +52,17 @@ public struct FakeAppFacadeCommand: Equatable, Sendable {
     }
 }
 
+/// Один вызов `adHocRecordings(from:to:)` с аргументами (C-016 v12, «Фейк для тестов»).
+public struct AdHocRecordingsCall: Equatable, Sendable {
+    public let from: Date
+    public let to: Date
+
+    public init(from: Date, to: Date) {
+        self.from = from
+        self.to = to
+    }
+}
+
 /// Поля `ConnectorHealthView`, которые не зависят от `sourceId` параметра вызова —
 /// `connectorHealth(sourceId:)` собирает из них ответ вместе с переданным `sourceId`.
 public struct ConnectorHealthTemplate: Equatable, Sendable {
@@ -75,6 +86,8 @@ public final class FakeAppFacade: AppFacade, @unchecked Sendable {
     var storedStatusValue: AppStatus
     var storedMeetingsValue: [MeetingListItem] = []
     var storedMeetingDetailValue: MeetingDetail?
+    var storedAdHocRecordingsValue: [RecordingSummary] = []
+    var storedAdHocRecordingsCalls: [AdHocRecordingsCall] = []
     var storedTranscriptValue: TranscriptView?
     var storedLatestTranscriptValue: TranscriptView?
     var storedSearchHitsValue: [SearchHit] = []
@@ -162,6 +175,11 @@ public final class FakeAppFacade: AppFacade, @unchecked Sendable {
     public func meeting(id: UUID) async throws -> MeetingDetail? {
         if let forcedError { throw forcedError }
         return meetingDetailValue
+    }
+    public func adHocRecordings(from: Date, to: Date) async throws -> [RecordingSummary] {
+        locked { storedAdHocRecordingsCalls.append(AdHocRecordingsCall(from: from, to: to)) }
+        if let forcedError { throw forcedError }
+        return adHocRecordingsValue
     }
     public func transcript(id: UUID) async throws -> TranscriptView? {
         if let forcedError { throw forcedError }

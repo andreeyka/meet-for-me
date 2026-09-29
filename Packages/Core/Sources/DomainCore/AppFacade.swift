@@ -67,6 +67,7 @@ public protocol AppFacade: Sendable {
     func status() async -> AppStatus
     func meetings(from: Date, to: Date) async throws -> [MeetingListItem]
     func meeting(id: UUID) async throws -> MeetingDetail?
+    func adHocRecordings(from: Date, to: Date) async throws -> [RecordingSummary]
     func transcript(id: UUID) async throws -> TranscriptView?
     func latestTranscript(recordingId: UUID) async throws -> TranscriptView?
     func search(query: String, limit: Int, offset: Int) async throws -> [SearchHit]
