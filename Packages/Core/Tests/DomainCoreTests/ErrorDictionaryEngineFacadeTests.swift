@@ -121,16 +121,23 @@ final class ErrorDictionaryEngineFacadeTests: XCTestCase {
         XCTAssertFalse(transport?.code.hasPrefix("engine.engineFailure.") ?? true)
     }
 
-    /// §3.1, «Три строки…», п. 1 (v11, IR-143): код движка вне перечня `EngineError` действующего
-    /// у клиента издания C-011 («сервис новее клиента») проходит тем же правилом дословно,
-    /// а не сводится к `app.internalError`.
-    func test_dictionary_engineFailureUnknownCodePassesVerbatim() async throws {
+    /// К63 (дельта `АВ`): две строки словаря v11. (i) `AppFacadeError.jobFailed` — `facade.jobFailed`
+    /// по общему правилу. (ii) §3.1, «Три строки…», п. 1 (IR-143): код движка вне перечня
+    /// `EngineError` действующего C-011 («сервис новее клиента») — дословно, не `app.internalError`.
+    func test_k63_facadeJobFailedAndEngineFailureUnknownCodeRows() async throws {
         let fixture = FailureFixture()
-        let view = await fixture.asyncView(
-            for: TranscriptionServiceError.engineFailure(code: "quantumDecoherence", message: "m")
+        let jobFailed = await fixture.asyncView(
+            for: AppFacadeError.jobFailed(jobId: UUID(), type: .transcribe, message: "x")
         )
-        XCTAssertEqual(view?.code, "engine.engineFailure.quantumDecoherence")
-        XCTAssertNil(view?.permissionKind)
+        XCTAssertEqual(jobFailed?.code, "facade.jobFailed", "(i)")
+        XCTAssertNil(jobFailed?.permissionKind, "(i)")
+
+        XCTAssertFalse(engineErrorCaseNames.contains("futureCode"), "иначе вектор (ii) вакуумен")
+        let unknown = await fixture.asyncView(
+            for: TranscriptionServiceError.engineFailure(code: "futureCode", message: "x")
+        )
+        XCTAssertEqual(unknown?.code, "engine.engineFailure.futureCode", "(ii)")
+        XCTAssertNil(unknown?.permissionKind, "(ii)")
     }
 
     /// К27: шесть строк `facade.*` (v11 добавил `jobFailed`); колонка `permissionKind` — у

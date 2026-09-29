@@ -1,6 +1,7 @@
 //  FailureSourcesInv31Tests — C-016 v11, инв. 31, IR-143 (MEE-457), задача MEE-462:
 //  `AppEvent.failure` публикуется по признаку; источники — окончательно упавшая задача и
-//  оборванная запись; ручной `syncCalendars()` источником не является.
+//  оборванная запись; ручной `syncCalendars()` источником не является. Критерии К60, К61
+//  дельты `АВ` перечня MEE-401 (`f89d2865`).
 //
 //  «Ровно один `failure` на событие» и «молчит» наблюдаются счётом до барьера: события одного
 //  потока фасад обрабатывает по порядку, поэтому лишняя публикация ушла бы раньше ответа на
@@ -9,14 +10,14 @@
 //  Модуль: domain-core · Владелец: DEV-2 · Слой: домен
 
 import XCTest
-import DomainCore
+@testable import DomainCore
 import DomainTestKit
 
 final class FailureSourcesInv31Tests: XCTestCase {
 
     // MARK: - Источник (1): JobQueue.events()
 
-    func test_inv31_jobFailedWithoutRetryPublishesOneFacadeJobFailed() async throws {
+    func test_k60i_jobFailedWithoutRetryPublishesOneFacadeJobFailed() async throws {
         let fixture = FacadeV11Fixture()
         let stream = fixture.facade.events()
         let jobId = UUID()
@@ -29,13 +30,22 @@ final class FailureSourcesInv31Tests: XCTestCase {
         guard case .failure(let view)? = events.first else { return XCTFail("ожидался .failure, пришло \(events)") }
         XCTAssertEqual(view.code, "facade.jobFailed")
         XCTAssertNil(view.permissionKind)
-        let expected = AppFacadeError.jobFailed(jobId: jobId, type: .transcribe,
-                                                message: "engine.engineFailure.modelMissing")
-        XCTAssertEqual(view.message, String(describing: expected), "message несёт error дословно")
+    }
+
+    /// Инв. 31: `message` случая `jobFailed` — текст `error` события дословно. С границы
+    /// `AppErrorView.message` не сравнивается (§3.1, «Что стабильно»), поэтому проверяется
+    /// значение `AppFacadeError` до свода к `AppErrorView`.
+    func test_k60i_jobFailedValueCarriesEventErrorVerbatim() {
+        let jobId = UUID()
+        let event = JobEvent.failed(jobId: jobId, type: .transcribe, error: "boom: движок", willRetry: false)
+        XCTAssertEqual(AppFacadeImpl.jobFailedError(for: event),
+                       .jobFailed(jobId: jobId, type: .transcribe, message: "boom: движок"))
+        let retried = JobEvent.failed(jobId: jobId, type: .transcribe, error: "boom", willRetry: true)
+        XCTAssertNil(AppFacadeImpl.jobFailedError(for: retried), "willRetry: true — не источник")
     }
 
     /// `willRetry: true` не публикуется; прочие события очереди — тоже. Барьер — окончательный отказ.
-    func test_inv31_jobFailedWithRetryAndOtherJobEventsPublishNothing() async throws {
+    func test_k60ii_jobFailedWithRetryAndOtherJobEventsPublishNothing() async throws {
         let fixture = FacadeV11Fixture()
         let stream = fixture.facade.events()
         let retried = UUID()
@@ -47,14 +57,14 @@ final class FailureSourcesInv31Tests: XCTestCase {
         fixture.jobQueue.emit(.failed(jobId: final, type: .attribute, error: "окончательно", willRetry: false))
         let events = await collectEvents(stream, count: 3, timeoutSeconds: 1)
 
-        XCTAssertEqual(events.count, 1)
+        XCTAssertEqual(events.count, 1, "willRetry: true и прочие события — ни одного failure; один — от барьера")
         guard case .failure(let view)? = events.first else { return XCTFail("ожидался .failure, пришло \(events)") }
-        XCTAssertTrue(view.message.contains(final.uuidString), "failure — от барьера, не от willRetry: true")
+        XCTAssertEqual(view.code, "facade.jobFailed")
     }
 
     // MARK: - Источник (2): AudioCapturePort.events()
 
-    func test_inv31_captureFailedPublishesOneCaptureCodeWithPermissionKind() async throws {
+    func test_k60iii_captureFailedPublishesOneCaptureCodeWithPermissionKind() async throws {
         let fixture = FacadeV11Fixture()
         let stream = fixture.facade.events()
 
@@ -73,7 +83,7 @@ final class FailureSourcesInv31Tests: XCTestCase {
 
     // MARK: - Не источник: ручной syncCalendars()
 
-    func test_inv31_syncCalendarsWithFailureResultPublishesNoFailure() async throws {
+    func test_k61_syncCalendarsWithFailureResultPublishesNoFailure() async throws {
         let fixture = FacadeV11Fixture()
         let source = CalendarSourceId(rawValue: "graph-work")
         fixture.calendar.setSources([source])

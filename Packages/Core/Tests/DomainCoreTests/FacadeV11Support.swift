@@ -45,24 +45,6 @@ struct FacadeV11Fixture {
             clock: { clock }
         )
     }
-
-    /// Опрос `status()` до выполнения условия: события захвата без публикации (`.started`,
-    /// `.levels`) барьера в `events()` не дают.
-    func statusWhen(
-        timeout: TimeInterval = 2, file: StaticString = #filePath, line: UInt = #line,
-        _ condition: (AppStatus) -> Bool
-    ) async throws -> AppStatus {
-        let deadline = Date().addingTimeInterval(timeout)
-        while true {
-            let status = await facade.status()
-            if condition(status) { return status }
-            guard Date() < deadline else {
-                XCTFail("условие по status() не наступило вовремя", file: file, line: line)
-                return status
-            }
-            try await Task.sleep(nanoseconds: 1_000_000)
-        }
-    }
 }
 
 func recordingSession(

@@ -70,12 +70,19 @@ extension AppFacadeImpl {
 
     // MARK: - Инв. 31, источник (1): окончательно упавшая задача
 
-    /// `.failed(willRetry: false)` → ровно один `failure` с `facade.jobFailed`; `message` —
-    /// `error` дословно. `willRetry: true` не публикуется: исход ещё наступит. Прочие события
-    /// очереди фасад здесь не разбирает.
+    /// `.failed(willRetry: false)` → ровно один `failure` с `facade.jobFailed`. `willRetry: true`
+    /// не публикуется: исход ещё наступит. Прочие события очереди фасад здесь не разбирает.
     func handleJobEvent(_ event: JobEvent) async {
-        guard case let .failed(jobId, type, error, willRetry) = event, !willRetry else { return }
-        await publishFailure(AppFacadeError.jobFailed(jobId: jobId, type: type, message: error))
+        guard let error = Self.jobFailedError(for: event) else { return }
+        await publishFailure(error)
+    }
+
+    /// Значение `AppFacadeError.jobFailed` для события очереди; `nil` — событие не источник.
+    /// `message` — текст `error` события дословно (инв. 31): с границы его не видно (§3.1,
+    /// «Что стабильно»), поэтому значение проверяется здесь, до свода к `AppErrorView`.
+    static func jobFailedError(for event: JobEvent) -> AppFacadeError? {
+        guard case let .failed(jobId, type, error, willRetry) = event, !willRetry else { return nil }
+        return .jobFailed(jobId: jobId, type: type, message: error)
     }
 
     // MARK: - `facade.*` (§3.1, строка `AppFacadeError`)
