@@ -179,6 +179,7 @@ extension CompositionRoot {
         let engineClient = EngineXPCClient(
             serviceName: transcriptionEngineServiceName(), modelCatalog: partial.modelCatalog
         )
+        await registerOrCrash(TranscodeJobHandler(), into: partial.jobQueue)
         await registerOrCrash(
             TranscribeJobHandler(port: engineClient, transcripts: storage.transcriptRepository()),
             into: partial.jobQueue

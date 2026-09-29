@@ -56,6 +56,18 @@ final class AttributionBasicsTests: XCTestCase {
         }
     }
 
+    /// C-015 v11, вектор 5: версия входа "v2" против профиля "v1" → `embeddingModelMismatch` от порта.
+    func test_v11_inputVersionV2AgainstProfileV1ThrowsMismatch() async throws {
+        let (transcript, segmentIds) = try Fixture.transcript([
+            SegmentSpec(channel: .system, cluster: 0)
+        ], speakers: [try Fixture.speaker(0, embedding: [1.0, 0.0], version: "v2")])
+        let input = Fixture.input(
+            transcript: transcript, segmentIds: segmentIds,
+            profiles: [Fixture.profile(1, embedding: [1.0, 0.0], version: "v1")]
+        )
+        await assertThrowsMismatch(input)
+    }
+
     func test_k3_embeddingModelMismatchRejectsWholeCallNotPartially() async throws {
         let (transcript, segmentIds) = try Fixture.transcript([
             SegmentSpec(channel: .system, cluster: 0)

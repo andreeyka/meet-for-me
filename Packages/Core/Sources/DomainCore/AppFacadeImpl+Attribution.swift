@@ -173,8 +173,6 @@ extension AppFacadeImpl {
         switch failure {
         case .transcriptNotFound(let id):
             return .notFound(entity: "Transcript", id: id.uuidString)
-        case .embeddingModelVersionMissing:
-            return wrapUnexpected(failure)
         }
     }
 

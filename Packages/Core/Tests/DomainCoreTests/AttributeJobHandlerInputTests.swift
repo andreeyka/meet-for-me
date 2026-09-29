@@ -227,48 +227,77 @@ final class AttributeJobHandlerInputTests: XCTestCase {
         XCTAssertEqual(enabled.port.lastAttributedInput?.profiles, [profile])
     }
 
-    // MARK: - К34 (embeddingModelVersion — первая непустая, либо permanentFailure)
+    // MARK: - К34 (embeddingModelVersion, C-015 v11 §7: без охраны, пять векторов IR-150)
 
-    func test_k34_firstNonEmptyEmbeddingVersionOrPermanentFailureIfNoneAndSpeakersNonEmpty() async throws {
-        // (a) первая непустая версия среди спикеров.
-        let firstVersionHarness = AttributeHarness()
-        let mixedTranscript = try AttributeFixture.transcript(
+    private func attributeInput(
+        speakers: [Transcript.Speaker], voiceProfilesEnabled: Bool, seedProfile: Bool = false
+    ) async throws -> (harness: AttributeHarness, outcome: JobOutcome) {
+        let harness = AttributeHarness()
+        harness.appFacade.settingsValue = AttributeFixture.settings(voiceProfilesEnabled: voiceProfilesEnabled)
+        if seedProfile {
+            let me = AttributeFixture.person(name: "Me", email: "me@example.com", isMe: true)
+            harness.persons.seed([me])
+            harness.speakerProfiles.seed([SpeakerProfile(
+                personId: me.id, embedding: [0.1, 0.2], modelVersion: "v1",
+                sampleCount: 3, updatedAt: AttributeFixture.epoch
+            )])
+        }
+        let transcript = try AttributeFixture.transcript(
             segments: [try AttributeFixture.segment(words: [try AttributeFixture.word("hi")])],
+            speakers: speakers
+        )
+        let transcriptId = try await harness.seedTranscript(transcript)
+        harness.port.forcedResult = AttributeFixture.emptyResult(transcriptId: transcriptId)
+        let outcome = await harness.run(AttributeFixture.job(transcriptId: transcriptId, meetingId: nil))
+        return (harness, outcome)
+    }
+
+    /// Вектор 1: `speakers == []` → "", порт вызван.
+    func test_k34_v1_emptySpeakersGiveEmptyVersionAndPortCalled() async throws {
+        let (harness, outcome) = try await attributeInput(speakers: [], voiceProfilesEnabled: true)
+        XCTAssertEqual(outcome, .success)
+        XCTAssertEqual(harness.port.attributeCallCount, 1)
+        XCTAssertEqual(harness.port.lastAttributedInput?.embeddingModelVersion, "")
+    }
+
+    /// Вектор 2: спикер без версии, `voiceProfilesEnabled == false` → "", порт вызван.
+    func test_k34_v2_speakerWithoutVersionProfilesDisabledGivesEmptyVersionAndPortCalled() async throws {
+        let (harness, outcome) = try await attributeInput(
+            speakers: [try AttributeFixture.speaker(cluster: 0, embeddingModelVersion: nil)],
+            voiceProfilesEnabled: false
+        )
+        XCTAssertEqual(outcome, .success)
+        XCTAssertEqual(harness.port.attributeCallCount, 1)
+        XCTAssertEqual(harness.port.lastAttributedInput?.embeddingModelVersion, "")
+    }
+
+    /// Вектор 3: то же при `true` → "", `profiles` репозитория не вызван, порт вызван.
+    func test_k34_v3_speakerWithoutVersionProfilesEnabledSkipsProfilesRepository() async throws {
+        let (harness, outcome) = try await attributeInput(
+            speakers: [try AttributeFixture.speaker(cluster: 0, embeddingModelVersion: nil)],
+            voiceProfilesEnabled: true, seedProfile: true
+        )
+        XCTAssertEqual(outcome, .success)
+        XCTAssertEqual(harness.port.attributeCallCount, 1)
+        XCTAssertEqual(harness.port.lastAttributedInput?.embeddingModelVersion, "")
+        XCTAssertEqual(harness.port.lastAttributedInput?.profiles, [])
+        XCTAssertEqual(
+            harness.log.count(port: "SpeakerProfileRepository", method: "profiles(personIds:modelVersion:)"), 0
+        )
+    }
+
+    /// Вектор 4: версии `nil`, "", "v2" → "v2" (первая непустая, не первая не-nil).
+    func test_k34_v4_firstNonEmptyVersionWins() async throws {
+        let (harness, outcome) = try await attributeInput(
             speakers: [
                 try AttributeFixture.speaker(cluster: 0, embeddingModelVersion: nil),
-                try AttributeFixture.speaker(cluster: 1, embeddingModelVersion: "v2")
-            ]
+                try AttributeFixture.speaker(cluster: 1, embeddingModelVersion: ""),
+                try AttributeFixture.speaker(cluster: 2, embeddingModelVersion: "v2")
+            ],
+            voiceProfilesEnabled: false
         )
-        let mixedTranscriptId = try await firstVersionHarness.seedTranscript(mixedTranscript)
-        firstVersionHarness.port.forcedResult = AttributeFixture.emptyResult(transcriptId: mixedTranscriptId)
-        _ = await firstVersionHarness.run(AttributeFixture.job(transcriptId: mixedTranscriptId, meetingId: nil))
-        XCTAssertEqual(firstVersionHarness.port.lastAttributedInput?.embeddingModelVersion, "v2")
-
-        // (b) спикеры есть, версии нет ни у одного — испорченный вход, порт не вызван.
-        let corruptedHarness = AttributeHarness()
-        let corruptedTranscript = try AttributeFixture.transcript(
-            segments: [try AttributeFixture.segment(words: [try AttributeFixture.word("hi")])],
-            speakers: [try AttributeFixture.speaker(cluster: 0, embeddingModelVersion: nil)]
-        )
-        let corruptedTranscriptId = try await corruptedHarness.seedTranscript(corruptedTranscript)
-        let outcome = await corruptedHarness.run(
-            AttributeFixture.job(transcriptId: corruptedTranscriptId, meetingId: nil)
-        )
-        assertPermanentFailure(outcome)
-        XCTAssertEqual(corruptedHarness.port.attributeCallCount, 0)
-
-        // (c) speakers пуст — штатный вход, версия "".
-        let emptySpeakersHarness = AttributeHarness()
-        let micOnlyTranscript = try AttributeFixture.transcript(
-            segments: [try AttributeFixture.segment(words: [try AttributeFixture.word("hi")])]
-        )
-        let micOnlyTranscriptId = try await emptySpeakersHarness.seedTranscript(micOnlyTranscript)
-        emptySpeakersHarness.port.forcedResult = AttributeFixture.emptyResult(transcriptId: micOnlyTranscriptId)
-        let micOutcome = await emptySpeakersHarness.run(
-            AttributeFixture.job(transcriptId: micOnlyTranscriptId, meetingId: nil)
-        )
-        XCTAssertEqual(micOutcome, .success)
-        XCTAssertEqual(emptySpeakersHarness.port.lastAttributedInput?.embeddingModelVersion, "")
+        XCTAssertEqual(outcome, .success)
+        XCTAssertEqual(harness.port.lastAttributedInput?.embeddingModelVersion, "v2")
     }
 
     // MARK: - Необязательные пункты приёмки РП (PR #136, 03:15 UTC)

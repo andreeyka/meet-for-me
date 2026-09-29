@@ -1,4 +1,4 @@
-//  TranscribeJobHandler — обработчик задачи `.transcribe` (C-012 v10 §4/§4.1, инварианты 19,
+//  TranscribeJobHandler — обработчик задачи `.transcribe` (C-012 v12 §4/§4.1, инварианты 19,
 //  20, 22; MEE-394, выявлено приёмкой #111/MEE-390). Отображает исход `TranscriptionServicePort
 //  .transcribe` в `JobOutcome` РОВНО по таблице §4 — обработчик не пишет своего отображения
 //  (инвариант 20 дословно).
@@ -85,8 +85,8 @@ public struct TranscribeJobHandler: JobHandler {
             return .permanentFailure(error: "messageTooLarge(\(bytes))")
         case .invalidRequest(let message):
             return .permanentFailure(error: message)
-        case .recordingNotReady(_, let message):
-            return .permanentFailure(error: message)
+        case .recordingNotReady(let recordingId, let message):
+            return .permanentFailure(error: "\(recordingId): \(message)")
         case .engineFailure(let code, let message):
             return outcomeForEngineFailure(code: code, message: message)
         case .cancelled:
