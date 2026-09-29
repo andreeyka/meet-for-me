@@ -64,22 +64,24 @@ extension AppFacadeError {
     /// Имя сущности приходит из фасада и хранилища по-английски (`"Meeting"`, `"Recording"`, …),
     /// регистр не важен. Незнакомое имя — общий текст: английское имя типа пользователю ни к чему.
     static func notFoundText(entity: String) -> String {
-        switch entity.lowercased() {
-        case "meeting", "meetings": return "Встреча не найдена"
-        case "recording", "recordings": return "Запись не найдена"
-        case "transcript", "transcripts": return "Транскрипт не найден"
-        case "segment", "segments": return "Фрагмент транскрипта не найден"
-        case "session": return "Сессия записи не найдена"
-        case "prompt": return "Вопрос о записи уже неактуален"
-        case "person", "persons", "people": return "Человек не найден"
-        case "connector", "connectors": return "Подключение календаря не найдено"
-        case "meetingoutput": return "Итоги встречи не найдены"
-        case "job", "jobs": return "Задача не найдена"
-        case "profile": return "Профиль распознавания не найден"
-        case "model": return "Модель не найдена"
-        default: return "Объект не найден"
-        }
+        notFoundTexts[entity.lowercased()] ?? "Объект не найден"
     }
+
+    /// Словарь, а не `switch`: сущностей больше, чем допускает `cyclomatic_complexity`.
+    private static let notFoundTexts: [String: String] = [
+        "meeting": "Встреча не найдена", "meetings": "Встреча не найдена",
+        "recording": "Запись не найдена", "recordings": "Запись не найдена",
+        "transcript": "Транскрипт не найден", "transcripts": "Транскрипт не найден",
+        "segment": "Фрагмент транскрипта не найден", "segments": "Фрагмент транскрипта не найден",
+        "session": "Сессия записи не найдена",
+        "prompt": "Вопрос о записи уже неактуален",
+        "person": "Человек не найден", "persons": "Человек не найден", "people": "Человек не найден",
+        "connector": "Подключение календаря не найдено", "connectors": "Подключение календаря не найдено",
+        "meetingoutput": "Итоги встречи не найдены",
+        "job": "Задача не найдена", "jobs": "Задача не найдена",
+        "profile": "Профиль распознавания не найден",
+        "model": "Модель не найдена"
+    ]
 
     static func permissionMissingText(_ kind: PermissionKind) -> String {
         switch kind {
