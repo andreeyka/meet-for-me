@@ -1,10 +1,13 @@
-//  ModelFileTransport и HTTPRangeResponse — шов загрузки по HTTP-диапазону (C-014 v6 §6).
+//  ModelFileTransport и HTTPRangeResponse — шов загрузки по HTTP-диапазону (C-014 v7 §6).
 //
 //  Модуль: model-manager · Владелец: DEV-2 · Слой: домен + адаптер сети
 //
 //  Оба типа `internal` (C-014 §0, §6, инв. 32): границу модуля не пересекают. Тестовая
 //  реализация живёт в `ModelManagerTests` и берёт шов через `@testable import`.
 //  Один шов на байты каталога (`refreshCatalog`) и на файлы модели (`download`).
+//
+//  v7 (IR-141, п. 5): статус приходит в `head` ДО тела, а не результатом `fetch` после него —
+//  решение по §6 пп. 3–5 (дописать, усечь до нуля, начать заново) принимается до первого байта.
 
 import Foundation
 #if canImport(FoundationNetworking)
@@ -21,10 +24,12 @@ struct HTTPRangeResponse: Equatable, Sendable {
 /// Объявлен в ModelManager и `internal`: границу модуля не пересекает (инвариант 32).
 protocol ModelFileTransport: Sendable {
     /// GET url. При firstByte > 0 запрос обязан нести заголовок "Range: bytes=<firstByte>-".
-    /// Байты тела отдаются в receive по мере поступления.
+    /// head вызывается ровно один раз и ДО первого receive — с кодом ответа и Content-Range;
+    /// бросок из head прерывает запрос, не читая тела. Байты тела отдаются в receive по мере поступления.
     func fetch(url: URL,
                firstByte: Int64,
-               receive: @Sendable (Data) async throws -> Void) async throws -> HTTPRangeResponse
+               head: @Sendable (HTTPRangeResponse) async throws -> Void,
+               receive: @Sendable (Data) async throws -> Void) async throws
 }
 
 /// Построение запроса — чистая функция (§6, тест «Форма заголовка»).

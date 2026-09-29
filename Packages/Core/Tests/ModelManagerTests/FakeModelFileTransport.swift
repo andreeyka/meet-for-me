@@ -1,4 +1,4 @@
-//  FakeModelFileTransport — тестовая реализация `ModelFileTransport` (C-014 v6 §6, «Фейк для
+//  FakeModelFileTransport — тестовая реализация `ModelFileTransport` (C-014 v7 §6, «Фейк для
 //  тестов»: живёт в ModelManagerTests, шов берётся через `@testable import`).
 //
 //  Один шов на байты каталога и на файлы модели (план MEE-436 §1, ФСТ). Без сети: отдаёт
@@ -73,7 +73,8 @@ final class FakeModelFileTransport: ModelFileTransport, @unchecked Sendable {
 
     func fetch(url: URL,
                firstByte: Int64,
-               receive: @Sendable (Data) async throws -> Void) async throws -> HTTPRangeResponse {
+               head: @Sendable (HTTPRangeResponse) async throws -> Void,
+               receive: @Sendable (Data) async throws -> Void) async throws {
         let plan = locked { () -> FakePlan in
             log.append(FakeRequest(url: url, firstByte: firstByte))
             var queue = scripts[url] ?? []
@@ -81,27 +82,25 @@ final class FakeModelFileTransport: ModelFileTransport, @unchecked Sendable {
             scripts[url] = queue
             return FakePlan(step: next, content: contents[url] ?? Data(), hook: chunkHook)
         }
-        let step = plan.step
         let content = plan.content
-        let hook = plan.hook
-        func send(_ body: Data) async throws {
-            try await deliver(body, url: url, hook: hook, receive: receive)
+        let total = Int64(content.count)
+        // §6 (v7): `head` ровно раз и до первого `receive`; бросок из `head` — тело не отдаётся.
+        func respond(_ status: Int, _ first: Int64?, _ body: Data) async throws {
+            try await head(HTTPRangeResponse(statusCode: status, firstByte: first, totalBytes: total))
+            try await deliver(body, url: url, hook: plan.hook, receive: receive)
         }
-        switch step {
+        switch plan.step {
         case .serve:
-            let body = content.dropFirst(Int(firstByte))
-            try await send(Data(body))
-            return HTTPRangeResponse(statusCode: firstByte > 0 ? 206 : 200,
-                                     firstByte: firstByte > 0 ? firstByte : nil, totalBytes: Int64(content.count))
+            try await respond(firstByte > 0 ? 206 : 200, firstByte > 0 ? firstByte : nil,
+                              Data(content.dropFirst(Int(firstByte))))
         case .dropAfter(let bytes):
-            try await send(Data(content.dropFirst(Int(firstByte)).prefix(bytes)))
+            try await respond(firstByte > 0 ? 206 : 200, firstByte > 0 ? firstByte : nil,
+                              Data(content.dropFirst(Int(firstByte)).prefix(bytes)))
             throw FakeNetworkError()
         case .ignoreRange:
-            try await send(content)
-            return HTTPRangeResponse(statusCode: 200, firstByte: nil, totalBytes: Int64(content.count))
+            try await respond(200, nil, content)
         case .respond(let status, let first, let body):
-            try await send(body)
-            return HTTPRangeResponse(statusCode: status, firstByte: first, totalBytes: Int64(content.count))
+            try await respond(status, first, body)
         case .fail:
             throw FakeNetworkError()
         case .waitForCancellation:

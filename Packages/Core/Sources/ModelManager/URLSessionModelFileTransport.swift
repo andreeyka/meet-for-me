@@ -1,5 +1,5 @@
 //  URLSessionModelFileTransport — боевая реализация `ModelFileTransport` поверх `URLSession`
-//  из Foundation (C-014 v6 §6, инв. 5, 20).
+//  из Foundation (C-014 v7 §6, инв. 5, 20).
 //
 //  Модуль: model-manager · Владелец: DEV-2 · Слой: домен + адаптер сети
 //
@@ -30,34 +30,35 @@ struct URLSessionModelFileTransport: ModelFileTransport {
 
     func fetch(url: URL,
                firstByte: Int64,
-               receive: @Sendable (Data) async throws -> Void) async throws -> HTTPRangeResponse {
+               head: @Sendable (HTTPRangeResponse) async throws -> Void,
+               receive: @Sendable (Data) async throws -> Void) async throws {
         let delegate = StreamingDelegate()
         let session = URLSession(configuration: .ephemeral, delegate: delegate, delegateQueue: nil)
         defer { session.finishTasksAndInvalidate() }
         let task = session.dataTask(with: ModelFileRequest.request(url: url, firstByte: firstByte))
-        return try await withTaskCancellationHandler {
+        try await withTaskCancellationHandler {
             task.resume()
-            // Выход по отказу `receive` (или по брошенному потоку) не оставляет задачу качать
+            // Выход по отказу `head`/`receive` (или по брошенному потоку) не оставляет задачу качать
             // дальше — и тем более остановленной `suspend()` навсегда: после завершения
             // `cancel()` ничего не делает.
             defer { task.cancel() }
-            var response: HTTPRangeResponse?
+            var headDelivered = false
             for try await event in delegate.events {
                 switch event {
-                case .response(let head):
-                    response = head
+                case .response(let response):
+                    // §6 (v7): статус — до тела. Бросок из `head` выходит из цикла: тело не читается.
+                    try await head(response)
+                    headDelivered = true
                 case .body(let data):
-                    // Тело ответа-отказа (404, 416, 5xx) — не байты ресурса: в `.part` оно не идёт.
-                    if let status = response?.statusCode, status == 200 || status == 206 {
+                    if headDelivered {
                         try await receive(data)
                     }
                     delegate.gate.consumed(data.count) { task.resume() }
                 }
             }
-            guard let response else {
+            guard headDelivered else {
                 throw URLError(.badServerResponse)
             }
-            return response
         } onCancel: {
             task.cancel()
         }

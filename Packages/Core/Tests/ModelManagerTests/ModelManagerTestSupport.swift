@@ -64,6 +64,9 @@ final class ModelHarness {
     let temporary = TemporaryFileLayout()
     let transport = FakeModelFileTransport()
     let machine = FakeMachine()
+    /// `app_settings` стенда (инв. 37): переживает «перезапуск» — новый менеджер над тем же стендом.
+    let settings = InMemorySettingsRepository()
+    let logged = Probe<[String]>([])
     var models: [TestModel]
     var profiles: [TranscriptionProfile]
 
@@ -90,8 +93,22 @@ final class ModelHarness {
 
     /// Новый экземпляр над тем же диском (К35 — «перезапуск»).
     func makeManager(builtIn: Data? = nil) throws -> ModelCatalogManager {
-        ModelCatalogManager(root: root, catalogURL: Self.catalogURL, transport: transport,
-                            environment: machine, builtInCatalog: try builtIn ?? catalogBytes())
+        let logged = self.logged
+        return ModelCatalogManager(root: root, catalogURL: Self.catalogURL, settings: settings, transport: transport,
+                                   environment: machine, builtInCatalog: try builtIn ?? catalogBytes(),
+                                   log: { message in logged.update { $0.append(message) } })
+    }
+
+    /// Кладёт строку пользовательских профилей в `app_settings` мимо `saveProfile` (инв. 37).
+    func seedUserProfiles(_ profiles: [TranscriptionProfile]) throws {
+        settings.seed([ModelCatalogManager.userProfilesKey: try DomainJSON.encode(profiles.sorted { $0.id < $1.id })])
+    }
+
+    /// Сохранённая копия каталога, как её оставил бы прошлый запуск (инв. 28).
+    func writeCachedCatalog(_ data: Data) throws {
+        let url = ModelCatalogManager.cachedCatalogURL(root: root)
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try data.write(to: url)
     }
 
     func directory(_ model: TestModel) -> URL {

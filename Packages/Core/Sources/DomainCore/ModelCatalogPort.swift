@@ -240,7 +240,7 @@ public struct ResolvedProfile: Codable, Equatable, Sendable {
     }
 }
 
-/// C-014 v6 «Определение» §4. Не `Codable` — контракт называет это известным ограничением
+/// C-014 v7 «Определение» §4. Не `Codable` — контракт называет это известным ограничением
 /// («Что вне контракта»), не техническим препятствием: `ModelCatalogError` сам `Codable`.
 /// Через фасад C-016 `ModelState` уходит в UI внутри процесса, сериализация ему не нужна;
 /// понадобится отдельное представление, если `app-ui` когда-нибудь окажется за границей
@@ -272,6 +272,8 @@ public enum ModelCatalogError: Error, Codable, Equatable, Sendable {
     case unsupportedChip(required: MinChip)
     case insufficientRAM(requiredGB: Int)
     case modelInUseByProfile(modelId: String, profileIds: [String])
+    case modelInUse(modelId: String, version: String)   // v7: под распиской, профиль не разрешает (инв. 11)
+    case userProfilesUnreadable(message: String)        // v7: строка app_settings не читается (инв. 37)
     case builtInProfileImmutable(id: String)
     case cancelled
 }

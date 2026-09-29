@@ -166,7 +166,13 @@ extension StateTransitionsTests {
         let bundle = ModelBundle(modelId: "s-forbidden", version: "1.0.0", role: .asr, runtime: .onnx,
                                  directoryURL: fixture.harness.directory(fixture.model))
         let token = try await manager.beginUse([bundle])
-        _ = try? await manager.delete(id: "s-forbidden", version: "1.0.0")    // loaded ↛ available
+        do {                                                                   // loaded ↛ available
+            try await manager.delete(id: "s-forbidden", version: "1.0.0")
+            XCTFail("delete на loaded обязан отказать")
+        } catch let error as ModelCatalogError {
+            // v7, инв. 11: ни один профиль модель не разрешает — свой код `modelInUse`.
+            XCTAssertEqual(error, .modelInUse(modelId: "s-forbidden", version: "1.0.0"))
+        }
         let whileLoaded = await manager.state(id: "s-forbidden", version: "1.0.0")
         XCTAssertEqual(whileLoaded, .loaded, "delete на loaded не перевёл модель в available")
         await manager.endUse(token)

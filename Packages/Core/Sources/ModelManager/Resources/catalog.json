@@ -32,9 +32,6 @@
       "displayName": "Русские встречи",
       "language": "ru",
       "asrModelId": "gigaam-v3-e2e-ctc-int8",
-      "vadModelId": "silero-vad",
-      "diarizationModelId": "pyannote-community-1",
-      "embeddingModelId": "wespeaker-voxceleb",
       "diarization": {"expectedSpeakers": null, "clusteringThreshold": 0.7, "minSegmentMs": 500},
       "isBuiltIn": true
     }

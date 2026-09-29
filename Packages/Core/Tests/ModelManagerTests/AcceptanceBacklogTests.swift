@@ -47,9 +47,11 @@ final class AcceptanceBacklogTests: XCTestCase {
 
     // MARK: - П.2: unknownModel — версия не названа ни профилем, ни каталогом
 
+    /// v7: встроенный профиль на несуществующую модель отвергает каталог целиком (инв. 34), поэтому
+    /// «висящий» профиль здесь — пользовательский, уже лежащий в `app_settings` (инв. 37).
     func test_unknownModelFromProfileCarriesUnnamedVersion() async throws {
-        let harness = ModelHarness(models: [TestModel.gigaamLike()],
-                                   profiles: [testProfile(id: "dangling", asr: "absent-model")])
+        let harness = ModelHarness(models: [TestModel.gigaamLike()])
+        try harness.seedUserProfiles([testProfile(id: "dangling", asr: "absent-model", builtIn: false)])
         let manager = try harness.makeManager()
 
         do {
