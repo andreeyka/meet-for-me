@@ -100,6 +100,25 @@ final class JobCommandsTests: XCTestCase {
         fixture.catalog.setProfiles([ModelJobFixture.profile("p1", asr: "m-asr", vad: "m-vad")])
     }
 
+    /// Профиль `p1`: все модели скачаны — `retranscribe` ставит задачу.
+    private func seedProfileReady(_ fixture: ModelJobFixture) {
+        seedProfileMissingVad(fixture)
+        fixture.catalog.setState(.downloaded, forId: "m-vad", version: "1.0.0")
+    }
+
+    /// Действующие настройки: срез-1 по умолчанию с заданным «обрабатывать только от сети».
+    private func setProcessOnACPowerOnly(_ value: Bool, in fixture: ModelJobFixture) async throws {
+        let defaults = AppSettings.slice1Defaults
+        try await fixture.facade.updateSettings(AppSettings(
+            recordingPolicy: defaults.recordingPolicy, armLeadSeconds: defaults.armLeadSeconds,
+            askLeadSeconds: defaults.askLeadSeconds, missingSignalGraceSeconds: defaults.missingSignalGraceSeconds,
+            silenceStopSeconds: defaults.silenceStopSeconds, defaultProfileId: defaults.defaultProfileId,
+            processOnACPowerOnly: value, processWhileRecording: defaults.processWhileRecording,
+            audioRetentionDays: defaults.audioRetentionDays, voiceProfilesEnabled: defaults.voiceProfilesEnabled,
+            notifyParticipants: defaults.notifyParticipants, launchAtLogin: defaults.launchAtLogin
+        ))
+    }
+
     // MARK: - К37 (инв. 12)
 
     func test_k37_retranscribeMissingModelsThrowsProfileNotReady() async throws {
@@ -157,26 +176,61 @@ final class JobCommandsTests: XCTestCase {
         XCTAssertTrue(fixture.queue.submissions.isEmpty)
     }
 
+    /// Правило §4 C-013 «только от сети» (MEE-464): `retranscribe` при `processOnACPowerOnly ==
+    /// true` ставит задачу с `requiresACPower == true`, при `false` — подача равна `standard`.
+    func test_retranscribeAppliesProcessOnACPowerOnlyRule() async throws {
+        for (acOnly, expected) in [(true, true), (false, false)] {
+            let fixture = ModelJobFixture()
+            seedProfileReady(fixture)
+            try await setProcessOnACPowerOnly(acOnly, in: fixture)
+            let recordingId = UUID()
+            _ = try await fixture.facade.retranscribe(recordingId: recordingId, profileId: "p1")
+            let submission = try XCTUnwrap(fixture.queue.submissions.first, "processOnACPowerOnly=\(acOnly)")
+            XCTAssertEqual(submission.conditions.requiresACPower, expected, "processOnACPowerOnly=\(acOnly)")
+            let standard = JobSubmission.standard(
+                .transcribe(recordingId: recordingId, profileId: "p1", language: nil), runAfter: submission.runAfter
+            )
+            XCTAssertFalse(standard.conditions.requiresACPower, "вектор непустоты: у transcribe таблица даёт false")
+            XCTAssertEqual(submission.conditions.forbidWhileRecording, standard.conditions.forbidWhileRecording)
+            XCTAssertEqual(submission.conditions.maxThermalPressure, standard.conditions.maxThermalPressure)
+            XCTAssertEqual(submission.conditions.requiresProfileReady, standard.conditions.requiresProfileReady)
+            XCTAssertEqual(submission.priority, standard.priority)
+            XCTAssertEqual(submission.maxAttempts, standard.maxAttempts)
+        }
+    }
+
+    /// Без очереди каждая команда группы Н отказывает `notAllowed` — и чтение, и три команды.
     func test_groupNWithoutJobQueueThrowsNotAllowed() async throws {
         let fixture = ModelJobFixture(withQueue: false)
-        seedProfileMissingVad(fixture)
-        do {
-            try await fixture.facade.cancelJob(id: UUID())
-            XCTFail("без очереди — отказ")
-        } catch AppFacadeError.notAllowed {
+        let commands: [(String, () async throws -> Void)] = [
+            ("retranscribe", { _ = try await fixture.facade.retranscribe(recordingId: UUID(), profileId: "p1") }),
+            ("cancelJob", { try await fixture.facade.cancelJob(id: UUID()) }),
+            ("retryJob", { _ = try await fixture.facade.retryJob(id: UUID()) }),
+            ("jobs(status:)", { _ = try await fixture.facade.jobs(status: .failed) })
+        ]
+        for (name, command) in commands {
+            do {
+                try await command()
+                XCTFail("\(name): без очереди — отказ")
+            } catch AppFacadeError.notAllowed {
+            } catch {
+                XCTFail("\(name): ожидался notAllowed, получено \(error)")
+            }
         }
     }
 
     /// Инв. 15: команда, изменившая очередь, публикует `statusChanged` до возврата.
     func test_jobCommandsPublishStatusChanged() async throws {
         let fixture = ModelJobFixture()
+        seedProfileReady(fixture)
         let existing = ModelJobFixture.failedJob()
         fixture.queue.setJobs([existing])
         let stream = fixture.facade.events()
+        _ = try await fixture.facade.retranscribe(recordingId: UUID(), profileId: "p1")
         try await fixture.facade.cancelJob(id: existing.id)
         _ = try await fixture.facade.retryJob(id: existing.id)
-        let events = await collectEvents(stream, count: 2)
-        XCTAssertEqual(events.count, 2)
+        let events = await collectEvents(stream, count: 3)
+        XCTAssertEqual(events.count, 3)
         for event in events {
             guard case .statusChanged = event else { return XCTFail("ожидался .statusChanged, получено \(event)") }
         }

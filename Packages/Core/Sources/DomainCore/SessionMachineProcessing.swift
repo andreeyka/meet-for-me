@@ -248,24 +248,10 @@ extension SessionMachine {
     /// `JobSubmission.standard(_:runAfter:)` с `runAfter == now` — К63 дословно. Настройка
     /// «обрабатывать только от сети» поднимает `requiresACPower` ПРИ ПОСТАНОВКЕ задачи, и
     /// это правило §4 C-013, а не решение этой машины; при `processOnACPowerOnly == false`
-    /// подача равна ответу `standard` поле в поле.
+    /// подача равна ответу `standard` поле в поле. Тело правила — общее
+    /// `JobSubmission.applyingPowerRule` (`JobSubmissionPowerRule.swift`).
     func submitChain(_ payload: JobPayload, for identifier: UUID, now: Date) async {
-        var submission = JobSubmission.standard(payload, runAfter: now)
-        if settings.processOnACPowerOnly, !submission.conditions.requiresACPower {
-            submission = JobSubmission(
-                payload: submission.payload,
-                priority: submission.priority,
-                maxAttempts: submission.maxAttempts,
-                runAfter: submission.runAfter,
-                conditions: JobConditions(
-                    requiresACPower: true,
-                    forbidWhileRecording: submission.conditions.forbidWhileRecording,
-                    maxThermalPressure: submission.conditions.maxThermalPressure,
-                    requiresProfileReady: submission.conditions.requiresProfileReady
-                ),
-                dedupKey: submission.dedupKey
-            )
-        }
+        let submission = JobSubmission.standard(payload, runAfter: now).applyingPowerRule(settings)
         guard let jobId = try? await queue.submit(submission) else { return }
         chainJobs[jobId] = identifier
     }
