@@ -96,6 +96,9 @@ final class ProfilesTests: XCTestCase {
                 }
                 let manager = try harness.makeManager()
                 try await manager.download(id: "m", version: "1.0.0")
+                if role != .asr {
+                    try await manager.download(id: "base", version: "1.0.0")   // профиль готов целиком
+                }
                 await expect(.modelInUseByProfile(modelId: "m", profileIds: ["p1", "p2"])) {
                     try await manager.delete(id: "m", version: "1.0.0")
                 }

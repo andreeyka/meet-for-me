@@ -37,12 +37,9 @@ final class ConcurrentDownloadTests: XCTestCase {
     // MARK: - К61
 
     /// Стенд: загрузка держится на первой порции, пока тест не поднимет `gate`.
-    private func gated(_ id: String, content: Data? = nil) throws -> (ModelHarness, Probe<Bool>) {
+    private func gated(_ id: String) throws -> (ModelHarness, Probe<Bool>) {
         let model = TestModel.make(id: id, files: [("g.bin", TestModel.bytes(64, seed: 92))])
         let harness = ModelHarness(models: [model])
-        if let content {
-            harness.transport.setContent(content, at: model.url("g.bin"))
-        }
         let gate = Probe(false)
         harness.transport.onChunk { _, index in
             guard index == 0 else { return }
@@ -80,6 +77,22 @@ final class ConcurrentDownloadTests: XCTestCase {
         }
     }
 
+    /// Трое вызовов на стенде, подготовленном `prepare` (адрес файла модели), — их исходы.
+    private func sharedOutcomes(_ id: String, prepare: (ModelHarness, URL) -> Void) async throws
+        -> [Result<ModelState, ModelCatalogError>] {
+        let (harness, gate) = try gated(id)
+        prepare(harness, harness.models[0].url("g.bin"))
+        let manager = try harness.makeManager()
+        let tasks = await start(manager, harness, id: id)
+        gate.update { $0 = true }
+        var results: [Result<ModelState, ModelCatalogError>] = []
+        for task in tasks {
+            results.append(await outcome(task))
+        }
+        XCTAssertEqual(harness.transport.requests.count, 1, "\(id): одна загрузка на троих")
+        return results
+    }
+
     func test_k61_waitersShareOutcomeStarterCancelStopsAllWaiterCancelDoesNot() async throws {
         // А: успех — одна загрузка, трое возвращаются после `downloaded`.
         let (okHarness, okGate) = try gated("k61-ok")
@@ -92,19 +105,22 @@ final class ConcurrentDownloadTests: XCTestCase {
         }
         XCTAssertEqual(okHarness.transport.requests.count, 1, "А: fetch на файл — как у одиночного download")
 
-        // Б: ошибка — у всех трёх тот же случай с равными значениями.
-        let (badHarness, badGate) = try gated("k61-bad", content: TestModel.bytes(64, seed: 93))
-        let badManager = try badHarness.makeManager()
-        let badTasks = await start(badManager, badHarness, id: "k61-bad")
-        badGate.update { $0 = true }
-        var failures: [Result<ModelState, ModelCatalogError>] = []
-        for task in badTasks {
-            failures.append(await outcome(task))
+        // Б: транспорт обрывает запрос — у всех трёх тот же случай с равными значениями.
+        let dropped = try await sharedOutcomes("k61-drop") { harness, url in
+            harness.transport.script(url, [.dropAfter(bytes: 32)])
         }
-        guard case .failure(.checksumMismatch)? = failures.first else {
-            return XCTFail("Б: ожидался checksumMismatch, получено \(failures)")
+        guard case .failure(.downloadFailed)? = dropped.first else {
+            return XCTFail("Б: ожидался downloadFailed от обрыва, получено \(dropped)")
         }
-        XCTAssertEqual(Set(failures.map { "\($0)" }).count, 1, "Б: исход один на всех: \(failures)")
+        XCTAssertEqual(Set(dropped.map { "\($0)" }).count, 1, "Б: исход один на всех: \(dropped)")
+        // Б, дополнительно: отказ сверки `sha256` — тоже один исход на всех.
+        let mismatched = try await sharedOutcomes("k61-bad") { harness, url in
+            harness.transport.setContent(TestModel.bytes(64, seed: 93), at: url)
+        }
+        guard case .failure(.checksumMismatch)? = mismatched.first else {
+            return XCTFail("Б': ожидался checksumMismatch, получено \(mismatched)")
+        }
+        XCTAssertEqual(Set(mismatched.map { "\($0)" }).count, 1, "Б': исход один на всех: \(mismatched)")
 
         // В: отмена начавшего — загрузка остановлена, все получают `cancelled`.
         let (cancelHarness, _) = try gated("k61-cancel")
