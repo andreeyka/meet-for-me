@@ -140,6 +140,16 @@ enum CompositionRoot {
         return base.appendingPathComponent(bundleId, isDirectory: true)
     }
 
+    /// Имя встроенного XPC-сервиса движка — `<bundle-id>.TranscriptionEngine` (C-012 §3,
+    /// бандл `Contents/XPCServices/TranscriptionEngine.xpc`). Префикс — от
+    /// `Bundle.main.bundleIdentifier`, тем же приёмом, что `applicationSupportRoot()`;
+    /// `project.yml` даёт сервису ровно это имя (`PRODUCT_BUNDLE_IDENTIFIER` таргета
+    /// `TranscriptionEngine`).
+    static func transcriptionEngineServiceName() -> String {
+        let bundleId = Bundle.main.bundleIdentifier ?? "com.andreeyka.meetforme"
+        return bundleId + ".TranscriptionEngine"
+    }
+
     /// `register(handler:)` бросает только на дублирующем типе обработчика — отказ
     /// программирования (composition root регистрирует каждый тип ровно один раз по
     /// построению), не окружения (MEE-430 «жизненный цикл», решение архитектора).

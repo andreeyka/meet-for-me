@@ -11,6 +11,7 @@ import CalendarHub
 import Capture
 import Detector
 import DomainCore
+import EngineXPCClient
 import Foundation
 import ModelManager
 import Permissions
@@ -167,15 +168,18 @@ extension CompositionRoot {
 
     // MARK: - Регистрация обработчиков (после шага 7 — шапка CompositionRoot.swift)
 
-    /// `TranscriptionServicePort` — временная заглушка до MEE-431 (MEE-433, решение п.5):
-    /// `EngineKit/Fakes` не несёт готового конформера этого порта — `LoopbackEngineTransport`
-    /// разбирает `EngineRequest`/`EngineReply` (другой уровень, провод XPC), не сигнатуру
-    /// `transcribe(_:progress:)` напрямую.
+    /// `TranscriptionServicePort` — `EngineXPCClient` (MEE-472): один экземпляр на граф, виден
+    /// только `TranscribeJobHandler` (П7: App не зовёт движок мимо домена). Каталог — тот же
+    /// `ModelCatalogManager`, что у очереди и фасада (C-012 «Поведение», C-014 §4.1): расписки
+    /// `beginUse`/`endUse` клиента попадают туда, куда смотрит фасад. Соединением владеет сам
+    /// клиент (записка MEE-430 §3) — лениво, при первом запросе; `AppGraph.shutdown` его не
+    /// трогает, у C-012 нет `close`.
     static func registerHandlers(_ partial: PartialGraph, facade: AppFacadeImpl) async {
         let storage = partial.context.storage
-        await registerOrCrash(
-            TranscribeJobHandler(port: TemporaryTranscriptionServiceStub()), into: partial.jobQueue
+        let engineClient = EngineXPCClient(
+            serviceName: transcriptionEngineServiceName(), modelCatalog: partial.modelCatalog
         )
+        await registerOrCrash(TranscribeJobHandler(port: engineClient), into: partial.jobQueue)
         await registerOrCrash(
             AttributeJobHandler(
                 port: partial.attribution,
