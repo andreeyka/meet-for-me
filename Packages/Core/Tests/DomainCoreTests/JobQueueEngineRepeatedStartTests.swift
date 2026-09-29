@@ -74,7 +74,7 @@ final class JobQueueEngineRepeatedStartTests: XCTestCase {
 
 /// Обработчик, который держит задачу, пока тест не позовёт `release()`. Отпущенный до
 /// начала `run` — не держит вовсе.
-private final class GatedJobHandler: JobHandler, @unchecked Sendable {
+final class GatedJobHandler: JobHandler, @unchecked Sendable {
 
     let type: JobType
     private let lock = NSLock()
@@ -110,15 +110,17 @@ private final class GatedJobHandler: JobHandler, @unchecked Sendable {
     }
 }
 
-/// `InMemoryJobRepository` с крючком на чтение `jobs(status: .running)`: снимок уже взят,
-/// крючок зовётся ДО того, как снимок вернётся очереди, — ровно окно гонки MEE-496.
-/// Крючок одноразовый.
-private final class SnapshotHookJobRepository: JobRepository, @unchecked Sendable {
+/// `InMemoryJobRepository` с крючками на чтение `jobs(status: .running)` (окно гонки MEE-496)
+/// и `reclaimExpiredLeases` (то же окно у второго предохранителя, MEE-497): снимок уже взят,
+/// крючок зовётся ДО того, как снимок вернётся очереди. Крючки одноразовые.
+final class SnapshotHookJobRepository: JobRepository, @unchecked Sendable {
 
     private let inner: InMemoryJobRepository
     private let lock = NSLock()
     private var hook: (@Sendable () async -> Void)?
     private var fired = false
+    private var reclaimHook: (@Sendable () async -> Void)?
+    private var reclaimFired = false
 
     init(inner: InMemoryJobRepository) {
         self.inner = inner
@@ -134,6 +136,29 @@ private final class SnapshotHookJobRepository: JobRepository, @unchecked Sendabl
         lock.lock()
         defer { lock.unlock() }
         return fired
+    }
+
+    func armReclaimHook(_ body: @escaping @Sendable () async -> Void) {
+        lock.lock()
+        reclaimHook = body
+        lock.unlock()
+    }
+
+    var reclaimHookFired: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return reclaimFired
+    }
+
+    private func takeReclaimHook() -> (@Sendable () async -> Void)? {
+        lock.lock()
+        defer { lock.unlock() }
+        let taken = reclaimHook
+        reclaimHook = nil
+        if taken != nil {
+            reclaimFired = true
+        }
+        return taken
     }
 
     private func takeHook() -> (@Sendable () async -> Void)? {
@@ -176,7 +201,11 @@ private final class SnapshotHookJobRepository: JobRepository, @unchecked Sendabl
     }
 
     func reclaimExpiredLeases(now: Date) async throws -> [Job] {
-        try await inner.reclaimExpiredLeases(now: now)
+        let stale = try await inner.reclaimExpiredLeases(now: now)
+        if let hook = takeReclaimHook() {
+            await hook()
+        }
+        return stale
     }
 
     func failUnreadable(jobId: UUID, message: String, now: Date) async throws -> JobType? {
