@@ -5,11 +5,15 @@
 //  `MeetingCardPresentation`, `TranscriptPresentation` (чистые модели); состояние и подписка —
 //  `MeetingsController`, которым владеет `MeetingsWindowPresenter` на время жизни окна.
 //
+//  `@MainActor` у видов явно: в SDK Xcode 15.4 (CI, Swift 5.10) `View` изолирован только в
+//  `body`, а вспомогательные свойства зовут методы `@MainActor`-контроллера.
+//
 //  Модуль: app-ui · Владелец: DEV-1 · Слой: UI
 
 import DomainCore
 import SwiftUI
 
+@MainActor
 struct MeetingsWindowView: View {
     @ObservedObject var controller: MeetingsController
 
@@ -29,6 +33,7 @@ struct MeetingsWindowView: View {
 
 // MARK: - Список
 
+@MainActor
 private struct MeetingsListPane: View {
     let list: MeetingsListPresentation
     let controller: MeetingsController
@@ -78,6 +83,7 @@ private struct MeetingsListPane: View {
 
 // MARK: - Карточка
 
+@MainActor
 private struct MeetingCardPane: View {
     let card: MeetingCardPresentation
     let transcript: TranscriptPresentation
@@ -154,6 +160,7 @@ private struct MeetingCardPane: View {
 
 // MARK: - Транскрипт
 
+@MainActor
 private struct TranscriptPane: View {
     let transcript: TranscriptPresentation
     let controller: MeetingsController
