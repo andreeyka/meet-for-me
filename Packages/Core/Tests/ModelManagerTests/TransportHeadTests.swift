@@ -12,7 +12,14 @@ final class TransportHeadTests: XCTestCase {
     private let size = 100
 
     /// Модель из одного файла в 100 байт, прерванная на 40-м байте: `.part` длины 40.
-    private func interrupted() async throws -> (ModelHarness, ModelCatalogManager, TestModel, URL) {
+    private struct Stand {
+        let harness: ModelHarness
+        let manager: ModelCatalogManager
+        let model: TestModel
+        let part: URL
+    }
+
+    private func interrupted() async throws -> Stand {
         let model = TestModel.make(id: "head-asr", files: [("h.bin", TestModel.bytes(size, seed: 50))])
         let harness = ModelHarness(models: [model])
         harness.transport.chunkSize = 10
@@ -21,11 +28,12 @@ final class TransportHeadTests: XCTestCase {
         _ = try? await manager.download(id: "head-asr", version: "1.0.0")
         let part = harness.directory(model).appendingPathComponent("h.bin.part")
         XCTAssertEqual(harness.fileSize(part), 40, "вектор: .part длины L = 40")
-        return (harness, manager, model, part)
+        return Stand(harness: harness, manager: manager, model: model, part: part)
     }
 
     func test_on200PartNeverExceedsFileSizeAndRestartsFromZero() async throws {
-        let (harness, manager, model, part) = try await interrupted()
+        let stand = try await interrupted()
+        let harness = stand.harness, manager = stand.manager, model = stand.model, part = stand.part
         harness.transport.script(model.url("h.bin"), [.ignoreRange])
         let sizes = Probe<[Int64]>([])
         harness.transport.onChunk { _, _ in
@@ -43,7 +51,8 @@ final class TransportHeadTests: XCTestCase {
     }
 
     func test_on200FractionDropsOnceToTruncatedPartThenGrows() async throws {
-        let (harness, manager, model, _) = try await interrupted()
+        let stand = try await interrupted()
+        let harness = stand.harness, manager = stand.manager, model = stand.model
         harness.transport.script(model.url("h.bin"), [.ignoreRange])
         let recorder = EventRecorder(manager.events())
         try await manager.download(id: "head-asr", version: "1.0.0")
@@ -60,7 +69,8 @@ final class TransportHeadTests: XCTestCase {
     }
 
     func test_serverErrorStatusWritesNoBodyBytesIntoPart() async throws {
-        let (harness, manager, model, part) = try await interrupted()
+        let stand = try await interrupted()
+        let harness = stand.harness, manager = stand.manager, model = stand.model, part = stand.part
         let refusal = FakeStep.respond(status: 503, firstByte: nil, body: Data(repeating: 7, count: 30))
         harness.transport.script(model.url("h.bin"), [refusal])
         do {

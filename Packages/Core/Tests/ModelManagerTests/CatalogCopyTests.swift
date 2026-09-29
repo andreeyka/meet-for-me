@@ -114,7 +114,7 @@ final class CatalogCopyTests: XCTestCase {
     func test_inv28_acceptedCatalogStoredVerbatimRejectedNotStored() async throws {
         let harness = makeHarness()
         let manager = try harness.makeManager()
-        let text = String(decoding: try catalog(harness, generatedAt: 1_900_000_000), as: UTF8.self)
+        let text = try XCTUnwrap(String(bytes: try catalog(harness, generatedAt: 1_900_000_000), encoding: .utf8))
         let withUnknownKey = "\"futureKey\":{\"x\":[1]},\"schemaVersion\""
         let served = Data(text.replacingOccurrences(of: "\"schemaVersion\"", with: withUnknownKey).utf8)
         harness.transport.setContent(served, at: ModelHarness.catalogURL)
