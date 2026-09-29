@@ -1,4 +1,4 @@
-//  TranscriptRepositoryUpdateSegmentTextReturnTests — C-010 v26, инвариант 35 (IR-139,
+//  UpdateSegmentTextReturnTests — C-010 v26, инвариант 35 (IR-139,
 //  MEE-445): `updateSegmentText` возвращает `transcriptId` изменённой строки — то же
 //  значение, что `SegmentRow.transcriptId` при чтении. Владелец: DEV-2.
 
@@ -6,7 +6,7 @@ import XCTest
 import DomainCore
 @testable import Storage
 
-final class TranscriptRepositoryUpdateSegmentTextReturnTests: StorageAsyncTestCase {
+final class UpdateSegmentTextReturnTests: StorageAsyncTestCase {
 
     /// Два транскрипта одной записи: возврат — транскрипт именно изменённой строки, а не
     /// первый попавшийся и не последний сохранённый.
