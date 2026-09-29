@@ -101,7 +101,7 @@ final class RealServiceFixture: NSObject {
     static func transportOnly(
         serviceVersion: String = "test-real-service", clock: @escaping @Sendable () -> Date = { Date() }
     ) -> RealServiceFixture {
-        RealServiceFixture(serviceVersion: serviceVersion, clock: clock, recordings: AnyIdFinalizedRecordingRepository())
+        .init(serviceVersion: serviceVersion, clock: clock, recordings: AnyIdFinalizedRecordingRepository())
     }
 
     init(
