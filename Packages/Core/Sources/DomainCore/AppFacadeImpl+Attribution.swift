@@ -182,7 +182,7 @@ extension AppFacadeImpl {
     /// Приёмка РП (MEE-420, 07:30 UTC): явный `switch`, а не разбор `String(describing:)` —
     /// шесть случаев далеко не упираются в `cyclomatic_complexity` (порог 10), в отличие от
     /// одиннадцати у `CaptureError` в `AppFacadeImpl+Recording.swift`.
-    private func wrap(_ error: AttributionError) -> AppFacadeError {
+    func wrap(_ error: AttributionError) -> AppFacadeError {
         let code: String
         switch error {
         case .unknownTranscript:
