@@ -53,9 +53,10 @@ final class AdHocRecordingsEventsTests: XCTestCase {
 
     // MARK: - (б) смена RecordingStatus
 
-    func makeFacade(coordinator: ObservedTestSessionCoordinator) -> AppFacadeImpl {
-        let repositories = InMemoryRepositories()
-        return AppFacadeImpl(
+    func makeFacade(
+        coordinator: ObservedTestSessionCoordinator, repositories: InMemoryRepositories = InMemoryRepositories()
+    ) -> AppFacadeImpl {
+        AppFacadeImpl(
             meetings: repositories.meetings, recordings: repositories.recordings,
             transcripts: repositories.transcripts, persons: repositories.persons,
             speakerProfiles: repositories.speakerProfiles,

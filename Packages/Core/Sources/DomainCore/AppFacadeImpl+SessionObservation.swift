@@ -33,9 +33,16 @@
 //  `MeetingRepository`) и `activeSession` (из `sessions()`) к этому моменту уже новые.
 //
 //  Терминальная сессия (`ready`/`failed`/`skipped`) публикуется и забывается: `sessions()`
-//  её больше не отдаёт, и держать её состояние и статус её записи фасаду незачем. Последний
-//  опубликованный статус встречи остаётся: `skipMeeting` может ответить после снимка `skipped`,
-//  и без него пропуск дал бы событие дважды (одна строка на встречу).
+//  её больше не отдаёт, и держать её состояние и встречу её записи фасаду незачем. Последние
+//  опубликованные статусы встречи и записи остаются: `skipMeeting`, `startRecording` и
+//  `stopRecording` могут ответить после терминального снимка, и без них ответ дал бы лишнее
+//  событие и вернул бы в кэши записи, которые больше никто не уберёт (MEE-494, Б1/Б2). Цена
+//  названа: по одной паре «идентификатор — статус» на встречу и на запись за жизнь процесса.
+//
+//  КОМАНДЫ ЗАПИСИ (MEE-494, Б1/Б2). Ответ `startRecording`/`stopRecording` сообщает статус
+//  записи; статус встречи из него выводится, только если статус записи продвинулся
+//  (`publishCommandRowChange`). Иначе снимок того же или более позднего состояния уже
+//  опубликован, и поздний ответ команды откатил бы строку встречи назад.
 
 import Foundation
 
@@ -56,10 +63,9 @@ extension AppFacadeImpl {
         )
         if snapshot.state.isTerminalSession {
             knownSessionStates[snapshot.sessionId] = nil
-            if let recordingId = snapshot.recordingId {
-                publishedRecordingStatuses[recordingId] = nil
-                recordingMeetingIds[recordingId] = nil
-            }
+            // Опубликованный статус записи остаётся (MEE-494, Б1/Б2): поздний ответ
+            // `startRecording`/`stopRecording` сравнивается с ним и молчит.
+            if let recordingId = snapshot.recordingId { recordingMeetingIds[recordingId] = nil }
         } else {
             knownSessionStates[snapshot.sessionId] = snapshot.state
         }
@@ -84,6 +90,23 @@ extension AppFacadeImpl {
             changed = true
         }
         if changed { publish(.meetingsChanged) }
+    }
+
+    /// Строка списка по ответу команды записи (MEE-494, Б1/Б2): статус записи продвинулся —
+    /// запоминается встреча записи, и `meetingsChanged` публикуется с парой «статус записи,
+    /// статус встречи» (у встречи — тот же статус, что у сессии на входе в этот статус записи).
+    /// Не продвинулся — снимок сессии успел раньше (в том же состоянии или дальше), и команда
+    /// не публикует и не пишет в кэши ничего.
+    func publishCommandRowChange(
+        recordingId: UUID, recordingStatus: RecordingStatus, meetingId: UUID?, meetingStatus: MeetingStatus
+    ) {
+        let advanced = publishedRecordingStatuses[recordingId].map { Self.rank(recordingStatus) > Self.rank($0) }
+        guard advanced ?? true else { return }
+        if let meetingId { recordingMeetingIds[recordingId] = meetingId }
+        publishMeetingsChangedIfRowsChanged(
+            recordingId: recordingId, recordingStatus: recordingStatus,
+            meetingId: meetingId, meetingStatus: meetingId.map { _ in meetingStatus }
+        )
     }
 
     /// `RecordingStatus` записи сессии в этом состоянии (C-018 §7): `recording`/`stopping` —

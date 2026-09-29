@@ -120,12 +120,15 @@ extension AdHocRecordingsEventsTests {
     }
 
     /// Пропуск: команда `skipMeeting` и снимок `skipped` — одно `meetingsChanged` в обоих порядках.
+    /// Встреча в хранилище уже `skipped`: машина пишет статус раньше возврата (C-018 инв. 18).
     func test_meetingRow_skipMeetingAndSnapshotPublishMeetingsChangedOnce() async throws {
         for snapshotFirst in [false, true] {
             let coordinator = ObservedTestSessionCoordinator()
-            let facade = makeFacade(coordinator: coordinator)
+            let repositories = InMemoryRepositories()
+            let facade = makeFacade(coordinator: coordinator, repositories: repositories)
             let stream = facade.events()
             let meetingId = UUID()
+            try await repositories.meetings.save(meetingRecord(meetingId, status: .skipped))
             let skipped = snapshot(UUID(), state: .skipped, recordingId: nil, origin: .scheduled, meetingId: meetingId)
             var events: [AppEvent] = []
 

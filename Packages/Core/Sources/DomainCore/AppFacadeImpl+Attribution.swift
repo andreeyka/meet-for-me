@@ -199,7 +199,7 @@ extension AppFacadeImpl {
             code = "attribution.voiceProfilesDisabled"
         }
         return .underlying(AppErrorView(
-            code: code, message: String(describing: error), recoverySuggestion: nil, permissionKind: nil
+            code: code, message: UnderlyingErrorText.message(code), recoverySuggestion: nil, permissionKind: nil
         ))
     }
 }
