@@ -31,6 +31,14 @@ public protocol GigaAMRecognizer: Sendable {
     func recognize(samples: [Float]) throws -> RecognizedChunk
 }
 
+/// Отказ адаптера, который движок сводит к `EngineError`.
+public enum GigaAMRecognizerError: Error, Equatable, Sendable {
+    /// В каталоге модели нет `model.int8.onnx` или `tokens.txt` — движок отвечает `modelMissing`.
+    case modelFilesMissing
+    /// Модель не загрузилась или вызов рантайма упал — движок отвечает `runtimeFailure`.
+    case runtimeFailure(message: String)
+}
+
 /// Фабрика распознавателя по каталогу модели (`model.int8.onnx` и `tokens.txt`).
 ///
 /// Ядро её не реализует: реализацию поставляет адаптер `GigaAMSherpa`, движок получает её снаружи.
