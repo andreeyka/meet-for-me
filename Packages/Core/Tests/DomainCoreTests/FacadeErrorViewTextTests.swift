@@ -80,11 +80,54 @@ final class FacadeErrorViewTextTests: XCTestCase {
 
         do {
             _ = try await fixture.facade.retryJob(id: jobId)
-            XCTFail("повтор ожидающей задачи обязан бросить")
+            XCTFail("повтор выполняющейся задачи обязан бросить")
         } catch AppFacadeError.notAllowed(let reason) {
             XCTAssertFalse(reason.contains("retryJob"), reason)
             XCTAssertFalse(reason.contains(jobId.uuidString), reason)
+            XCTAssertFalse(reason.contains(JobStatus.running.rawValue), reason)
             XCTAssertFalse(reason.isEmpty)
+        }
+    }
+
+    /// `retranscribe` незавершённой записи — без имени метода, идентификатора и `rawValue` статуса.
+    func test_retranscribeReasonHasNoMethodPrefix() async throws {
+        let fixture = ModelJobFixture()
+        let recordingId = try await fixture.seedRecording(status: .recording)
+
+        do {
+            _ = try await fixture.facade.retranscribe(recordingId: recordingId, profileId: "p1")
+            XCTFail("незавершённая запись обязана дать notAllowed")
+        } catch AppFacadeError.notAllowed(let reason) {
+            XCTAssertFalse(reason.contains("retranscribe"), reason)
+            XCTAssertFalse(reason.contains(recordingId.uuidString), reason)
+            XCTAssertFalse(reason.contains("("), reason)
+            XCTAssertFalse(reason.isEmpty)
+        }
+    }
+
+    /// Отказ захвата из-за права (`capture.microphoneDenied`, `capture.systemAudioDenied`): тот же
+    /// человеческий текст и совет, что у `facade.permissionRequired`; `code` и `permissionKind` —
+    /// прежние (ревью РП #213).
+    func test_captureDeniedHasHumanTextAndSuggestion() async {
+        let cases: [(CaptureError, String, PermissionKind)] = [
+            (.microphoneDenied, "microphoneDenied", .microphone),
+            (.systemAudioDenied, "systemAudioDenied", .systemAudioRecording)
+        ]
+        for (captureError, name, kind) in cases {
+            let fixture = FacadeV11Fixture()
+            fixture.coordinator.failStartRecording(with: .capture(captureError))
+            do {
+                _ = try await fixture.facade.startRecording(meetingId: nil)
+                XCTFail("\(name): старт обязан бросить")
+            } catch AppFacadeError.underlying(let view) {
+                XCTAssertEqual(view.code, "capture.\(name)")
+                XCTAssertEqual(view.permissionKind, kind)
+                XCTAssertFalse(view.message.contains(name), "\(name): «\(view.message)»")
+                XCTAssertFalse(view.message.contains("("), "\(name): «\(view.message)»")
+                XCTAssertFalse(view.recoverySuggestion?.isEmpty ?? true, name)
+            } catch {
+                XCTFail("\(name): брошено \(error)")
+            }
         }
     }
 }

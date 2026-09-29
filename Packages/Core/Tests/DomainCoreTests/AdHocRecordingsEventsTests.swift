@@ -53,7 +53,7 @@ final class AdHocRecordingsEventsTests: XCTestCase {
 
     // MARK: - (б) смена RecordingStatus
 
-    private func makeFacade(coordinator: ObservedTestSessionCoordinator) -> AppFacadeImpl {
+    func makeFacade(coordinator: ObservedTestSessionCoordinator) -> AppFacadeImpl {
         let repositories = InMemoryRepositories()
         return AppFacadeImpl(
             meetings: repositories.meetings, recordings: repositories.recordings,
@@ -68,21 +68,21 @@ final class AdHocRecordingsEventsTests: XCTestCase {
         )
     }
 
-    private func snapshot(
+    func snapshot(
         _ sessionId: UUID, state: MeetingStatus, recordingId: UUID? = UUID(), origin: SessionOrigin = .adHoc,
-        estimate: Double = 1
+        meetingId: UUID? = nil, estimate: Double = 1
     ) -> SessionSnapshot {
         SessionSnapshot(
-            sessionId: sessionId, origin: origin, meetingId: nil, state: state, recordingId: recordingId,
+            sessionId: sessionId, origin: origin, meetingId: meetingId, state: state, recordingId: recordingId,
             target: nil, estimate: estimate, enteredStateAt: epoch, updatedAt: epoch
         )
     }
 
-    private func meetingsChangedCount(_ events: [AppEvent]) -> Int {
+    func meetingsChangedCount(_ events: [AppEvent]) -> Int {
         events.filter { $0 == .meetingsChanged }.count
     }
 
-    private func statusChangedCount(_ events: [AppEvent]) -> Int {
+    func statusChangedCount(_ events: [AppEvent]) -> Int {
         events.filter { if case .statusChanged = $0 { return true } else { return false } }.count
     }
 
@@ -106,27 +106,23 @@ final class AdHocRecordingsEventsTests: XCTestCase {
         XCTAssertEqual(statusChangedCount(events), 2, "\(events)")
     }
 
-    /// Смена состояния сессии без смены `RecordingStatus` `meetingsChanged` не даёт (MEE-492):
-    /// `scheduled → armed → awaitingSignal` — записи ещё нет; `processing → ready` — запись уже
-    /// `finalized`. Каждая смена даёт свой `statusChanged` — он и барьер.
-    func test_inv34b_sessionChangeWithoutRecordingStatusChangePublishesNoMeetingsChanged() async {
+    /// Ad-hoc сессия (встречи нет): смена состояния без смены `RecordingStatus` `meetingsChanged` не
+    /// даёт (MEE-492) — `processing → ready`, запись уже `finalized`. Каждая смена даёт свой
+    /// `statusChanged`. Строки встреч — `AdHocRecordingsEventsTests+MeetingRow.swift`.
+    func test_inv34b_adHocSessionChangeWithoutRecordingStatusChangePublishesNoMeetingsChanged() async {
         let coordinator = ObservedTestSessionCoordinator()
         let facade = makeFacade(coordinator: coordinator)
         let stream = facade.events()
         let sessionId = UUID()
         let recordingId = UUID()
 
-        for state in [MeetingStatus.scheduled, .armed, .awaitingSignal] {
-            coordinator.send(.session(snapshot(sessionId, state: state, recordingId: nil, origin: .scheduled)))
-        }
         for state in [MeetingStatus.recording, .stopping, .processing, .ready] {
-            coordinator.send(.session(snapshot(sessionId, state: state, recordingId: recordingId, origin: .scheduled)))
+            coordinator.send(.session(snapshot(sessionId, state: state, recordingId: recordingId)))
         }
 
-        let events = await collectEvents(stream, count: 11, timeoutSeconds: 1)
-        XCTAssertEqual(statusChangedCount(events), 7, "по одному на смену состояния: \(events)")
+        let events = await collectEvents(stream, count: 8, timeoutSeconds: 1)
+        XCTAssertEqual(statusChangedCount(events), 4, "по одному на смену состояния: \(events)")
         XCTAssertEqual(meetingsChangedCount(events), 3, "recording, stopping, finalized — и только: \(events)")
-        XCTAssertTrue(events.prefix(3).allSatisfy { $0 != .meetingsChanged }, "до записи: \(events)")
         XCTAssertNotEqual(events.last, .meetingsChanged, "ready после processing: \(events)")
     }
 

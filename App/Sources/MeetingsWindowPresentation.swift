@@ -86,6 +86,10 @@ struct MeetingsListPresentation: Equatable, Sendable {
             // Встречи отказали, ad-hoc пришли — показываем, что есть, а отказ — над таблицей.
             meetingsError = FacadeErrorText.line(error)
             fillRows(meetings: [], adHoc: recordings)
+        case (.interrupted, .loaded(let recordings)) where !recordings.isEmpty:
+            // То же при прерванном чтении встреч (ревью РП #213).
+            meetingsError = "Встречи: " + InterruptedReadText.placeholder.lowercased()
+            fillRows(meetings: [], adHoc: recordings)
         case (.failed(let error), _):
             placeholder = FacadeErrorText.line(error)
             isError = true
