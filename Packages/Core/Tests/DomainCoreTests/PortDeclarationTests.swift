@@ -119,6 +119,25 @@ extension PortDeclarationTests {
         XCTAssertEqual(Self.requirements(in: sample, protocolNamed: "JobHandler"), Self.jobHandler)
     }
 
+    /// C-010 v26 (MEE-445): атрибут отдельной строкой принадлежит следующему требованию, а
+    /// не склеивается хвостом с предыдущим; продолжение, начатое с `@Sendable`, — не атрибут.
+    func test_mee445_standaloneAttributeBelongsToNextRequirement() {
+        let sample = """
+        public protocol Repo: Sendable {
+            func first() async
+            @discardableResult
+            func second() async throws -> UUID
+            func third(_ body: Int,
+                       @Sendable @escaping (Double) -> Void) async
+        }
+        """
+        XCTAssertEqual(Self.requirements(in: sample, protocolNamed: "Repo"), [
+            "func first() async",
+            "@discardableResult func second() async throws -> UUID",
+            "func third(_ body: Int, @Sendable @escaping (Double) -> Void) async"
+        ])
+    }
+
     // MARK: - §2.1 C-016: ключи `app_settings` суть имена полей `AppSettings`
 
     /// Имена и порядок полей проверяются по живому значению, а не по исходнику: §2.1
@@ -178,6 +197,7 @@ extension PortDeclarationTests {
         var inside = false
         var depth = 0
         var found: [String] = []
+        var pendingAttributes: [String] = []
         for rawLine in text.components(separatedBy: .newlines) {
             if !inside {
                 guard rawLine.contains(header) else { continue }
@@ -189,8 +209,14 @@ extension PortDeclarationTests {
             if depth <= 0 { break }
             let line = withoutComment(rawLine)
             guard !line.isEmpty else { continue }
-            if startsRequirement(line) {
-                found.append(line)
+            // Атрибут отдельной строкой (`@discardableResult`, C-010 v26) — часть СЛЕДУЮЩЕГО
+            // требования, а не продолжение предыдущего. Только строка из одного атрибута:
+            // продолжение вида `@Sendable @escaping (…) -> Void) async` остаётся продолжением.
+            if isStandaloneAttribute(line) {
+                pendingAttributes.append(line)
+            } else if startsRequirement(line) {
+                found.append((pendingAttributes + [line]).joined(separator: " "))
+                pendingAttributes = []
             } else if !found.isEmpty {
                 found[found.count - 1] += " " + line
             }
@@ -203,6 +229,10 @@ extension PortDeclarationTests {
     private static func withoutComment(_ line: String) -> String {
         let body = line.components(separatedBy: "//").first ?? ""
         return body.trimmingCharacters(in: .whitespaces)
+    }
+
+    private static func isStandaloneAttribute(_ line: String) -> Bool {
+        line.range(of: #"^@\w+(\([^()]*\))?$"#, options: .regularExpression) != nil
     }
 
     private static func startsRequirement(_ line: String) -> Bool {

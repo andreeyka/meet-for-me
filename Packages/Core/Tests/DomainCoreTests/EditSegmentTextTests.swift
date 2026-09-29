@@ -106,4 +106,40 @@ final class EditSegmentTextTests: XCTestCase {
             XCTAssertEqual(view.code, "storage.notFound")
         }
     }
+
+    // MARK: - К33 (инв. 15 C-016; C-010 v26, инв. 35, MEE-445): публикация .transcriptChanged
+
+    /// Ровно одно событие, и это `.transcriptChanged` с `transcriptId` того транскрипта,
+    /// чей сегмент изменён. Подписка — до команды (broadcaster без буфера). Второе событие
+    /// ждётся коротким окном: его отсутствие и есть «ровно одно».
+    func test_mee445_editSegmentTextPublishesExactlyOneTranscriptChanged() async throws {
+        let fixture = try await makeFixture()
+        let stream = fixture.facade.events()
+
+        try await fixture.facade.editSegmentText(segmentId: fixture.segmentId, text: "новый текст")
+
+        let events = await collectEvents(stream, count: 2, timeoutSeconds: 1)
+        XCTAssertEqual(events.count, 1, "\(events)")
+        guard case .transcriptChanged(let transcriptId) = events.first else {
+            return XCTFail("ожидался .transcriptChanged, получено \(String(describing: events.first))")
+        }
+        XCTAssertEqual(transcriptId, fixture.transcriptId)
+    }
+
+    /// Отказ записи (неизвестный сегмент) не публикует ничего: событие — следствие
+    /// изменения, а не попытки.
+    func test_mee445_failedEditSegmentTextPublishesNothing() async throws {
+        let fixture = try await makeFixture()
+        let stream = fixture.facade.events()
+
+        do {
+            try await fixture.facade.editSegmentText(segmentId: fixture.segmentId + 1, text: "неважно")
+            XCTFail("ожидался отказ")
+        } catch AppFacadeError.underlying(let view) {
+            XCTAssertEqual(view.code, "storage.notFound")
+        }
+
+        let events = await collectEvents(stream, count: 1, timeoutSeconds: 1)
+        XCTAssertTrue(events.isEmpty, "\(events)")
+    }
 }
