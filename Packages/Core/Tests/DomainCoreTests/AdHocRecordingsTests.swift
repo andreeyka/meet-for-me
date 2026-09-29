@@ -146,14 +146,19 @@ final class AdHocRecordingsTests: XCTestCase {
         try await repositories.meetings.save(MeetingRecord(event: event, dedupKey: nil, status: .ready, sources: []))
         let adHoc = try manifest(start: 0, end: 60)
         repositories.recordings.seed([RecordingRecord(manifest: adHoc, status: .finalized)])
+        repositories.log.clear()
 
         let listed = try await facade.meetings(
             from: event.start.addingTimeInterval(-100_000_000), to: event.end.addingTimeInterval(100_000_000)
         )
+        let listCalls = repositories.log.signatures
         let (from, to) = wideWindow
         let adHocSummaries = try await facade.adHocRecordings(from: from, to: to)
 
         XCTAssertEqual(listed.map(\.meetingId), [event.id], "вектор непустоты: встреча в списке есть")
+        XCTAssertEqual(listed.first?.hasRecording, false, "ad-hoc запись встрече не приписана")
+        XCTAssertFalse(listCalls.isEmpty, "журнал пишет чтение списка — иначе проверка ниже вакуумна")
+        XCTAssertFalse(listCalls.contains("RecordingRepository.adHoc()"), "список ad-hoc не читает: \(listCalls)")
         XCTAssertEqual(ids(adHocSummaries), [adHoc.recordingId])
     }
 
@@ -188,8 +193,10 @@ final class AdHocRecordingsTests: XCTestCase {
         let repositories = InMemoryRepositories()
         let facade = makeFacade(repositories)
         repositories.recordings.seed([RecordingRecord(manifest: try manifest(start: 0, end: 60), status: .finalized)])
+        let storedBefore = repositories.recordings.storedRecords
         let events = facade.events()
         let (from, to) = wideWindow
+        repositories.log.clear()
 
         let first = try await facade.adHocRecordings(from: from, to: to)
         let second = try await facade.adHocRecordings(from: from, to: to)
@@ -198,7 +205,21 @@ final class AdHocRecordingsTests: XCTestCase {
         XCTAssertEqual(first, second)
         let published = await collectEvents(events, count: 1, timeoutSeconds: 1)
         XCTAssertTrue(published.isEmpty, "чтение не публикует событий, пришло \(published)")
+        // Журнал репозиториев (MEE-492): оба чтения дошли до `adHoc()`, и ни одного пишущего вызова.
+        let calls = repositories.log.calls
+        XCTAssertEqual(repositories.log.count(port: InMemoryRecordingRepository.portName, method: "adHoc()"), 2)
+        let writes = calls.filter { call in Self.writingMethodPrefixes.contains { call.method.hasPrefix($0) } }
+        XCTAssertEqual(writes, [], "чтение ничего не пишет: \(calls.map(\.signature))")
+        XCTAssertEqual(repositories.recordings.storedRecords, storedBefore)
+        XCTAssertTrue(repositories.recordings.directoriesCreated.isEmpty)
+        XCTAssertTrue(repositories.recordings.directoriesAskedToDelete.isEmpty)
     }
+
+    /// Пишущие методы портов хранилища (C-010) — по началу имени.
+    private static let writingMethodPrefixes = [
+        "save", "delete", "createDirectory", "setStatus", "upsert", "update", "assign", "clear", "rename",
+        "forget", "merge", "replace", "insert", "remove", "set", "detach", "attach", "mark"
+    ]
 
     /// Отказ хранилища сводится по §3.1, как у остальных чтений.
     func test_inv33_storageFailureIsWrappedLikeOtherReads() async throws {

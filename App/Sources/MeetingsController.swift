@@ -88,40 +88,41 @@ final class MeetingsController: ObservableObject {
     private func execute(_ load: MeetingsLoad) async {
         switch load {
         case .list(let week, let generation):
-            let content = await read(failed: MeetingsListContent.failed) {
+            let content = await read(failed: MeetingsListContent.failed, interrupted: .interrupted) {
                 .loaded(try await facade.meetings(from: week.start, to: week.end))
             }
-            if let content { state.finishList(generation: generation, content) }
+            state.finishList(generation: generation, content)
         case .adHocList(let week, let generation):
-            let content = await read(failed: AdHocListContent.failed) {
+            let content = await read(failed: AdHocListContent.failed, interrupted: .interrupted) {
                 .loaded(try await facade.adHocRecordings(from: week.start, to: week.end))
             }
-            if let content { run(state.finishAdHoc(generation: generation, content)) }
+            run(state.finishAdHoc(generation: generation, content))
         case .detail(let meetingId, let generation):
-            let content = await read(failed: MeetingDetailContent.failed) {
+            let content = await read(failed: MeetingDetailContent.failed, interrupted: .interrupted) {
                 try await facade.meeting(id: meetingId).map(MeetingDetailContent.loaded) ?? .notFound
             }
-            if let content { run(state.finishDetail(generation: generation, content)) }
+            run(state.finishDetail(generation: generation, content))
         case .transcript(let recordingId, let selection, let generation):
-            let content = await read(failed: TranscriptContent.failed) {
+            let content = await read(failed: TranscriptContent.failed, interrupted: .interrupted) {
                 try await transcript(recordingId: recordingId, selection).map(TranscriptContent.loaded) ?? .missing
             }
-            if let content { state.finishTranscript(generation: generation, content) }
+            state.finishTranscript(generation: generation, content)
         case .processing(let generation):
             await executeProcessing(generation: generation)
         }
     }
 
-    /// Одно чтение фасада → содержимое области. Отказ `AppFacadeError` — `failed(view)`; бросок
-    /// другого типа (`CancellationError`) не переводится и не показывается (C-016 v13 инв. 37):
-    /// `nil`, ответ отбрасывается, как устаревший.
+    /// Одно чтение фасада → содержимое области. Отказ `AppFacadeError` — `failed(view)`. Бросок
+    /// другого типа (`CancellationError`) в `AppErrorView` не переводится и ошибкой не показывается
+    /// (C-016 v13 инв. 37), но и в `.loading` область не оставляет (MEE-492 п. C1): `interrupted` —
+    /// «загрузка прервана» с кнопкой повтора.
     private func read<Content>(
-        failed: (AppErrorView) -> Content, _ body: () async throws -> Content
-    ) async -> Content? {
+        failed: (AppErrorView) -> Content, interrupted: Content, _ body: () async throws -> Content
+    ) async -> Content {
         do {
             return try await body()
         } catch {
-            return FacadeErrorText.shownError(error).map(failed)
+            return FacadeErrorText.shownError(error).map(failed) ?? interrupted
         }
     }
 

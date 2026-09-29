@@ -86,6 +86,11 @@ public actor AppFacadeImpl: AppFacade {
     /// `AppFacadeImpl+SessionObservation.swift`.
     var knownSessionStates: [UUID: MeetingStatus] = [:]
 
+    /// MEE-492: последний `RecordingStatus`, о котором фасад уже опубликовал `meetingsChanged`
+    /// (инв. 34 (а), (б)), ключ — `recordingId`. Общий для команд и наблюдения сессий —
+    /// `AppFacadeImpl+SessionObservation.swift`.
+    var publishedRecordingStatuses: [UUID: RecordingStatus] = [:]
+
     /// C-016 v13, инв. 35 (MEE-477): тип и доли задач очереди по `JobQueue.events()` —
     /// `AppFacadeImpl+JobObservation.swift`.
     var jobObservation = JobObservation()

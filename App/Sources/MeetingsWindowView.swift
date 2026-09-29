@@ -50,21 +50,33 @@ private struct MeetingsListPane: View {
             }
             .padding(10)
             Divider()
+            if let meetingsError = list.meetingsError {
+                errorLine(meetingsError)
+                Divider()
+            }
             if let placeholder = list.placeholder {
-                PlaceholderView(text: placeholder, isError: list.isError) { controller.retryReads() }
+                PlaceholderView(text: placeholder, isError: list.isError, canRetry: list.canRetry) {
+                    controller.retryReads()
+                }
             } else {
                 table
             }
             if let adHocError = list.adHocError {
                 Divider()
-                HStack {
-                    Text(adHocError).foregroundStyle(.red)
-                    Spacer()
-                    Button("Повторить загрузку") { controller.retryReads() }
-                }
-                .padding(10)
+                errorLine(adHocError)
             }
         }
+    }
+
+    /// Отказ одного из двух чтений недели строкой с повтором — над таблицей (встречи) или под ней
+    /// (ad-hoc записи).
+    private func errorLine(_ text: String) -> some View {
+        HStack {
+            Text(text).foregroundStyle(.red)
+            Spacer()
+            Button("Повторить загрузку") { controller.retryReads() }
+        }
+        .padding(10)
     }
 
     private var table: some View {
@@ -96,7 +108,9 @@ private struct MeetingCardPane: View {
 
     var body: some View {
         if let placeholder = card.placeholder {
-            PlaceholderView(text: placeholder, isError: card.isError) { controller.retryReads() }
+            PlaceholderView(text: placeholder, isError: card.isError, canRetry: card.canRetry) {
+                controller.retryReads()
+            }
         } else {
             VStack(alignment: .leading, spacing: 8) {
                 header
@@ -182,7 +196,9 @@ private struct TranscriptPane: View {
                 ForEach(transcript.versions) { Text($0.title).tag(TranscriptSelection.version($0.id)) }
             }
             if let placeholder = transcript.placeholder {
-                PlaceholderView(text: placeholder, isError: transcript.isError) { controller.retryTranscript() }
+                PlaceholderView(text: placeholder, isError: transcript.isError, canRetry: transcript.canRetry) {
+                    controller.retryTranscript()
+                }
             } else {
                 List(transcript.segments) { SegmentRowView(row: $0) }
             }
@@ -224,6 +240,8 @@ private struct SegmentRowView: View {
 private struct PlaceholderView: View {
     let text: String
     let isError: Bool
+    /// Кнопка повтора — у отказа и у прерванного чтения (MEE-492 п. C1), не только у ошибки.
+    let canRetry: Bool
     let retry: (() -> Void)?
 
     var body: some View {
@@ -231,7 +249,7 @@ private struct PlaceholderView: View {
             Text(text)
                 .foregroundStyle(isError ? .red : .secondary)
                 .multilineTextAlignment(.center)
-            if isError, let retry {
+            if canRetry, let retry {
                 Button("Повторить загрузку", action: retry)
             }
         }

@@ -35,8 +35,9 @@ extension AppFacadeImpl {
             // ровно здесь — публикация после успешного старта, не до (отказавший старт не
             // менял состояния, которому стоило бы сообщать подписчикам).
             // Инв. 34 (а), IR-146: у записи появилась строка (`status == .recording`) — при любом
-            // `meetingId`, до возврата и не позже `statusChanged`.
-            publish(.meetingsChanged)
+            // `meetingId`, до возврата и не позже `statusChanged`. Снимок сессии о том же входе в
+            // `.recording` второго `meetingsChanged` не даст (MEE-492).
+            publishMeetingsChangedIfAdvanced(recordingId: recordingId, to: .recording)
             publish(.statusChanged(await status()))
             return recordingId
         } catch let error as SessionError {
@@ -56,8 +57,9 @@ extension AppFacadeImpl {
             try await sessionCoordinator.stopRecording(recordingId: recordingId, now: clock())
             // К33: симметрично со стороной старта — публикация после успешной остановки.
             // Инв. 34 (б): `RecordingStatus` записи сменился на `stopping` — `meetingsChanged` не позже
-            // `statusChanged` для того же изменения.
-            publish(.meetingsChanged)
+            // `statusChanged` для того же изменения. Снимок сессии о том же входе в `stopping` —
+            // пришёл он раньше или придёт позже — второго `meetingsChanged` не даст (MEE-492).
+            publishMeetingsChangedIfAdvanced(recordingId: recordingId, to: .stopping)
             publish(.statusChanged(await status()))
         } catch let error as SessionError {
             throw wrap(error)
