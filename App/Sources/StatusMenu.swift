@@ -1,20 +1,16 @@
-//  StatusMenu — минимум статуса из `AppFacade.status()` (MEE-433, «MenuBarExtra показывает
-//  минимум статуса») + пункт «Завершить» (М1, возврат РП — без Dock-иконки у приложения нет
-//  штатного выхода). Экраны (окно встреч, просмотр транскрипта, настройки, мастер прав) —
-//  отдельная задача; этот файл — не она.
+//  StatusMenu — меню-бар (MEE-433 минимум статуса; MEE-473 ручной старт/стоп, активная
+//  сессия, права на запись, отказы, идущие задачи) + пункт «Завершить» (М1, возврат РП — без
+//  Dock-иконки у приложения нет штатного выхода). Окно встреч, просмотр транскрипта,
+//  настройки и полный мастер прав — отдельные задачи; этот файл — не они.
 //
-//  Статус — из `appDelegate.status`, не из собственного `.task`: подписка на
-//  `AppFacade.events()` (М4, возврат РП) живёт на `AppDelegate`, не на этом виде — в
-//  menu-стиле `MenuBarExtra` вид пересобирается при каждом открытии меню.
+//  Вид ничего не решает сам: что показать и какая команда уходит по нажатию — в
+//  `MenuBarPresentation` (чистая модель, `MenuBarModel.swift`/`MenuBarPresentation.swift`),
+//  состояние и подписка на `AppFacade.events()` — в `MenuBarController`, которым владеет
+//  `AppDelegate`: в menu-стиле `MenuBarExtra` вид пересобирается при каждом открытии меню,
+//  и `.task` внутри него не гарантированно переживает это пересоздание.
 //
-//  Возврат РП назвал `AppFacade.events()` рабочей заменой обновлению при открытии — но
-//  сегодня в domain-core `AppEvent.statusChanged` нигде не публикуется (сверено: `grep` по
-//  `.statusChanged(` в `Packages/Core/Sources/DomainCore` — ноль совпадений; публикуется
-//  только `.settingsChanged`, `AppFacadeImpl+Settings.swift:131`). Подписка в `AppDelegate`
-//  остаётся — начнёт работать сама, когда эта публикация появится, — но пока единственный
-//  путь не застрять на «Загрузка статуса…» это тоже обновление на открытии: `.onAppear`
-//  ниже, не `.task(id:)` (тот привязан к разовому условию «граф появился», а не к каждому
-//  открытию меню).
+//  `.onAppear` — обновление на каждом открытии меню сверх подписки (наблюдаемость на случай
+//  пропущенного снимка), не `.task(id:)`: тот привязан к разовому условию.
 
 import AppKit
 import DomainCore
@@ -25,34 +21,59 @@ struct StatusMenu: View {
 
     var body: some View {
         Group {
-            if appDelegate.graph == nil {
-                Text("Запуск…")
-            } else if let status = appDelegate.status {
-                Text(summary(for: status))
+            if let menu = appDelegate.menu {
+                StatusMenuContent(controller: menu)
             } else {
-                Text("Загрузка статуса…")
-            }
-            Button("Обновить") {
-                Task { await appDelegate.refreshStatus() }
+                Text("Запуск…")
             }
             Divider()
             Button("Завершить") {
                 NSApp.terminate(nil)
             }
         }
+    }
+}
+
+private struct StatusMenuContent: View {
+    @ObservedObject var controller: MenuBarController
+
+    var body: some View {
+        let presentation = controller.presentation
+        Group {
+            if let placeholder = presentation.placeholder {
+                Text(placeholder)
+            }
+            ForEach(presentation.sessionLines, id: \.self) { Text($0) }
+            if let action = presentation.recordingAction {
+                actionButton(action)
+            }
+            if let action = presentation.permissionAction {
+                Divider()
+                actionButton(action)
+            }
+            ForEach(presentation.permissionLines, id: \.self) { Text($0) }
+            if !presentation.jobLines.isEmpty {
+                Divider()
+                ForEach(presentation.jobLines, id: \.self) { Text($0) }
+            }
+            if let errorLine = presentation.errorLine {
+                Divider()
+                Text(errorLine)
+                Button("Скрыть ошибку") { controller.dismissError() }
+            }
+            ForEach(presentation.settingsActions) { actionButton($0) }
+            Divider()
+            Button("Обновить") {
+                Task { await controller.refresh() }
+            }
+        }
         .onAppear {
-            Task { await appDelegate.refreshStatus() }
+            Task { await controller.refresh() }
         }
     }
 
-    private func summary(for status: AppStatus) -> String {
-        var parts = [status.activeSession == nil ? "нет активной сессии" : "идёт запись"]
-        if status.pendingJobCount > 0 {
-            parts.append("\(status.pendingJobCount) задач в очереди")
-        }
-        if status.failedJobCount > 0 {
-            parts.append("\(status.failedJobCount) отказавших")
-        }
-        return parts.joined(separator: ", ")
+    private func actionButton(_ action: MenuAction) -> some View {
+        Button(action.title) { controller.perform(action.command) }
+            .disabled(!action.isEnabled)
     }
 }

@@ -1,9 +1,9 @@
 //  AppDelegate — строит composition root при запуске, показывает отказ и завершает процесс
 //  на сломанном окружении, останавливает граф при выходе (MEE-433, MEE-430 «жизненный
-//  цикл»). Владеет статусом меню-бара (М4, возврат РП): подписка на `AppFacade.events()`
-//  живёт на времени жизни делегата, не на времени жизни `StatusMenu` — в menu-стиле
-//  `MenuBarExtra` вид пересобирается при каждом открытии меню, и `.task` внутри него не
-//  гарантированно переживает это пересоздание.
+//  цикл»). Владеет контроллером меню-бара (М4, возврат РП; MEE-473): подписка на
+//  `AppFacade.events()` живёт на времени жизни делегата (`MenuBarController`), не на времени
+//  жизни `StatusMenu` — в menu-стиле `MenuBarExtra` вид пересобирается при каждом открытии
+//  меню, и `.task` внутри него не гарантированно переживает это пересоздание.
 //
 //  Модуль: app-ui · Владелец: DEV-1 · Слой: UI
 
@@ -18,9 +18,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     /// приложение уже завершилось (`presentStartupFailureAndTerminate`).
     @Published private(set) var graph: AppGraph?
 
-    /// Минимум статуса для `StatusMenu` (МЕЕ-433). `nil` — ещё не пришёл ни один снимок
-    /// (граф не готов или первый `status()` не отработал).
-    @Published private(set) var status: AppStatus?
+    /// Состояние и команды меню (MEE-473). `nil`, пока нет графа.
+    @Published private(set) var menu: MenuBarController?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         Task {
@@ -30,31 +29,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
                 if graph.settingsUsedDefaults {
                     Self.presentSettingsFallbackNotice()
                 }
-                await refreshStatus()
-                observeStatus(graph.facade)
+                let menu = MenuBarController(facade: graph.facade)
+                self.menu = menu
+                menu.start()
             } catch {
                 Self.presentStartupFailureAndTerminate(error)
             }
         }
-    }
-
-    /// М4 (возврат РП): держит `status` свежим, пока приложение живо — независимо от того,
-    /// открыто меню сейчас или нет.
-    private func observeStatus(_ facade: AppFacade) {
-        Task {
-            for await event in facade.events() {
-                if case .statusChanged(let newStatus) = event {
-                    status = newStatus
-                }
-            }
-        }
-    }
-
-    /// Вызывается кнопкой «Обновить» в `StatusMenu` — на случай, если поток `events()`
-    /// пропустил снимок (наблюдаемость сверх подписки, не замена ей).
-    func refreshStatus() async {
-        guard let graph else { return }
-        status = await graph.facade.status()
     }
 
     /// `.terminateLater` — `AppGraph.shutdown()` асинхронен (`SessionCoordinator.stop()`,
@@ -62,6 +43,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     /// метода. Без графа (отказ на старте уже завершил процесс раньше) завершать нечего.
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         guard let graph else { return .terminateNow }
+        menu?.stop()
         Task {
             await graph.shutdown()
             NSApp.reply(toApplicationShouldTerminate: true)
