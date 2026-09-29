@@ -49,23 +49,6 @@ enum RecordingFixtures {
     }
 }
 
-/// Хранилище для тестов транспорта, написанных до MEE-480: на любой `recording(id:)` отдаёт
-/// пригодную запись (`.finalized`, дорожки `system` и `mic`) с этим `id`. Этим тестам запись
-/// безразлична — они проверяют транспорт; поведение по записи проверяют тесты
-/// `EngineXPCClientRecordingTests` на настоящем `InMemoryRecordingRepository`. Остальные
-/// методы порта адаптер не вызывает (инв. 24) — здесь они отвечают пустотой.
-final class AnyIdFinalizedRecordingRepository: RecordingRepository, @unchecked Sendable {
-    func recording(id: UUID) async throws -> RecordingRecord? { try RecordingFixtures.record(recordingId: id) }
-    func save(_ record: RecordingRecord) async throws {}
-    func recordings(meetingId: UUID) async throws -> [RecordingRecord] { [] }
-    func unfinalized() async throws -> [RecordingRecord] { [] }
-    func adHoc() async throws -> [RecordingRecord] { [] }
-    func delete(recordingId: UUID, deleteFiles: Bool) async throws {}
-    func createDirectory(recordingId: UUID) async throws -> URL {
-        URL(fileURLWithPath: "/dev/null").appendingPathComponent(recordingId.uuidString)
-    }
-}
-
 /// `ModelCatalogPort`, пишущий `resolve`/`beginUse` в общий с `InMemoryRecordingRepository`
 /// журнал — порядок «запись раньше модели» (инв. 24) читается одним журналом.
 final class LoggingModelCatalog: ModelCatalogPort, Sendable {

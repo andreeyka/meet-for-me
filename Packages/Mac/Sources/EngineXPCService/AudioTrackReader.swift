@@ -59,8 +59,9 @@ public enum AudioTrackReader {
     static let blockFrames: AVAudioFrameCount = 48_000
 
     /// Выделение буфера блока исходной частоты. Отказ `AVAudioPCMBuffer` синтетическим файлом
-    /// не вызвать, поэтому тест подменяет выделение отказом (MEE-491).
-    typealias BufferAllocator = (AVAudioFormat, AVAudioFrameCount) -> AVAudioPCMBuffer?
+    /// не вызвать, поэтому тест подменяет выделение отказом (MEE-491). `@Sendable` — к переходу
+    /// на Swift 6 / strict concurrency (MEE-488, п. 7).
+    typealias BufferAllocator = @Sendable (AVAudioFormat, AVAudioFrameCount) -> AVAudioPCMBuffer?
 
     static let systemAllocator: BufferAllocator = { AVAudioPCMBuffer(pcmFormat: $0, frameCapacity: $1) }
 
@@ -70,20 +71,33 @@ public enum AudioTrackReader {
         try read(ref, allocate: systemAllocator)
     }
 
-    static func read(_ ref: AudioRef, allocate: @escaping BufferAllocator) throws -> [Float] {
+    /// Шов для тестов: подменяемые выделение буфера (MEE-491) и чтение блока — сквозной тест
+    /// пустого чтения через `read(...)` (MEE-488, п. 9).
+    static func read(
+        _ ref: AudioRef, allocate: @escaping BufferAllocator,
+        readBlock: @escaping BlockSource.BlockReader = BlockSource.fileReader
+    ) throws -> [Float] {
         let file = try open(ref)
-        return try convert(file, frames: 0..<file.length, path: ref.fileURL.path, allocate: allocate)
+        return try convert(
+            file, frames: 0..<file.length, path: ref.fileURL.path, allocate: allocate, readBlock: readBlock
+        )
     }
 
     /// Вырезка `startMs..<endMs` на шкале записи (инв. 16).
     public static func read(_ slice: AudioSlice) throws -> [Float] {
+        try read(slice, readBlock: BlockSource.fileReader)
+    }
+
+    static func read(_ slice: AudioSlice, readBlock: @escaping BlockSource.BlockReader) throws -> [Float] {
         let ref = slice.source
         let file = try open(ref)
         let range = try frameRange(
             startMs: slice.startMs, endMs: slice.endMs, offsetMs: ref.offsetMs,
             sampleRate: ref.sampleRate, fileLength: file.length
         )
-        return try convert(file, frames: range, path: ref.fileURL.path, allocate: systemAllocator)
+        return try convert(
+            file, frames: range, path: ref.fileURL.path, allocate: systemAllocator, readBlock: readBlock
+        )
     }
 
     // MARK: - Шкала (инв. 16)
@@ -145,7 +159,7 @@ public enum AudioTrackReader {
 
     private static func convert(
         _ file: AVAudioFile, frames: Range<AVAudioFramePosition>, path: String,
-        allocate: @escaping BufferAllocator
+        allocate: @escaping BufferAllocator, readBlock: @escaping BlockSource.BlockReader
     ) throws -> [Float] {
         guard !frames.isEmpty else { return [] }
         file.framePosition = frames.lowerBound
@@ -159,7 +173,8 @@ public enum AudioTrackReader {
         }
         converter.downmix = true
         let source = BlockSource(
-            file: file, remaining: AVAudioFramePosition(frames.count), path: path, allocate: allocate
+            file: file, remaining: AVAudioFramePosition(frames.count), path: path,
+            allocate: allocate, readBlock: readBlock
         )
         return try convert(from: source, with: converter, into: target, path: path)
     }
@@ -222,12 +237,15 @@ final class BlockSource {
 
     /// Чтение блока из файла. Пустое чтение раньше `length` синтетическим CAF не вызвать (на
     /// обрезанном файле Core Audio бросает), поэтому тест подменяет чтение пустым (MEE-491).
-    typealias BlockReader = (AVAudioFile, AVAudioPCMBuffer, AVAudioFrameCount) throws -> Void
+    typealias BlockReader = @Sendable (AVAudioFile, AVAudioPCMBuffer, AVAudioFrameCount) throws -> Void
+
+    /// Чтение по умолчанию — `AVAudioFile.read(into:frameCount:)`.
+    static let fileReader: BlockReader = { try $0.read(into: $1, frameCount: $2) }
 
     init(
         file: AVAudioFile, remaining: AVAudioFramePosition?, path: String,
         allocate: @escaping AudioTrackReader.BufferAllocator = AudioTrackReader.systemAllocator,
-        readBlock: @escaping BlockReader = { try $0.read(into: $1, frameCount: $2) }
+        readBlock: @escaping BlockReader = BlockSource.fileReader
     ) {
         self.file = file
         self.remaining = remaining

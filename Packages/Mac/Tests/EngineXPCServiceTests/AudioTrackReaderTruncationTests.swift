@@ -45,6 +45,38 @@ final class AudioTrackReaderTruncationTests: AudioTrackReaderTestCase {
         }
     }
 
+    /// Сквозной вектор пустого чтения (MEE-488, п. 9): через `read(AudioRef)` и `read(AudioSlice)`,
+    /// а не через `BlockSource` напрямую. Первый блок читается настоящим файлом, второй — пусто
+    /// до конца вырезки: итог — `audioUnreadable` с путём из `fileURL`, не укороченная дорожка.
+    func testEmptyReadMidTrackThroughReadIsAudioUnreadable() throws {
+        let url = try SyntheticCAF.write(
+            [SyntheticCAF.tone(ms: 3_000, hz: 440, amplitudes: [1])],
+            sampleRate: 48_000, channels: 1, to: directory
+        )
+        let ref = try audioRef(url, channelCount: 1, channel: .mic)
+        func emptyAfterFirstBlock() -> (BlockSource.BlockReader, CallCounter) {
+            let calls = CallCounter()
+            let reader: BlockSource.BlockReader = { file, buffer, frames in
+                if calls.increment() == 1 { try BlockSource.fileReader(file, buffer, frames) }
+            }
+            return (reader, calls)
+        }
+
+        let (wholeReader, wholeCalls) = emptyAfterFirstBlock()
+        assertAudioUnreadable(
+            { try AudioTrackReader.read(ref, allocate: AudioTrackReader.systemAllocator, readBlock: wholeReader) },
+            path: url.path
+        )
+        XCTAssertEqual(wholeCalls.value, 2, "отказ — на втором, пустом блоке")
+
+        let (sliceReader, sliceCalls) = emptyAfterFirstBlock()
+        assertAudioUnreadable(
+            { try AudioTrackReader.read(AudioSlice(source: ref, startMs: 500, endMs: 2_500), readBlock: sliceReader) },
+            path: url.path
+        )
+        XCTAssertEqual(sliceCalls.value, 2, "отказ — на втором, пустом блоке")
+    }
+
     /// Конец файла — по-прежнему `nil`, не отказ: после чтения всех кадров источник пуст.
     func testBlockSourceEndsWithNilAtEndOfFile() throws {
         let url = try SyntheticCAF.write(
@@ -100,10 +132,9 @@ final class AudioTrackReaderTruncationTests: AudioTrackReaderTestCase {
             sampleRate: 48_000, channels: 1, to: directory
         )
         let ref = try audioRef(url, channelCount: 1, channel: .mic)
-        var calls = 0
+        let calls = CallCounter()
         let failingSecond: AudioTrackReader.BufferAllocator = { format, capacity in
-            calls += 1
-            return calls == 1 ? AVAudioPCMBuffer(pcmFormat: format, frameCapacity: capacity) : nil
+            calls.increment() == 1 ? AVAudioPCMBuffer(pcmFormat: format, frameCapacity: capacity) : nil
         }
 
         XCTAssertThrowsError(try AudioTrackReader.read(ref, allocate: failingSecond)) { error in
@@ -111,7 +142,7 @@ final class AudioTrackReaderTruncationTests: AudioTrackReaderTestCase {
                 return XCTFail("ожидался EngineError.runtimeFailure, получено \(error)")
             }
         }
-        XCTAssertEqual(calls, 2)
+        XCTAssertEqual(calls.value, 2)
     }
 
     // MARK: - Файл без единого кадра (IR-154)
@@ -131,5 +162,23 @@ final class AudioTrackReaderTruncationTests: AudioTrackReaderTestCase {
         let handle = try FileHandle(forWritingTo: url)
         try handle.truncate(atOffset: UInt64(size - count))
         try handle.close()
+    }
+}
+
+/// Счётчик вызовов для `@Sendable` подмен (MEE-488, п. 7): захват изменяемой `var` в
+/// `@Sendable`-замыкании — ошибка компиляции.
+final class CallCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+
+    var value: Int { lock.withLock { count } }
+
+    /// Номер этого вызова, с 1.
+    @discardableResult
+    func increment() -> Int {
+        lock.withLock {
+            count += 1
+            return count
+        }
     }
 }
