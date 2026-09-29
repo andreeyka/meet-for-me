@@ -72,4 +72,28 @@ final class InMemoryAttendeesTests: XCTestCase {
         XCTAssertEqual(afterDelete, [], "каскад удаления встречи")
         XCTAssertNil(organizerAfterDelete)
     }
+
+    /// Инв. 36 (в) (MEE-466): участник без имени и без адреса — пустой `displayName`, правило (б)
+    /// к пустому имени как к обычному: два анонимных участника одной встречи — один человек и
+    /// одна строка участия; повторный `save` сохраняет тот же `id`.
+    func test_inv36c_anonymousAttendeesMergeIntoOnePersonStableAcrossSaves() async throws {
+        let repositories = InMemoryRepositories()
+        let meeting = try event(
+            externalId: "e-anon", organizer: nil, attendees: [try attendee(nil, nil), try attendee(nil, nil)]
+        )
+        let record = MeetingRecord(event: meeting, dedupKey: nil, status: .scheduled, sources: [])
+
+        try await repositories.meetings.save(record)
+        let first = try await repositories.persons.attendees(meetingId: meeting.id)
+        let countAfterFirst = repositories.persons.storedRecords.count
+        try await repositories.meetings.save(record)
+        let second = try await repositories.persons.attendees(meetingId: meeting.id)
+
+        XCTAssertEqual(first.count, 1, "два анонимных участника — один человек, одна строка участия")
+        XCTAssertEqual(first.first?.displayName, "", "ни имени, ни адреса — пустой displayName")
+        XCTAssertEqual(first.first?.emails, [])
+        XCTAssertEqual(countAfterFirst, 1)
+        XCTAssertEqual(second.map(\.id), first.map(\.id), "повторный save — тот же id")
+        XCTAssertEqual(repositories.persons.storedRecords.count, countAfterFirst, "новых людей не заведено")
+    }
 }
