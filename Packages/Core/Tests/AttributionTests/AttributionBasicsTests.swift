@@ -63,7 +63,8 @@ final class AttributionBasicsTests: XCTestCase {
         ], speakers: [try Fixture.speaker(0, embedding: [1.0, 0.0], version: "v2")])
         let input = Fixture.input(
             transcript: transcript, segmentIds: segmentIds,
-            profiles: [Fixture.profile(1, embedding: [1.0, 0.0], version: "v1")]
+            profiles: [Fixture.profile(1, embedding: [1.0, 0.0], version: "v1")],
+            embeddingModelVersion: "v2"
         )
         await assertThrowsMismatch(input)
     }
