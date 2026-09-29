@@ -1,0 +1,42 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-09-11T00:00:00.000Z",
+  "models": [
+    {
+      "id": "gigaam-v3-e2e-ctc-int8",
+      "version": "3.0.0",
+      "role": "asr",
+      "engine": "sherpaonnx",
+      "runtime": "onnx",
+      "displayName": "GigaAM v3 (русский)",
+      "description": "Русский ASR, вариант e2e_ctc, int8",
+      "sizeBytes": 236978176,
+      "languages": ["ru"],
+      "files": [
+        {"name": "model.int8.onnx", "url": "https://cdn.example/gigaam/model.int8.onnx",
+         "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+         "sizeBytes": 236716032},
+        {"name": "vocab.txt", "url": "https://cdn.example/gigaam/vocab.txt",
+         "sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+         "sizeBytes": 262144}
+      ],
+      "quantization": "int8",
+      "minChip": "m2",
+      "minRAMGB": 8,
+      "recommendedFor": ["ru", "quality"]
+    }
+  ],
+  "profiles": [
+    {
+      "id": "ru-default",
+      "displayName": "Русские встречи",
+      "language": "ru",
+      "asrModelId": "gigaam-v3-e2e-ctc-int8",
+      "vadModelId": "silero-vad",
+      "diarizationModelId": "pyannote-community-1",
+      "embeddingModelId": "wespeaker-voxceleb",
+      "diarization": {"expectedSpeakers": null, "clusteringThreshold": 0.7, "minSegmentMs": 500},
+      "isBuiltIn": true
+    }
+  ]
+}
