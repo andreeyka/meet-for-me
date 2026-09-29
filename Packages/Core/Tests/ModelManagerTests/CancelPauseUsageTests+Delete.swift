@@ -61,7 +61,7 @@ extension CancelPauseUsageTests {
         let expectedBefore: [String: (ModelState) -> Bool] = [
             "del-downloaded": { $0 == .downloaded },
             "del-paused": { $0 == .paused(bytesOnDisk: 20) },
-            "del-error": { if case .error(.checksumMismatch) = $0 { return true } else { return false } },
+            "del-error": { if case .error(.checksumMismatch) = $0 { return true } else { return false } }
         ]
         for (id, check) in expectedBefore {
             let before = await manager.state(id: id, version: "1.0.0")

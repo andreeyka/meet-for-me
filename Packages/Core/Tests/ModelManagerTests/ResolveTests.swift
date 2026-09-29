@@ -19,7 +19,7 @@ final class ResolveTests: XCTestCase {
         }
         let profiles = [
             testProfile(id: "full", asr: "r-asr", vad: "r-vad", diarization: "r-diar", embedding: "r-emb"),
-            testProfile(id: "bare", asr: "r-asr"),
+            testProfile(id: "bare", asr: "r-asr")
         ]
         return ModelHarness(models: models, profiles: profiles)
     }

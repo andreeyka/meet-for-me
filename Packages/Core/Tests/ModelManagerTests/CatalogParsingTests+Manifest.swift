@@ -20,7 +20,7 @@ extension CatalogParsingTests {
     private func overwriteManifest(_ harness: ModelHarness, _ model: TestModel,
                                    _ transform: (String) -> String) throws {
         let url = harness.directory(model).appendingPathComponent(".manifest.json")
-        let text = String(decoding: try Data(contentsOf: url), as: UTF8.self)
+        let text = String(bytes: try Data(contentsOf: url), encoding: .utf8) ?? ""
         try Data(transform(text).utf8).write(to: url)
     }
 

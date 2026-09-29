@@ -74,7 +74,7 @@ extension DownloadTests {
         let twice = try await interruptedHarness()
         twice.harness.transport.script(url, [
             .respond(status: 206, firstByte: 50, body: Data([1, 2, 3])),
-            .respond(status: 416, firstByte: nil, body: Data()),
+            .respond(status: 416, firstByte: nil, body: Data())
         ])
         do {
             try await twice.manager.download(id: "resume-asr", version: "1.0.0")

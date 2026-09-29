@@ -16,7 +16,7 @@ final class StateTransitionsTests: XCTestCase {
         "paused→downloading", "paused→available",
         "downloaded→loaded", "downloaded→available", "downloaded→error",
         "loaded→downloaded",
-        "error→downloading", "error→available",
+        "error→downloading", "error→available"
     ]
 
     static func name(_ state: ModelState) -> String {

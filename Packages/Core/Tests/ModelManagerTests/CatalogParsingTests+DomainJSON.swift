@@ -9,7 +9,7 @@ import DomainTestKit
 extension CatalogParsingTests {
 
     private var validText: String {
-        String(decoding: CatalogFixtures.validCatalogJSON, as: UTF8.self)
+        String(bytes: CatalogFixtures.validCatalogJSON, encoding: .utf8) ?? ""
     }
 
     func test_k12_integerFieldsAcceptFloatLiteralForm() async throws {
@@ -47,7 +47,7 @@ extension CatalogParsingTests {
         let writerManager = try writer.makeManager()
         try await writerManager.download(id: model.descriptor.id, version: model.descriptor.version)
         let bytes = try Data(contentsOf: writer.directory(model).appendingPathComponent(".manifest.json"))
-        let text = String(decoding: bytes, as: UTF8.self)
+        let text = String(bytes: bytes, encoding: .utf8) ?? ""
         XCTAssertFalse(text.contains("\n") || text.contains(": "), "компактно: \(text)")
         XCTAssertLessThan(try XCTUnwrap(text.range(of: "\"descriptor\"")).lowerBound,
                           try XCTUnwrap(text.range(of: "\"schemaVersion\"")).lowerBound, "ключи отсортированы")

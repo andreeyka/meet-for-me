@@ -17,7 +17,7 @@ final class ProfilesTests: XCTestCase {
                            files: [("\(pair.0).bin", TestModel.bytes(16, seed: UInt8(60 + index)))])
         }
         return ModelHarness(models: models, profiles: [
-            testProfile(id: "p1", asr: "p-asr", vad: "p-vad"),
+            testProfile(id: "p1", asr: "p-asr", vad: "p-vad")
         ])
     }
 
@@ -70,7 +70,7 @@ final class ProfilesTests: XCTestCase {
             ("p-vad", ["p1", "u-vad"]),        // vad встроенного и пользовательского
             ("p-diar", ["u-diar"]),            // diarization пользовательского
             ("p-emb", ["u-emb"]),              // embedding пользовательского
-            ("p-free", ["u-diar", "u-emb", "u-vad"]),
+            ("p-free", ["u-diar", "u-emb", "u-vad"])
         ]
         for (modelId, profileIds) in cases {
             await expect(.modelInUseByProfile(modelId: modelId, profileIds: profileIds)) {
