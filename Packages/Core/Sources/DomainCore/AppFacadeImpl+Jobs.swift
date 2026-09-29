@@ -86,7 +86,7 @@ extension AppFacadeImpl {
         }
         let submission = JobSubmission(
             payload: previous.payload, priority: previous.priority, maxAttempts: previous.maxAttempts,
-            runAfter: clock(), conditions: previous.conditions, dedupKey: previous.dedupKey
+            runAfter: clock(), conditions: previous.conditions, dedupKey: nil
         )
         let jobId = try await submit(submission, to: queue)
         publish(.statusChanged(await status()))
