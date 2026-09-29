@@ -257,7 +257,9 @@ extension InMemoryTranscriptRepository {
         }
     }
 
-    public func updateSegmentText(segmentId: Int64, text: String, isUserEdited: Bool) async throws {
+    /// C-010 v26, инвариант 35 (MEE-445): возвращает `transcriptId` изменённой строки.
+    @discardableResult
+    public func updateSegmentText(segmentId: Int64, text: String, isUserEdited: Bool) async throws -> UUID {
         log.record(
             port: Self.portName,
             method: "updateSegmentText(segmentId:text:isUserEdited:)",
@@ -267,8 +269,8 @@ extension InMemoryTranscriptRepository {
             throw error
         }
         switch locked({ replaceSegmentText(segmentId, text, isUserEdited) }) {
-        case .replaced:
-            return
+        case .replaced(let transcriptId):
+            return transcriptId
         case .notFound:
             throw StorageError.notFound(entity: "segments", id: String(segmentId))
         case .invalid(let message):
@@ -281,7 +283,7 @@ extension InMemoryTranscriptRepository {
 
     /// Исход замены текста сегмента.
     private enum TextReplacement {
-        case replaced
+        case replaced(UUID)
         case notFound
         case invalid(String)
     }
@@ -316,7 +318,7 @@ extension InMemoryTranscriptRepository {
                 attributionSource: row.attributionSource,
                 isUserEdited: isUserEdited
             )
-            return .replaced
+            return .replaced(row.transcriptId)
         }
         return .notFound
     }

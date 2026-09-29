@@ -210,7 +210,8 @@ private final class ReversedOrderTranscriptRepository: TranscriptRepository, @un
         try await inner.updateAttribution(updates)
     }
 
-    func updateSegmentText(segmentId: Int64, text: String, isUserEdited: Bool) async throws {
+    @discardableResult
+    func updateSegmentText(segmentId: Int64, text: String, isUserEdited: Bool) async throws -> UUID {
         try await inner.updateSegmentText(segmentId: segmentId, text: text, isUserEdited: isUserEdited)
     }
 

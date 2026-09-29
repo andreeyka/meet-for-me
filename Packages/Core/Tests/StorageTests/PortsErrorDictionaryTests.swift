@@ -148,11 +148,13 @@ final class PortsErrorDictionaryTests: StorageAsyncTestCase {
         )
     }
 
-    private static func assertNotFound(
-        _ expression: @autoclosure () async throws -> Void, file: StaticString = #filePath, line: UInt = #line
+    /// Обобщён по результату (MEE-445): `updateSegmentText` с C-010 v26 возвращает `UUID`,
+    /// а автозамыкание `-> Void` значения не отбрасывает само.
+    private static func assertNotFound<Result>(
+        _ expression: @autoclosure () async throws -> Result, file: StaticString = #filePath, line: UInt = #line
     ) async throws {
         do {
-            try await expression()
+            _ = try await expression()
             XCTFail("ожидался notFound", file: file, line: line)
         } catch let error as StorageError {
             guard case .notFound = error else {

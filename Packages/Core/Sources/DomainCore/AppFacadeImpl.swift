@@ -44,10 +44,10 @@
 //  `settings()`/`updateSettings()` (группа Ж) реализованы отдельным файлом,
 //  `AppFacadeImpl+Settings.swift` (MEE-425, слито в main после этого PR) —
 //  `AppSettings.slice1Defaults` объявлен (`AppSettings.swift`, IR-105 закрыт C-016 v10).
-//  Группа Д (этот PR) тем не менее использует контрактный литерал
-//  `voiceProfilesEnabled = false` напрямую, в обход `settings()` — см.
-//  `AppFacadeImpl+Attribution.swift`: та работа шла параллельно с MEE-425 и слиянием
-//  сюда не переписана, чтобы не тянуть в этот PR чужие изменения задним числом.
+//  Группа Д берёт `voiceProfilesEnabled` из `settings()` — значение из `SettingsRepository`,
+//  а не литерал (см. `AppFacadeImpl+Attribution.swift` и
+//  `SpeakerAssignmentTests.test_voiceProfilesEnabledIsReadFromSettingsNotHardcoded`);
+//  отказ `settings()` пробрасывается наружу как есть.
 
 import Foundation
 
@@ -208,16 +208,10 @@ public actor AppFacadeImpl: AppFacade {
 
     // MARK: - editSegmentText (группа Г плана MEE-410; К13, К14)
 
-    // К33 (МЕЕ-437, группа Л, инв. 15; возврат РП, приёмка 10:15 UTC, «мелочи»): эта команда
-    // ДОЛЖНА публиковать `.transcriptChanged(transcriptId:)` (сама меняет текст сегмента),
-    // но принимает только `segmentId` (C-016 §4, дословно) — резолвинг `segmentId →
-    // transcriptId` не входит ни в один метод `TranscriptRepository` C-010 (сверено
-    // `PortContractExpectations.swift` — `transcriptRepository`, десять методов, ни один не
-    // даёт этого). Заведённый было `transcriptId(forSegmentId:)` красил `PortDeclarationTests.
-    // test_mee289_everyPortDeclaresExactlyTheRequirementsOfItsContract` — протокол обязан
-    // зеркалить контракт дословно, не шире. Нужен новый метод в САМОМ контракте C-010 (не
-    // только в Swift) — решение архитектора/РП, не эта задача; публикация здесь остаётся
-    // дырой сознательно, не по недосмотру.
+    // К33 (МЕЕ-437, группа Л, инв. 15): команда сама меняет текст сегмента и потому публикует
+    // `.transcriptChanged(transcriptId:)`. `transcriptId` — возврат `updateSegmentText`
+    // (C-010 v26, инвариант 35, MEE-445): сама команда получает только `segmentId` (C-016 §4).
+    // Публикация — только после успешной записи; отказ записи не публикует ничего.
     /// К13 (инв. 13, часть 1): ровно один вызов `TranscriptRepository.updateSegmentText(
     /// isUserEdited: true)`, без `applyTextCorrections` — правка целиком заменяет текст
     /// сегмента, а не накладывает список точечных замен слов (`applyTextCorrections` сама
@@ -226,7 +220,10 @@ public actor AppFacadeImpl: AppFacade {
     /// тем же путём, не переключается на `applyTextCorrections`.
     public func editSegmentText(segmentId: Int64, text: String) async throws {
         do {
-            try await transcripts.updateSegmentText(segmentId: segmentId, text: text, isUserEdited: true)
+            let transcriptId = try await transcripts.updateSegmentText(
+                segmentId: segmentId, text: text, isUserEdited: true
+            )
+            publish(.transcriptChanged(transcriptId: transcriptId))
         } catch let error as StorageError {
             throw wrap(error)
         } catch {
