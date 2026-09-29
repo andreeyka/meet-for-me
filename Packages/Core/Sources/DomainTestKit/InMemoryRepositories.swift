@@ -56,5 +56,6 @@ public final class InMemoryRepositories: @unchecked Sendable {
         recordings.attachCascade(transcripts: transcripts)
         meetings.attachCascade(recordings: recordings)
         meetings.attachCascade(meetingOutputs: meetingOutputs)
+        meetings.attachPersons(persons)
     }
 }
