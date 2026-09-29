@@ -69,6 +69,8 @@ extension PortDeclarationTests {
     ]
 
     /// `applyTextCorrections` — C-010 v19, инвариант 32 (IR-129, MEE-388, MEE-392).
+    /// `updateSegmentText` — C-010 v26, инвариант 35 (IR-139, MEE-445): возвращает `transcriptId`,
+    /// `@discardableResult` — часть объявления (строка атрибута склеивается с требованием).
     static let transcriptRepository = [
         "func save(_ transcript: Transcript) async throws -> TranscriptHeader",
         "func headers(recordingId: UUID) async throws -> [TranscriptHeader]",
@@ -76,7 +78,8 @@ extension PortDeclarationTests {
         "func transcript(id: UUID) async throws -> Transcript?",
         "func segments(transcriptId: UUID) async throws -> [SegmentRow]",
         "func updateAttribution(_ updates: [SegmentAttributionUpdate]) async throws",
-        "func updateSegmentText(segmentId: Int64, text: String, isUserEdited: Bool) async throws",
+        "@discardableResult "
+            + "func updateSegmentText(segmentId: Int64, text: String, isUserEdited: Bool) async throws -> UUID",
         "func markSegmentsUserEdited(segmentIds: [Int64]) async throws",
         "func applyTextCorrections(segmentId: Int64, text: String, corrections: [TextCorrection]) async throws",
         "func search(query: String, limit: Int, offset: Int) async throws -> [SearchHit]"

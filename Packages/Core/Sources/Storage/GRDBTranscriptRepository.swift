@@ -86,18 +86,31 @@ final class GRDBTranscriptRepository: TranscriptRepository {
         }
     }
 
-    func updateSegmentText(segmentId: Int64, text: String, isUserEdited: Bool) async throws {
+    /// C-010 v26, инвариант 35 (MEE-445): возвращает `transcript_id` изменённой строки.
+    /// `SELECT` и `UPDATE` — в одной транзакции записи: строка между ними не исчезнет.
+    /// Отсутствующая строка — тот же `notFound`, что и до v26.
+    @discardableResult
+    func updateSegmentText(segmentId: Int64, text: String, isUserEdited: Bool) async throws -> UUID {
         do {
-            let changed = try await database.dbPool.write { db -> Int in
+            let transcriptIdText = try await database.dbPool.write { db -> String? in
+                guard let owner = try String.fetchOne(
+                    db, sql: "SELECT transcript_id FROM segments WHERE id = ?", arguments: [segmentId]
+                ) else { return nil }
                 try db.execute(
                     sql: "UPDATE segments SET text = ?, is_user_edited = ? WHERE id = ?",
                     arguments: [text, isUserEdited, segmentId]
                 )
-                return db.changesCount
+                return owner
             }
-            guard changed > 0 else {
+            guard let transcriptIdText else {
                 throw StorageError.notFound(entity: StorageEntity.segment, id: String(segmentId))
             }
+            guard let transcriptId = UUID(uuidString: transcriptIdText) else {
+                throw StorageError.dataCorrupted(
+                    entity: StorageEntity.segment, id: String(segmentId), message: "transcript_id не разбирается в UUID"
+                )
+            }
+            return transcriptId
         } catch {
             throw StorageErrorMapping.mapWrite(error)
         }

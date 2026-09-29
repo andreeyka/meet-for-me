@@ -265,7 +265,11 @@ public protocol TranscriptRepository: Sendable {
     func transcript(id: UUID) async throws -> Transcript?
     func segments(transcriptId: UUID) async throws -> [SegmentRow]
     func updateAttribution(_ updates: [SegmentAttributionUpdate]) async throws
-    func updateSegmentText(segmentId: Int64, text: String, isUserEdited: Bool) async throws
+    /// C-010 v26, инвариант 35 (IR-139, MEE-445): возвращает `transcriptId` изменённой строки —
+    /// то же значение, что `SegmentRow.transcriptId` при чтении. Несуществующий `segmentId` —
+    /// `notFound`, как и прежде.
+    @discardableResult
+    func updateSegmentText(segmentId: Int64, text: String, isUserEdited: Bool) async throws -> UUID
     /// C-010 v25, инвариант 34 (IR-135, MEE-421): ставит только `is_user_edited = 1` —
     /// `text`/`text_original`/`words_json` и атрибуцию не трогает. Уже помеченная строка —
     /// не отказ. Чужой id — `constraintViolation`. Пустой список — ничего не делает,
