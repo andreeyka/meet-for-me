@@ -15,7 +15,8 @@ import Foundation
 
 extension AppFacadeError {
 
-    /// `AppErrorView.message`. У `underlying` — текст вложенного значения как есть.
+    /// `AppErrorView.message`. У `underlying` — текст вложенного значения как есть (его строят
+    /// `wrap` фасада по `UnderlyingErrorText`, MEE-494).
     var humanMessage: String {
         switch self {
         case .underlying(let view):
@@ -33,9 +34,11 @@ extension AppFacadeError {
         case .settingsUnreadable(let key):
             return "Не удалось прочитать настройку «\(key)»"
         case .jobFailed(_, let type, let message):
+            // MEE-494: `message` случая — строка очереди дословно (инв. 31), часто описание значения
+            // Swift; показывается её человеческий пересказ (`UnderlyingErrorText.jobFailureDetail`).
             let head = "\(Self.jobTitle(type)) не выполнена"
-            let detail = message.trimmingCharacters(in: .whitespacesAndNewlines)
-            return detail.isEmpty ? head : "\(head): \(detail)"
+            guard let detail = UnderlyingErrorText.jobFailureDetail(message) else { return head }
+            return "\(head): \(detail)"
         }
     }
 

@@ -36,11 +36,10 @@ extension AppFacadeImpl {
             // менял состояния, которому стоило бы сообщать подписчикам).
             // Инв. 34 (а), IR-146: у записи появилась строка (`status == .recording`) — при любом
             // `meetingId`, до возврата и не позже `statusChanged`. Снимок сессии о том же входе в
-            // `.recording` второго `meetingsChanged` не даст (MEE-492).
-            if let meetingId { recordingMeetingIds[recordingId] = meetingId }
-            publishMeetingsChangedIfRowsChanged(
-                recordingId: recordingId, recordingStatus: .recording,
-                meetingId: meetingId, meetingStatus: meetingId.map { _ in .recording }
+            // `.recording` второго `meetingsChanged` не даст (MEE-492). Ответ, пришедший после
+            // снимка `stopping`/`processing`/терминального, — ни события, ни записей в кэшах (MEE-494).
+            publishCommandRowChange(
+                recordingId: recordingId, recordingStatus: .recording, meetingId: meetingId, meetingStatus: .recording
             )
             publish(.statusChanged(await status()))
             return recordingId
@@ -62,11 +61,11 @@ extension AppFacadeImpl {
             // К33: симметрично со стороной старта — публикация после успешной остановки.
             // Инв. 34 (б): `RecordingStatus` записи сменился на `stopping` — `meetingsChanged` не позже
             // `statusChanged` для того же изменения. Снимок сессии о том же входе в `stopping` —
-            // пришёл он раньше или придёт позже — второго `meetingsChanged` не даст (MEE-492).
-            let meetingId = recordingMeetingIds[recordingId]
-            publishMeetingsChangedIfRowsChanged(
+            // пришёл он раньше или придёт позже — второго `meetingsChanged` не даст (MEE-492). Ответ
+            // после снимка `processing` или терминального — не даст ничего (MEE-494).
+            publishCommandRowChange(
                 recordingId: recordingId, recordingStatus: .stopping,
-                meetingId: meetingId, meetingStatus: meetingId.map { _ in .stopping }
+                meetingId: recordingMeetingIds[recordingId], meetingStatus: .stopping
             )
             publish(.statusChanged(await status()))
         } catch let error as SessionError {
@@ -88,13 +87,21 @@ extension AppFacadeImpl {
     /// Событие — инв. 15 (не К47: критерий его не называет). `.meetingsChanged` — пропуск
     /// меняет статус встречи, `.statusChanged` — то же поле участвует в `AppStatus.upcoming`,
     /// тем же доводом, что `syncCalendars()`/К33 выше.
+    ///
+    /// MEE-494 (Б3): из `recording`/`stopping`/`processing` машина `skip` не меняет ничего
+    /// (C-018 §7, `SessionMachineCommands.swift`) и ответа об этом не даёт. Исход берётся из
+    /// хранилища: машина пишет `setStatus` раньше возврата (C-018 инв. 18), и `meetingsChanged`
+    /// идёт, только если встреча там правда `skipped`. Отвергнуто: чтение `sessions()` до или
+    /// после команды — сессия успевает сменить состояние между чтением и командой.
     public func skipMeeting(meetingId: UUID) async throws {
         do {
             try await sessionCoordinator.skip(meetingId: meetingId, now: clock())
             // MEE-492: снимок `skipped` той же встречи второго `meetingsChanged` не даст.
-            publishMeetingsChangedIfRowsChanged(
-                recordingId: nil, recordingStatus: nil, meetingId: meetingId, meetingStatus: .skipped
-            )
+            if (try? await meetingRepository.meeting(id: meetingId))?.status == .skipped {
+                publishMeetingsChangedIfRowsChanged(
+                    recordingId: nil, recordingStatus: nil, meetingId: meetingId, meetingStatus: .skipped
+                )
+            }
             publish(.statusChanged(await status()))
         } catch let error as SessionError {
             throw wrap(error)
@@ -146,8 +153,9 @@ extension AppFacadeImpl {
         let description = String(describing: error)
         let name = description.split(separator: "(", maxSplits: 1).first.map(String.init) ?? description
         var permissionKind: PermissionKind?
-        var message = description
-        var recoverySuggestion: String?
+        // MEE-494: текст для человека по коду (§3.1), а не `String(describing:)`.
+        var message = UnderlyingErrorText.message("capture.\(name)")
+        var recoverySuggestion = UnderlyingErrorText.suggestion("capture.\(name)")
         switch error {
         case .microphoneDenied:
             permissionKind = .microphone

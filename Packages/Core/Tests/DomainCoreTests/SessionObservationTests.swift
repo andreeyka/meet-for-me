@@ -158,7 +158,14 @@ final class ObservedTestSessionCoordinator: SessionCoordinator, @unchecked Senda
     func session(id: UUID) async -> SessionSnapshot? { await sessions().first { $0.sessionId == id } }
     func prompts() async -> [SessionPrompt] { [] }
     func changes() -> AsyncStream<SessionChange> { stream }
-    func startRecording(meetingId: UUID?, now: Date) async throws -> UUID { UUID() }
+    /// MEE-494: `recordingId`, который вернёт `startRecording`; `nil` — новый на каждый вызов.
+    private var fixedRecordingId: UUID?
+
+    func setStartRecordingId(_ recordingId: UUID?) {
+        locked { fixedRecordingId = recordingId }
+    }
+
+    func startRecording(meetingId: UUID?, now: Date) async throws -> UUID { locked { fixedRecordingId } ?? UUID() }
     func stopRecording(recordingId: UUID, now: Date) async throws {}
     func skip(meetingId: UUID, now: Date) async throws {}
     func answer(promptId: UUID, _ answer: SessionPromptAnswer, now: Date) async throws {}

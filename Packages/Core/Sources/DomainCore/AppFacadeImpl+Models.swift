@@ -80,17 +80,37 @@ extension AppFacadeImpl {
     /// `wrap(_: CaptureError)`: тринадцать случаев отдельным `switch` дали бы сложность выше
     /// порога SwiftLint, а правило и так тотально по построению. `permissionKind` — `nil`.
     func wrap(_ error: ModelCatalogError) -> AppFacadeError {
-        .underlying(Self.ruleView(prefix: "models", error: error))
+        .underlying(Self.ruleView(prefix: "models", error: error, message: Self.modelsMessage(error)))
+    }
+
+    /// Текст с подробностью значения там, где она что-то говорит человеку (MEE-494); иначе —
+    /// текст словаря по коду (`nil`).
+    private static func modelsMessage(_ error: ModelCatalogError) -> String? {
+        switch error {
+        case .unknownProfile(let id): return "Профиль распознавания «\(id)» не найден"
+        case .notDownloaded(let modelId, _): return "Модель «\(modelId)» не загружена"
+        case .modelInUse(let modelId, _): return "Модель «\(modelId)» сейчас используется"
+        case .modelInUseByProfile(let modelId, let profileIds):
+            let profiles = profileIds.map { "«\($0)»" }.joined(separator: ", ")
+            return "Модель «\(modelId)» нужна профилям распознавания: \(profiles)"
+        case .insufficientDiskSpace(let required, let available):
+            let format = { ByteCountFormatter.string(fromByteCount: $0, countStyle: .file) }
+            return "Недостаточно места на диске: нужно \(format(required)), свободно \(format(available))"
+        case .unsupportedChip(let required):
+            return "Модели нужен процессор Apple \(required.rawValue.uppercased()) или новее"
+        case .insufficientRAM(let requiredGB):
+            return "Модели нужно не меньше \(requiredGB) ГБ оперативной памяти"
+        default: return nil
+        }
     }
 
     /// `<префикс>.<имя case>` из `String(describing:)` значения перечисления: всё до первой
     /// скобки ассоциированных значений. `permissionKind` — `nil` (для источников, у которых ни
     /// один случай не вызван состоянием системного права, инв. 23).
-    static func ruleView(prefix: String, error: Error) -> AppErrorView {
+    /// `message` — текст для человека по коду (`UnderlyingErrorText`, MEE-494) либо переданный.
+    static func ruleView(prefix: String, error: Error, message: String? = nil) -> AppErrorView {
         let description = String(describing: error)
         let name = description.split(separator: "(", maxSplits: 1).first.map(String.init) ?? description
-        return AppErrorView(
-            code: "\(prefix).\(name)", message: description, recoverySuggestion: nil, permissionKind: nil
-        )
+        return UnderlyingErrorText.view(code: "\(prefix).\(name)", message: message)
     }
 }

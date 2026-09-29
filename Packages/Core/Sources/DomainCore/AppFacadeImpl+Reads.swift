@@ -229,9 +229,13 @@ extension AppFacadeImpl {
         case .dataCorrupted: name = "dataCorrupted"
         case .io: name = "io"
         }
-        return .underlying(AppErrorView(
-            code: "storage.\(name)", message: String(describing: error), recoverySuggestion: nil, permissionKind: nil
-        ))
+        // MEE-494: текст для человека по коду (§3.1), а не `String(describing:)`.
+        if case .notFound(let entity, _) = error {
+            return .underlying(UnderlyingErrorText.view(
+                code: "storage.notFound", message: AppFacadeError.notFoundText(entity: entity)
+            ))
+        }
+        return .underlying(UnderlyingErrorText.view(code: "storage.\(name)"))
     }
 
     /// Поиск (C-016 §4, `// C-010`): сквозная обёртка над `TranscriptRepository.search(query:

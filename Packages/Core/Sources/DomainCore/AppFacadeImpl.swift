@@ -240,9 +240,7 @@ public actor AppFacadeImpl: AppFacade {
         case .loginItemRegistrationFailed: code = "permissions.loginItemRegistrationFailed"
         case .settingsPaneUnavailable: code = "permissions.settingsPaneUnavailable"
         }
-        return .underlying(AppErrorView(
-            code: code, message: String(describing: error), recoverySuggestion: nil, permissionKind: nil
-        ))
+        return .underlying(UnderlyingErrorText.view(code: code))
     }
 
     /// Инв. 19, §3.1: ошибки снизу вне словаря §3.1 (например `DomainValidationError`,
@@ -251,7 +249,8 @@ public actor AppFacadeImpl: AppFacade {
     /// не сможет разобрать вызывающая сторона.
     func wrapUnexpected(_ error: Error) -> AppFacadeError {
         .underlying(AppErrorView(
-            code: "app.internalError", message: String(describing: error), recoverySuggestion: nil, permissionKind: nil
+            code: "app.internalError", message: UnderlyingErrorText.internalErrorMessage(error),
+            recoverySuggestion: UnderlyingErrorText.internalErrorSuggestion, permissionKind: nil
         ))
     }
 

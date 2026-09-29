@@ -178,8 +178,13 @@ extension AppFacadeImpl {
                 permissionKind = .calendars
             }
         }
-        return .underlying(AppErrorView(
-            code: "calendar.\(name)", message: description, recoverySuggestion: nil, permissionKind: permissionKind
+        // MEE-494: текст для человека по коду (§3.1), а не `String(describing:)`; право — тот же
+        // совет, что у `facade.permissionRequired`.
+        var message: String?
+        if case .timeout(_, let seconds) = error { message = "Календарь не ответил за \(seconds) с" }
+        return .underlying(UnderlyingErrorText.view(
+            code: "calendar.\(name)", message: message,
+            suggestion: permissionKind.map(AppFacadeError.permissionSuggestion), permissionKind: permissionKind
         ))
     }
 }

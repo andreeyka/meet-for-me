@@ -117,9 +117,17 @@ extension AppFacadeImpl {
         case .cancelled: code = "engine.cancelled"
         case .engineFailure(let engineCode, _): code = "engine.engineFailure.\(engineCode)"
         }
-        return .underlying(AppErrorView(
-            code: code, message: String(describing: error), recoverySuggestion: nil, permissionKind: nil
-        ))
+        return .underlying(UnderlyingErrorText.view(code: code, message: Self.engineMessage(error)))
+    }
+
+    /// Текст с подробностью значения там, где она что-то говорит человеку (MEE-494); иначе —
+    /// текст словаря по коду (`nil`).
+    private static func engineMessage(_ error: TranscriptionServiceError) -> String? {
+        switch error {
+        case .timedOut(let seconds): return "Служба распознавания речи не ответила за \(seconds) с"
+        case .modelsNotReady(let profileId, _): return "Модели профиля распознавания «\(profileId)» не готовы"
+        default: return nil
+        }
     }
 }
 
