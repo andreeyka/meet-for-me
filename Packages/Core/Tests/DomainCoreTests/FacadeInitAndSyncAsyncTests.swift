@@ -65,7 +65,12 @@ final class FacadeInitAndSyncAsyncTests: XCTestCase {
                 syncView = view
             }
 
+            // Асинхронная ветка К29 — «при идущей записи»: сессия в `recording`, захват стартовал.
+            let recordingId = UUID()
+            fixture.coordinator.setSessions([recordingSession(recordingId: recordingId, enteredAt: Date())])
             let stream = fixture.facade.events()
+            fixture.capture.emit(.started(CaptureStarted(recordingId: recordingId, startedAt: Date(),
+                                                         tracks: [], captureGroupKey: "zoom")))
             fixture.capture.emit(.failed(error))
             let events = await collectEvents(stream, count: 1)
             guard case .failure(let asyncView)? = events.first else {

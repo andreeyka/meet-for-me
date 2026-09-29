@@ -57,8 +57,17 @@ final class MeetingDetailTests: XCTestCase {
         let repositories = InMemoryRepositories()
         let event = MeetingEventFixtures.oneOnOneZoom
         try await repositories.meetings.save(MeetingRecord(event: event, dedupKey: nil, status: .ready, sources: []))
-        let recorded = try manifest(RecordingManifestFixtures.hourlyTwoChannels, meetingId: event.id)
+        // Фикстура с маркерами: иначе `summary.markers == recorded.markers` сравнивает `[]` с `[]`.
+        let recorded = try manifest(RecordingManifestFixtures.deviceChangedMidway, meetingId: event.id)
+        XCTAssertFalse(recorded.markers.isEmpty, "иначе равенство маркеров вакуумно")
         repositories.recordings.seed([RecordingRecord(manifest: recorded, status: .finalized)])
+        // Засеянный транскрипт той же записи: иначе `summary.transcripts == headers` — `[]` с `[]`.
+        let base = TranscriptFixtures.oneOnOne
+        let seeded = try await repositories.transcripts.save(try Transcript(
+            recordingId: recorded.recordingId, language: base.language, engine: base.engine,
+            modelVersion: base.modelVersion, createdAt: base.createdAt,
+            segments: base.segments, speakers: base.speakers
+        ))
         let facade = makeFacade(repositories)
 
         let fetched = try await facade.meeting(id: event.id)
@@ -70,6 +79,7 @@ final class MeetingDetailTests: XCTestCase {
         XCTAssertEqual(detail.meeting, meetingRecord)
         XCTAssertFalse(attendees.isEmpty, "иначе равенство вакуумно")
         XCTAssertEqual(detail.attendees, attendees, "PersonRepository.attendees без пересборки")
+        XCTAssertNotNil(organizer, "иначе равенство организатора вакуумно")
         XCTAssertEqual(detail.organizer, organizer)
         XCTAssertEqual(detail.outputs, [], "в Срезе 1 всегда пуст")
 
@@ -81,6 +91,7 @@ final class MeetingDetailTests: XCTestCase {
         XCTAssertEqual(summary.status, .finalized)
         XCTAssertEqual(summary.markers, recorded.markers)
         let headers = try await repositories.transcripts.headers(recordingId: recorded.recordingId)
+        XCTAssertEqual(headers, [seeded], "иначе равенство заголовков вакуумно")
         XCTAssertEqual(summary.transcripts, headers)
         let directory = FileLayout(root: root).recordingDirectory(recorded.directoryName)
         XCTAssertEqual(summary.tracks.map(\.channel), recorded.tracks.map(\.channel))

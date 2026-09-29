@@ -116,4 +116,38 @@ final class PersonRepositoryAttendeesTests: StorageAsyncTestCase {
         XCTAssertEqual(secondAttendees.count, 1)
         XCTAssertNotEqual(firstAttendees.first?.id, secondAttendees.first?.id, "между встречами по имени не сводится")
     }
+
+    /// Инв. 36 (в) (MEE-466): участник без имени и без адреса получает пустой `displayName`,
+    /// и правило (б) применяется к пустому имени как к обычному — два анонимных участника
+    /// одной встречи дают одного человека и одну строку `attendees`; повторный `save` — тот же `id`.
+    func test_inv36c_anonymousAttendeesMergeIntoOnePersonStableAcrossSaves() async throws {
+        let temp = try StorageTestSupport.makeDatabase()
+        defer { StorageTestSupport.cleanup(temp) }
+        let meetings = temp.database.meetingRepository()
+        let persons = temp.database.personRepository()
+        let event = try TestFixtures.meetingEvent(
+            externalId: "ext-anon", attendees: [try person(nil, nil), try person(nil, nil)]
+        )
+        let record = MeetingRecord(event: event, dedupKey: nil, status: .scheduled, sources: [])
+        let attendeeRows = {
+            try temp.database.rawRead { db in
+                try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM attendees WHERE meeting_id = ?",
+                                 arguments: [event.id.uuidString]) ?? -1
+            }
+        }
+
+        try await meetings.save(record)
+        let first = try await persons.attendees(meetingId: event.id)
+        let countAfterFirst = try personCount(temp.database)
+        try await meetings.save(record)
+        let second = try await persons.attendees(meetingId: event.id)
+
+        XCTAssertEqual(first.count, 1, "два анонимных участника — один человек")
+        XCTAssertEqual(first.first?.displayName, "", "ни имени, ни адреса — пустой displayName")
+        XCTAssertEqual(first.first?.emails, [])
+        XCTAssertEqual(try attendeeRows(), 1, "одна строка attendees")
+        XCTAssertEqual(second.map(\.id), first.map(\.id), "повторный save — тот же id")
+        XCTAssertEqual(try personCount(temp.database), countAfterFirst, "новых людей повторный save не завёл")
+        XCTAssertEqual(try attendeeRows(), 1)
+    }
 }
