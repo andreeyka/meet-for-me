@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "generatedAt": "2026-09-11T00:00:00.000Z",
+  "generatedAt": "2026-09-29T00:00:00.000Z",
   "models": [
     {
       "id": "gigaam-v3-e2e-ctc-int8",
@@ -10,15 +10,15 @@
       "runtime": "onnx",
       "displayName": "GigaAM v3 (русский)",
       "description": "Русский ASR, вариант e2e_ctc, int8",
-      "sizeBytes": 236978176,
+      "sizeBytes": 319871127,
       "languages": ["ru"],
       "files": [
-        {"name": "model.int8.onnx", "url": "https://cdn.example/gigaam/model.int8.onnx",
-         "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
-         "sizeBytes": 236716032},
-        {"name": "vocab.txt", "url": "https://cdn.example/gigaam/vocab.txt",
-         "sha256": "1111111111111111111111111111111111111111111111111111111111111111",
-         "sizeBytes": 262144}
+        {"name": "model.int8.onnx", "url": "https://huggingface.co/Smirnov75/GigaAM-v3-sherpa-onnx/resolve/6888903da215c7735f51101d939f3bfa679fb2b8/gigaam_v3_e2e_ctc_int8.onnx",
+         "sha256": "0aacb41f70f0f5aaac4b45dd430337b9e16b180f22c72af04db8516e7609c3c0",
+         "sizeBytes": 319869121},
+        {"name": "tokens.txt", "url": "https://huggingface.co/Smirnov75/GigaAM-v3-sherpa-onnx/resolve/6888903da215c7735f51101d939f3bfa679fb2b8/gigaam_v3_e2e_ctc_tokens.txt",
+         "sha256": "f8eb9b115e2748db9c40a5897cae11dd0678cc0b40fd7e25f8c43b3bf28715e4",
+         "sizeBytes": 2006}
       ],
       "quantization": "int8",
       "minChip": "m2",
