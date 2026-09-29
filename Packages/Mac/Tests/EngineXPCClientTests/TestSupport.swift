@@ -224,12 +224,25 @@ final class XPCFixture: NSObject {
     private let lock = NSLock()
     private var acceptedConnections: [NSXPCConnection] = []
 
+    /// Фикстура для тестов транспорта (MEE-491): хранилище записей — `AnyIdFinalizedRecordingRepository`,
+    /// любая запись пригодна. Хранилище выбирается явно — фабрикой или `recordings:` у `init`,
+    /// чтобы тест поведения по записи не получил «всегда готовую» запись молча.
+    static func transportOnly(
+        service: TestEngineXPCService = TestEngineXPCService(),
+        clock: @escaping @Sendable () -> Date = { Date() },
+        wrapCatalog: (FakeModelCatalogPort) -> ModelCatalogPort = { $0 }
+    ) -> XPCFixture {
+        XPCFixture(
+            service: service, clock: clock, recordings: AnyIdFinalizedRecordingRepository(), wrapCatalog: wrapCatalog
+        )
+    }
+
     /// `wrapCatalog` — К27 (гонка, MEE-451): обёртка над тем же `modelCatalog`, чтобы тест
     /// мог встать в `endUse` (результат уже у клиента) и отменить `Task` именно там.
     init(
         service: TestEngineXPCService = TestEngineXPCService(),
         clock: @escaping @Sendable () -> Date = { Date() },
-        recordings: RecordingRepository = AnyIdFinalizedRecordingRepository(),
+        recordings: RecordingRepository,
         wrapCatalog: (FakeModelCatalogPort) -> ModelCatalogPort = { $0 }
     ) {
         self.service = service

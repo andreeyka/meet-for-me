@@ -45,8 +45,9 @@ extension EngineXPCClientRecordingTests {
         do {
             _ = try await stand.fixture.client.embed(recordingId: recordingId, startMs: 0, endMs: 1000, profileId: "p1")
             XCTFail("ожидался recordingNotReady")
-        } catch TranscriptionServiceError.recordingNotReady(let failedId, _) {
+        } catch TranscriptionServiceError.recordingNotReady(let failedId, let message) {
             XCTAssertEqual(failedId, recordingId)
+            XCTAssertEqual(message, "записи нет")
         }
         assertNothingReachedModelsOrEngine(stand)
     }

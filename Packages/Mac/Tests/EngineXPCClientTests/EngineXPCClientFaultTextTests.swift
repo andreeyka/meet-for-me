@@ -20,7 +20,7 @@ final class EngineXPCClientFaultTextTests: XCTestCase {
     }
 
     private func readyFixture() async throws -> XPCFixture {
-        let fixture = XPCFixture()
+        let fixture = XPCFixture.transportOnly()
         configureReadyProfile(fixture.modelCatalog)
         _ = try await fixture.client.ping()
         return fixture

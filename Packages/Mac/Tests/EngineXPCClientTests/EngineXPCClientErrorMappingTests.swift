@@ -25,7 +25,7 @@ final class EngineXPCClientErrorMappingTests: XCTestCase {
     }
 
     func readyFixture(embeddingModelId: String? = nil) async throws -> XPCFixture {
-        let fixture = XPCFixture()
+        let fixture = XPCFixture.transportOnly()
         configureReadyProfile(fixture.modelCatalog, embeddingModelId: embeddingModelId)
         _ = try await fixture.client.ping()   // рукопожатие отдельно от проверяемого вызова
         return fixture

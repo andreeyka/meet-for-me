@@ -12,7 +12,7 @@ import EngineKit
 final class EngineXPCClientFailureMessageTests: XCTestCase {
 
     private func engineFailure(for error: EngineError) async throws -> (code: String, message: String) {
-        let fixture = XPCFixture()
+        let fixture = XPCFixture.transportOnly()
         configureReadyProfile(fixture.modelCatalog)
         _ = try await fixture.client.ping()
         fixture.service.forcedReplyOverride = { jobId in .failed(jobId, error) }

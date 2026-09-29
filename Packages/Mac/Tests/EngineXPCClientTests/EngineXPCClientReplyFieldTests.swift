@@ -23,7 +23,7 @@ final class EngineXPCClientReplyFieldTests: XCTestCase {
     private func readyFixture(
         service: TestEngineXPCService = TestEngineXPCService(), embeddingModelId: String? = nil
     ) async throws -> XPCFixture {
-        let fixture = XPCFixture(service: service)
+        let fixture = XPCFixture.transportOnly(service: service)
         configureReadyProfile(fixture.modelCatalog, embeddingModelId: embeddingModelId)
         _ = try await fixture.client.ping()
         return fixture
