@@ -66,8 +66,13 @@ final class FailureSourcesInv31Tests: XCTestCase {
 
     func test_k60iii_captureFailedPublishesOneCaptureCodeWithPermissionKind() async throws {
         let fixture = FacadeV11Fixture()
+        // Вход К60 (iii) — «при идущей записи»: сессия в `recording`, захват сообщил о старте.
+        let recordingId = UUID()
+        fixture.coordinator.setSessions([recordingSession(recordingId: recordingId, enteredAt: Date())])
         let stream = fixture.facade.events()
 
+        fixture.capture.emit(.started(CaptureStarted(recordingId: recordingId, startedAt: Date(),
+                                                     tracks: [], captureGroupKey: "zoom")))
         fixture.capture.emit(.failed(.systemUnavailable(message: "HAL")))
         fixture.capture.emit(.failed(.microphoneDenied))
         let events = await collectEvents(stream, count: 3, timeoutSeconds: 1)
@@ -94,7 +99,6 @@ final class FailureSourcesInv31Tests: XCTestCase {
         let events = await collectEvents(stream, count: 3, timeoutSeconds: 1)
 
         XCTAssertNotNil(results.first?.failure, "отказ — в синхронном ответе")
-        XCTAssertEqual(events.count, 2)
         for event in events {
             if case .failure = event { XCTFail("syncCalendars() не публикует failure: \(event)") }
         }

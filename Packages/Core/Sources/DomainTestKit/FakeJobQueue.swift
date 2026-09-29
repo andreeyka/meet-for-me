@@ -53,6 +53,8 @@ public final class FakeJobQueue: JobQueue, @unchecked Sendable {
     private var submitFailure: JobQueueError?
     private var cancelFailure: JobQueueError?
     private var continuations: [AsyncStream<JobEvent>.Continuation] = []
+    /// Ключи подписок параллельно `continuations` — по ним `onTermination` снимает свою.
+    private var continuationIds: [UUID] = []
 
     public init(log: PortCallLog = PortCallLog()) {
         self.log = log
@@ -116,6 +118,7 @@ public final class FakeJobQueue: JobQueue, @unchecked Sendable {
         let targets = locked { () -> [AsyncStream<JobEvent>.Continuation] in
             let taken = continuations
             continuations = []
+            continuationIds = []
             return taken
         }
         for continuation in targets {
@@ -137,6 +140,9 @@ public final class FakeJobQueue: JobQueue, @unchecked Sendable {
     public var registeredHandlerTypes: [JobType] {
         locked { registered }
     }
+
+    /// Сколько подписок `events()` живо: ушедший подписчик снимается `onTermination` (MEE-468).
+    public var eventSubscriberCount: Int { locked { continuations.count } }
 
     public var startCallCount: Int { locked { startCalls } }
     public var stopCallCount: Int { locked { stopCalls } }
@@ -217,7 +223,23 @@ public final class FakeJobQueue: JobQueue, @unchecked Sendable {
     public func events() -> AsyncStream<JobEvent> {
         log.record(port: Self.portName, method: "events()")
         return AsyncStream { continuation in
-            locked { continuations.append(continuation) }
+            let identifier = locked { () -> UUID in
+                let identifier = UUID()
+                continuationIds.append(identifier)
+                continuations.append(continuation)
+                return identifier
+            }
+            // Подписчик ушёл (поток отменён или закончен) — его continuation снимается,
+            // иначе они копятся за каждым `events()` и `emit` шлёт в мёртвые.
+            continuation.onTermination = { [weak self] _ in
+                guard let self else { return }
+                self.locked {
+                    if let index = self.continuationIds.firstIndex(of: identifier) {
+                        self.continuationIds.remove(at: index)
+                        self.continuations.remove(at: index)
+                    }
+                }
+            }
         }
     }
 

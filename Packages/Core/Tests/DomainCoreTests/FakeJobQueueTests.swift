@@ -263,6 +263,33 @@ final class FakeJobQueueTests: XCTestCase {
     }
 }
 
+extension FakeJobQueueTests {
+
+    /// MEE-468: ушедший подписчик `events()` снимается `onTermination` — continuations не копятся.
+    func test_mee468_fakeJobQueue_eventsSubscriberRemovedOnTermination() async throws {
+        let queue = FakeJobQueue()
+        let stream = queue.events()
+        XCTAssertEqual(queue.eventSubscriberCount, 1, "вектор непустоты: подписка заведена")
+        let reader = Task { for await _ in stream {} }
+        reader.cancel()
+        _ = await reader.value
+        let deadline = Date().addingTimeInterval(1)
+        while queue.eventSubscriberCount != 0, Date() < deadline {
+            await Task.yield()
+        }
+        XCTAssertEqual(queue.eventSubscriberCount, 0, "отменённая подписка снята")
+
+        let kept = queue.events()
+        queue.emit(.cancelled(jobId: UUID(), type: .transcode))
+        XCTAssertEqual(queue.eventSubscriberCount, 1)
+        queue.finishEvents()
+        var received = 0
+        for await _ in kept { received += 1 }
+        XCTAssertEqual(received, 1, "живой подписчик получил событие и вышел по finishEvents")
+        XCTAssertEqual(queue.eventSubscriberCount, 0)
+    }
+}
+
 /// Сборщик долей прогресса: замыкание `@Sendable`, и копить в локальной переменной нечем.
 private final class ProgressBox: @unchecked Sendable {
     private let lock = NSLock()
