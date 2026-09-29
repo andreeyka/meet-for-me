@@ -132,8 +132,9 @@ final class JobCommandsTests: XCTestCase {
             XCTAssertEqual(error, .profileNotReady(profileId: "p1", missingModelIds: ["m-vad"]))
         }
         XCTAssertTrue(fixture.queue.submissions.isEmpty, "задача не ставится")
-        XCTAssertEqual(fixture.queue.callLog.calls(port: FakeJobQueue.portName).count, 0,
-                       "к очереди — ни одного обращения")
+        // `events()` — подписка фасада из `init` (C-016 v11, инв. 31, MEE-462), не обращение команды.
+        let commandCalls = fixture.queue.callLog.calls(port: FakeJobQueue.portName).filter { $0.method != "events()" }
+        XCTAssertEqual(commandCalls.count, 0, "к очереди — ни одного обращения")
 
         // Вектор непустоты: модели готовы — задача ставится, `jobId` — ответ очереди.
         fixture.catalog.setState(.downloaded, forId: "m-vad", version: "1.0.0")

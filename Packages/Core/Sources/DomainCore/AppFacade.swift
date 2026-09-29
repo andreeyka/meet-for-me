@@ -55,6 +55,7 @@ public enum AppFacadeError: Error, Codable, Equatable, Sendable {
     case permissionRequired(PermissionKind)
     case profileNotReady(profileId: String, missingModelIds: [String])
     case settingsUnreadable(key: String)
+    case jobFailed(jobId: UUID, type: JobType, message: String)  // v11: только внутри AppEvent.failure, инв. 31
     case underlying(AppErrorView)
 }
 
