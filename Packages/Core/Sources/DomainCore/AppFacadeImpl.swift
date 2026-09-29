@@ -83,6 +83,10 @@ public actor AppFacadeImpl: AppFacade {
     /// `AppFacadeImpl+ActiveSession.swift`.
     var captureObservation = CaptureObservation()
 
+    /// MEE-456: последнее известное фасаду состояние каждой нетерминальной сессии —
+    /// `AppFacadeImpl+SessionObservation.swift`.
+    var knownSessionStates: [UUID: MeetingStatus] = [:]
+
     public init(
         meetings: MeetingRepository,
         recordings: RecordingRepository,
@@ -131,6 +135,14 @@ public actor AppFacadeImpl: AppFacade {
             for await snapshot in permissionChanges {
                 guard let self else { return }
                 await self.handlePermissionsChange(snapshot)
+            }
+        }
+        // MEE-456: смена состояния сессии (C-016 §«Поведение») — тот же приём.
+        let sessionChanges = sessionCoordinator.changes()
+        Task { [weak self] in
+            for await change in sessionChanges {
+                guard let self else { return }
+                await self.handleSessionChange(change)
             }
         }
         // К42 (MEE-449): тот же приём — поток захвата взят синхронно, до возврата из `init`.
