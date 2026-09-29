@@ -40,10 +40,26 @@ extension JobQueueEngine {
     // `isRunning == true` и сам заводит пересмотр, так что последующий `start()` в тесте
     // избыточен, но не безобиден — он и попал на эту гонку. Фикс — тот же фильтр, что у
     // `reclaimExpiredLeases`.
+    //
+    // MEE-496 (нестабильный К68 на CI, Linux): одного фильтра `runningTasks[job.id] == nil`
+    // мало — он проверялся ПОСЛЕ `await` чтения таблицы, по уже устаревшему снимку. Задача
+    // этой же очереди, бежавшая в момент чтения, успевала за время `await` досчитаться
+    // (`applyOutcome` записал `succeeded`/`failed`, `runningTasks` снят), и восстановление
+    // принимало её за брошенную мёртвым процессом: писало поверх настоящего исхода
+    // `attempts + 1`/`"interrupted"` и при исчерпанных попытках публиковало второй финал
+    // `failed(error: "interrupted")` — ровно нарушение инварианта 15, которое ловил К68.
+    // Теперь «своё» определяется ДО чтения, синхронно на акторе: задачи в `runningTasks` на
+    // этот миг. А чтобы между этим мигом и снимком своя строка не появилась иначе — через
+    // кандидата, взятого `claimNext` и ещё не дошедшего до `beginExecuting`, — восстановление
+    // держит мьютекс захода (`acquireRevisitLoop`): пока оно идёт, пересмотр не берёт
+    // никого, а заход, уже шедший к моменту `start()`, восстановление дожидается.
     private func recoverInterruptedJobs() async {
+        await acquireRevisitLoop()
+        defer { releaseRevisitLoop() }
+        let ownedBeforeSnapshot = Set(runningTasks.keys)
         guard let running = try? await jobs(status: .running) else { return }
         let now = clock()
-        for job in running where runningTasks[job.id] == nil {
+        for job in running where !ownedBeforeSnapshot.contains(job.id) {
             let restored: Job
             if job.attemptStartedAt != nil {
                 restored = job.afterConsumedAttempt(

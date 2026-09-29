@@ -47,7 +47,7 @@ extension JobQueueEngine {
         }
         isRevisitLoopRunning = true
         await runOneRevisitSweep()
-        isRevisitLoopRunning = false
+        releaseRevisitLoop()
 
         // Заявка снимается ДО проверки isRunning: stop() посреди захода не должен оставить
         // её висеть на следующий start() — тот увидел бы её и завёл лишний, никем не
@@ -59,6 +59,31 @@ extension JobQueueEngine {
         Task { [weak self] in
             guard let self else { return }
             await self.fulfillRequestedRevisitSweep()
+        }
+    }
+
+    /// MEE-496: взять мьютекс захода, ДОЖИДАЯСЬ его, а не оставляя заявку, — нужно
+    /// восстановлению по инварианту 10 (`recoverInterruptedJobs`), которому заход не
+    /// заменяет его собственной работы. Пока мьютекс занят восстановлением, ни один заход
+    /// не берёт `claimNext` — триггеры в это время лишь оставляют `revisitPassRequested`,
+    /// и его исполнит ближайший заход (у `start()` он идёт сразу за восстановлением).
+    func acquireRevisitLoop() async {
+        while isRevisitLoopRunning {
+            await withCheckedContinuation { continuation in
+                revisitLoopWaiters.append(continuation)
+            }
+        }
+        isRevisitLoopRunning = true
+    }
+
+    /// Отпустить мьютекс захода и разбудить ждущих в `acquireRevisitLoop()`. Разбуженный
+    /// проверяет мьютекс заново — его мог уже взять заход, пришедший раньше.
+    func releaseRevisitLoop() {
+        isRevisitLoopRunning = false
+        let waiters = revisitLoopWaiters
+        revisitLoopWaiters = []
+        for waiter in waiters {
+            waiter.resume()
         }
     }
 
