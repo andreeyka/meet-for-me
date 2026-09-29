@@ -109,11 +109,12 @@ final class FacadeErrorViewTextTests: XCTestCase {
     /// человеческий текст и совет, что у `facade.permissionRequired`; `code` и `permissionKind` —
     /// прежние (ревью РП #213).
     func test_captureDeniedHasHumanTextAndSuggestion() async {
-        let cases: [(CaptureError, String, PermissionKind)] = [
-            (.microphoneDenied, "microphoneDenied", .microphone),
-            (.systemAudioDenied, "systemAudioDenied", .systemAudioRecording)
+        let cases: [(CaptureError, PermissionKind)] = [
+            (.microphoneDenied, .microphone),
+            (.systemAudioDenied, .systemAudioRecording)
         ]
-        for (captureError, name, kind) in cases {
+        for (captureError, kind) in cases {
+            let name = String(describing: captureError)
             let fixture = FacadeV11Fixture()
             fixture.coordinator.failStartRecording(with: .capture(captureError))
             do {
