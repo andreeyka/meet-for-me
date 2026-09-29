@@ -107,12 +107,9 @@ final class HostServicesTests: XCTestCase {
             return
         }
 
-        // `log(_:_:)` не async — запись в состояние актора идёт через Task внутри
-        // HostServicesImpl (см. его шапку); опрашиваем, а не await, синхронизирующей ручки
-        // здесь контрактом не предусмотрено (не то же самое, что MEE-365 — там был свой
-        // тестовый крюк, здесь наблюдаемая сторона не даёт такого же прямого доступа).
+        // MEE-446: `log(_:_:)` пишет в `HostEventLog` синхронно (см. шапку HostServicesImpl) —
+        // запись видна сразу после возврата вызова, без опроса.
         host.log(.error, "проверочное сообщение")
-        await pollUntil { await !harness.hub.loggedEntries(for: source).isEmpty }
 
         let entries = await harness.hub.loggedEntries(for: source)
         XCTAssertEqual(entries.count, 1)
@@ -206,6 +203,10 @@ final class HostServicesTests: XCTestCase {
     /// отличие, например, от К62/К63, где порядок потока `changes()` — прямая цитата
     /// контракта). Правильная проверка — оба уведомления присутствуют с верным `detail`,
     /// не в каком порядке.
+    ///
+    /// MEE-446: `notify` с видом, отличным от `.changesAvailable`, больше не заводит `Task` —
+    /// пишет в `HostEventLog` синхронно, так что обе записи читаются сразу после возврата
+    /// вызовов, без опроса (опрос скрыл бы возврат к прежней асинхронной записи).
     func test_k61_authExpiredAndConfigInvalidAreRecordedNotSynced() async throws {
         let harness = Harness(sourceIds: ["src-1"])
         harness.connectorRepository.seed([Harness.record(id: "src-1")])
@@ -220,7 +221,6 @@ final class HostServicesTests: XCTestCase {
 
         host.notify(.authExpired, detail: nil)
         host.notify(.configInvalid, detail: "bad config")
-        await pollUntil { await harness.hub.recordedNotifications(for: source).count == 2 }
 
         let entries = await harness.hub.recordedNotifications(for: source)
         XCTAssertEqual(Set(entries.map(\.kind)), [.authExpired, .configInvalid], "оба уведомления записаны")

@@ -35,8 +35,9 @@ public actor CalendarPortImpl: CalendarPort {
     let connectors: [CalendarSourceId: CalendarConnector]
 
     var capabilities: [CalendarSourceId: ConnectorCapabilities] = [:]
-    private var logEntries: [CalendarSourceId: [(level: LogLevel, message: String)]] = [:]
-    private var notifyEntries: [CalendarSourceId: [(kind: HostNotificationKind, detail: String?)]] = [:]
+    /// `log`/`notify` коннектора (К14, К61) — вне актора, под замком: пишутся синхронно в
+    /// самом вызове сервиса хоста (MEE-446, см. шапку `HostEventLog.swift`).
+    private let hostEventLog = HostEventLog()
     /// `generation`: возврат РП, бэклог MEE-386 (два пограничных случая отмены из #94, п. 2)
     /// — без него `finishInFlightSync` не смогла бы отличить «эта задача всё ещё текущая» от
     /// «источник уже занят более новой» (`CalendarPortImplSync.swift`, `finishInFlightSync`).
@@ -304,24 +305,19 @@ public actor CalendarPortImpl: CalendarPort {
 
     // MARK: - Сервисы хоста коннектору (К11, К14, К61)
 
-    func recordLog(level: LogLevel, message: String, source: CalendarSourceId) {
-        logEntries[source, default: []].append((level, message))
-    }
-
-    func handleNotify(kind: HostNotificationKind, detail: String?, source: CalendarSourceId) async {
-        if kind == .changesAvailable {
-            _ = await syncOne(source: source, trigger: .push)
-        } else {
-            notifyEntries[source, default: []].append((kind, detail))
-        }
+    /// К61: `notify(.changesAvailable)` → внутренняя `syncOne` именно этого источника.
+    /// Остальные виды уведомлений сюда не приходят — `HostServicesImpl` пишет их в
+    /// `hostEventLog` синхронно (MEE-446).
+    func handlePushNotification(source: CalendarSourceId) async {
+        _ = await syncOne(source: source, trigger: .push)
     }
 
     public func loggedEntries(for source: CalendarSourceId) -> [(level: LogLevel, message: String)] {
-        logEntries[source] ?? []
+        hostEventLog.loggedEntries(for: source)
     }
 
     public func recordedNotifications(for source: CalendarSourceId) -> [(kind: HostNotificationKind, detail: String?)] {
-        notifyEntries[source] ?? []
+        hostEventLog.recordedNotifications(for: source)
     }
 
     // MARK: - Инициализация, порядок, таймауты (К1, К3 вход А, К7-К10)
@@ -359,7 +355,10 @@ public actor CalendarPortImpl: CalendarPort {
             for waiter in waiters { waiter.resume(with: outcome) }
         }
         do {
-            let host = HostServicesImpl(secretStore: secretStore, namespace: source.rawValue, hub: self, source: source)
+            let host = HostServicesImpl(
+                secretStore: secretStore, namespace: source.rawValue, hub: self,
+                eventLog: hostEventLog, source: source
+            )
             let (_, caps) = try await callConnector(source: source, connector: connector, timeout: .initialize) {
                 try await connector.initialize(host: host, connectorInstanceId: source.rawValue)
             }
