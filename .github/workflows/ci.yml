@@ -657,7 +657,8 @@ jobs:
           status=0
           ( set -eux
             python3 .github/scripts/app-test-kit-guard.py \
-              --app "$RUNNER_TEMP/DerivedData/Build/Products/Debug/MeetForMe.app"
+              --app "$RUNNER_TEMP/DerivedData/Build/Products/Debug/MeetForMe.app" \
+              --intermediates "$RUNNER_TEMP/DerivedData/Build/Intermediates.noindex"
           ) 2>&1 | tee "$log" || status=$?
           bash .github/scripts/annotate.sh "DomainTestKit вне App · бандл" "$status" "$log" || true
           exit $status
