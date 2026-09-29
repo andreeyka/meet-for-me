@@ -12,6 +12,7 @@ import Capture
 import Detector
 import DomainCore
 import Foundation
+import ModelManager
 import Permissions
 import SecretStoreKeychain
 import Storage
@@ -72,7 +73,9 @@ extension CompositionRoot {
         let adapters: SystemAdapters
         let calendarPort: CalendarPortImpl
         let attribution: SpeakerAttribution
-        let modelCatalog: TemporaryModelCatalogStub
+        /// Один экземпляр на граф: фасад и `ModelCatalogManager` делят его (C-014 v7, инв. 37).
+        let settings: SettingsRepository
+        let modelCatalog: ModelCatalogManager
         let jobQueue: JobQueueEngine
     }
 
@@ -154,7 +157,7 @@ extension CompositionRoot {
             calendar: partial.calendarPort,
             sessionCoordinator: sessionMachine,
             attribution: partial.attribution,
-            settings: storage.settingsRepository(),
+            settings: partial.settings,
             connectors: storage.connectorRepository(),
             capture: capture,
             jobQueue: partial.jobQueue,
