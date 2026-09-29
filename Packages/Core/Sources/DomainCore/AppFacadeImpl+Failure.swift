@@ -90,7 +90,7 @@ extension AppFacadeImpl {
 
     // MARK: - `engine.*` (§3.1, строки `TranscriptionServiceError` и `EngineError`)
 
-    /// Восемь случаев — `engine.<имя case>`; `engineFailure(code:message:)` — три сегмента,
+    /// Девять случаев — `engine.<имя case>`; `engineFailure(code:message:)` — три сегмента,
     /// `engine.engineFailure.<code>`, где `<code>` — «тот самый код из C-012, то есть имя
     /// случая `EngineError`», подставленный как есть. Ни один случай не вызван состоянием
     /// системного права — `permissionKind` всюду `nil` (инв. 23).
@@ -108,6 +108,7 @@ extension AppFacadeImpl {
         case .messageTooLarge: code = "engine.messageTooLarge"
         case .invalidRequest: code = "engine.invalidRequest"
         case .modelsNotReady: code = "engine.modelsNotReady"
+        case .recordingNotReady: code = "engine.recordingNotReady"
         case .timedOut: code = "engine.timedOut"
         case .cancelled: code = "engine.cancelled"
         case .engineFailure(let engineCode, _): code = "engine.engineFailure.\(engineCode)"

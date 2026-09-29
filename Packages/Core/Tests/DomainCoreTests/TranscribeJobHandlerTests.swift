@@ -18,7 +18,9 @@ final class TranscribeJobHandlerTests: XCTestCase {
         Job(
             id: UUID(),
             type: .transcribe,
-            payload: .transcribe(recordingId: UUID(), profileId: "ru-default", language: nil),
+            payload: .transcribe(
+                recordingId: TranscriptFixtures.oneOnOne.recordingId, profileId: "ru-default", language: nil
+            ),
             status: .running,
             priority: 0,
             attempts: attempts,
@@ -42,7 +44,7 @@ final class TranscribeJobHandlerTests: XCTestCase {
     ) async -> JobOutcome {
         let port = FakeTranscriptionServicePort()
         port.forcedError = error
-        let handler = TranscribeJobHandler(port: port)
+        let handler = TranscribeJobHandler(port: port, transcripts: InMemoryTranscriptRepository())
         return await handler.run(job(attempts: attempts), progress: { _ in })
     }
 
@@ -75,13 +77,58 @@ final class TranscribeJobHandlerTests: XCTestCase {
         assertPermanentFailure(await run(.invalidRequest(message: "x")))
     }
 
+    // MARK: - C-012 v11 §4, строка recordingNotReady
+
+    func test_section4_recordingNotReadyIsPermanentFailure() async {
+        let error = TranscriptionServiceError.recordingNotReady(
+            recordingId: TranscriptFixtures.oneOnOne.recordingId, message: "записи нет"
+        )
+        assertPermanentFailure(await run(error))
+    }
+
+    // MARK: - C-012 v11 (IR-145): обработчик сохраняет транскрипт
+
+    func test_successSavesExactlyOneTranscriptOfRecording() async throws {
+        let port = FakeTranscriptionServicePort()
+        let repository = InMemoryTranscriptRepository()
+        let handler = TranscribeJobHandler(port: port, transcripts: repository)
+
+        let outcome = await handler.run(job(), progress: { _ in })
+
+        XCTAssertEqual(outcome, .success)
+        let recordingId = TranscriptFixtures.oneOnOne.recordingId
+        XCTAssertEqual(repository.callLog.count(port: InMemoryTranscriptRepository.portName, method: "save(_:)"), 1)
+        let headers = try await repository.headers(recordingId: recordingId)
+        XCTAssertEqual(headers.count, 1)
+    }
+
+    func test_saveFailureIsRetryAfter30() async {
+        let port = FakeTranscriptionServicePort()
+        let repository = InMemoryTranscriptRepository()
+        repository.fail(with: .io(message: "диск"), on: .save)
+        let handler = TranscribeJobHandler(port: port, transcripts: repository)
+
+        assertRetry(await handler.run(job(), progress: { _ in }), after: 30)
+    }
+
+    func test_portFailureSavesNothing() async {
+        let port = FakeTranscriptionServicePort()
+        port.forcedError = .serviceCrashed
+        let repository = InMemoryTranscriptRepository()
+        let handler = TranscribeJobHandler(port: port, transcripts: repository)
+
+        _ = await handler.run(job(), progress: { _ in })
+
+        XCTAssertEqual(repository.callLog.count(port: InMemoryTranscriptRepository.portName, method: "save(_:)"), 0)
+    }
+
     // MARK: - К44 (C-012 §4, строка cancelled)
 
     func test_k44_cancelledMapsToSuccessWhenQueueInitiated() async {
         let port = FakeTranscriptionServicePort()
         port.forcedError = .cancelled
         port.waitForCancellationBeforeThrowing = true
-        let handler = TranscribeJobHandler(port: port)
+        let handler = TranscribeJobHandler(port: port, transcripts: InMemoryTranscriptRepository())
         let theJob = job()
 
         let task = Task { await handler.run(theJob, progress: { _ in }) }
@@ -112,7 +159,7 @@ final class TranscribeJobHandlerTests: XCTestCase {
         let port = FakeTranscriptionServicePort()
         port.forcedError = .engineFailure(code: "cancelled", message: "движок сам отменил")
         port.waitForCancellationBeforeThrowing = true
-        let handler = TranscribeJobHandler(port: port)
+        let handler = TranscribeJobHandler(port: port, transcripts: InMemoryTranscriptRepository())
         let theJob = job()
 
         let task = Task { await handler.run(theJob, progress: { _ in }) }
@@ -136,7 +183,7 @@ final class TranscribeJobHandlerTests: XCTestCase {
 
     func test_fakeTranscriptionServicePortCountsCallsAndRecordsLastSpec() async {
         let port = FakeTranscriptionServicePort()
-        let handler = TranscribeJobHandler(port: port)
+        let handler = TranscribeJobHandler(port: port, transcripts: InMemoryTranscriptRepository())
 
         _ = await handler.run(job(), progress: { _ in })
         _ = await handler.run(job(), progress: { _ in })

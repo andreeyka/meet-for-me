@@ -43,6 +43,7 @@ final class ErrorDictionaryEngineFacadeTests: XCTestCase {
             (.messageTooLarge(bytes: 1), "messageTooLarge"),
             (.invalidRequest(message: "m"), "invalidRequest"),
             (.modelsNotReady(profileId: "p", message: "m"), "modelsNotReady"),
+            (.recordingNotReady(recordingId: UUID(), message: "m"), "recordingNotReady"),
             (.timedOut(seconds: 5), "timedOut"),
             (.cancelled, "cancelled")
         ]
@@ -98,12 +99,13 @@ final class ErrorDictionaryEngineFacadeTests: XCTestCase {
         }
     }
 
-    /// К27: 17 строк `engine.*` — восемь случаев транспорта и девять `engine.engineFailure.*`;
+    /// К27: 18 строк `engine.*` — девять случаев транспорта (с `recordingNotReady`, C-016 v12) и
+    /// девять `engine.engineFailure.*`;
     /// колонка `permissionKind` (инв. 23) — `nil` на каждой: ни один отказ не вызван
     /// состоянием системного права.
     func test_k27_engineRows_codeAndPermissionKind() async throws {
         let rows = engineRows
-        XCTAssertEqual(rows.count, 17)
+        XCTAssertEqual(rows.count, 18)
         await assertRows(rows)
     }
 

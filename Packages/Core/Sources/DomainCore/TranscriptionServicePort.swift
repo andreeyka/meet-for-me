@@ -60,6 +60,10 @@ public enum TranscriptionServiceError: Error, Codable, Equatable, Sendable {
     /// или `beginUse(_:)` каталога моделей (C-014) отказали до отправки запроса.
     case modelsNotReady(profileId: String, message: String)
 
+    /// Запись, из которой строится запрос, не пригодна: записи нет, она не завершена либо у
+    /// `embed` нет дорожки `.system` — до отправки запроса (C-012 v11 §1.1, §3.2, инв. 24).
+    case recordingNotReady(recordingId: UUID, message: String)
+
     case timedOut(seconds: Int)
     case engineFailure(code: String, message: String)   // EngineError (C-011), сведённая к коду и тексту
     case cancelled
