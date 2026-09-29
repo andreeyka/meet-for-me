@@ -55,6 +55,8 @@ extension CatalogParsingTests {
         XCTAssertTrue(message.contains("2") && message.contains("1"), message)
     }
 
+    // Имя — дословно по плану MEE-436 (дельта e793c0ea); длиннее line_length само по себе.
+    // swiftlint:disable:next line_length
     func test_k10_orphanedManifestModelUsesManifestAsSourceOfTruthForStateDeleteInvisibleViaCatalogMethodsVisibleInDiskUsage()
         async throws {
         let fixture = try await downloadedHarness()

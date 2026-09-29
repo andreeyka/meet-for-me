@@ -13,8 +13,6 @@ struct TestModel {
     let descriptor: ModelDescriptor
     let contents: [String: Data]
 
-    var key: (id: String, version: String) { (descriptor.id, descriptor.version) }
-
     func url(_ name: String) -> URL {
         descriptor.files.first { $0.name == name }?.url ?? URL(fileURLWithPath: "/nonexistent")
     }
@@ -40,7 +38,7 @@ struct TestModel {
         return TestModel(descriptor: descriptor, contents: Dictionary(uniqueKeysWithValues: files))
     }
 
-    /// Пропорции GigaAM из §2 (≈226 МиБ + 10 МиБ... в тесте — байты): большой файл и малый.
+    /// Пропорции GigaAM из §2 (226 МиБ + 10 МиБ), уменьшенные до байт: 226 Б и 10 Б.
     static func gigaamLike(id: String = "gigaam-test") -> TestModel {
         make(id: id, files: [("model.int8.onnx", bytes(226, seed: 1)), ("vocab.txt", bytes(10, seed: 2))])
     }

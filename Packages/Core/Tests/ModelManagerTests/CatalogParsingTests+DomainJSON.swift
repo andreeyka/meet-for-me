@@ -66,7 +66,8 @@ extension CatalogParsingTests {
         let harness = makeHarness()
         let manager = try harness.makeManager()
         let text = validText
-            .replacingOccurrences(of: "\"schemaVersion\": 1,", with: "\"schemaVersion\": 1, \"futureTop\": {\"x\": [1]},")
+            .replacingOccurrences(of: "\"schemaVersion\": 1,",
+                                  with: "\"schemaVersion\": 1, \"futureTop\": {\"x\": [1]},")
             .replacingOccurrences(of: "\"role\": \"asr\",", with: "\"role\": \"asr\", \"futureModelField\": true,")
             .replacingOccurrences(of: "\"sizeBytes\": 262144}", with: "\"sizeBytes\": 262144, \"extra\": \"x\"}")
         XCTAssertTrue(text.contains("futureTop") && text.contains("futureModelField") && text.contains("\"extra\""))
