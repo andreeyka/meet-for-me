@@ -178,12 +178,13 @@ extension AppFacadeImpl {
                 permissionKind = .calendars
             }
         }
-        // MEE-494: текст для человека по коду (§3.1), а не `String(describing:)`; право — тот же
-        // совет, что у `facade.permissionRequired`.
+        // MEE-494: текст для человека по коду (§3.1), а не `String(describing:)`. MEE-498: отказ
+        // системного права (`eventkit`) — тот же текст и совет, что у `facade.permissionRequired`,
+        // как в `wrap(_: CaptureError)`; у `stdio` — текст словаря «войти заново».
         var message: String?
         if case .timeout(_, let seconds) = error { message = "Календарь не ответил за \(seconds) с" }
         return .underlying(UnderlyingErrorText.view(
-            code: "calendar.\(name)", message: message,
+            code: "calendar.\(name)", message: permissionKind.map(AppFacadeError.permissionMissingText) ?? message,
             suggestion: permissionKind.map(AppFacadeError.permissionSuggestion), permissionKind: permissionKind
         ))
     }

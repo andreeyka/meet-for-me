@@ -86,6 +86,14 @@ extension CalendarCommandsTests {
                 XCTFail("\(vector.sourceId)/\(vector.type): ожидался отказ")
             } catch AppFacadeError.underlying(let view) {
                 XCTAssertEqual(view.permissionKind, vector.expected, "\(vector.sourceId)/\(vector.type)")
+                // MEE-498: право `eventkit` — тот же текст и совет, что у `facade.permissionRequired`
+                // (как у `capture.*Denied`); без права — текст словаря, не текст права.
+                let permission = AppFacadeError.permissionRequired(.calendars).view
+                let sameAsPermission = view.message == permission.message
+                    && view.recoverySuggestion == permission.recoverySuggestion
+                XCTAssertEqual(sameAsPermission, vector.expected != nil, "\(vector.sourceId)/\(vector.type): \(view)")
+                XCTAssertFalse(view.message.isEmpty)
+                XCTAssertNotNil(view.recoverySuggestion, "\(vector.sourceId)/\(vector.type)")
             }
         }
     }

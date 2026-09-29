@@ -93,14 +93,25 @@ extension AppFacadeImpl {
     /// хранилища: машина пишет `setStatus` раньше возврата (C-018 инв. 18), и `meetingsChanged`
     /// идёт, только если встреча там правда `skipped`. Отвергнуто: чтение `sessions()` до или
     /// после команды — сессия успевает сменить состояние между чтением и командой.
+    ///
+    /// MEE-498: отказ чтения хранилища после успешной команды не глотается молча. Команда уже
+    /// исполнена, и бросать нельзя: пропуск мог состояться, и отказ сказал бы обратное. Узнать,
+    /// изменила ли команда строку, не из чего, — и `meetingsChanged` публикуется без условия и
+    /// мимо кэша опубликованных статусов (инв. 15: изменившая данные команда обязана сообщить
+    /// до возврата). Цена — возможное лишнее `meetingsChanged`: интерфейс перечитает список
+    /// впустую; пропущенное событие оставило бы в списке устаревшую строку.
     public func skipMeeting(meetingId: UUID) async throws {
         do {
             try await sessionCoordinator.skip(meetingId: meetingId, now: clock())
-            // MEE-492: снимок `skipped` той же встречи второго `meetingsChanged` не даст.
-            if (try? await meetingRepository.meeting(id: meetingId))?.status == .skipped {
-                publishMeetingsChangedIfRowsChanged(
-                    recordingId: nil, recordingStatus: nil, meetingId: meetingId, meetingStatus: .skipped
-                )
+            do {
+                // MEE-492: снимок `skipped` той же встречи второго `meetingsChanged` не даст.
+                if try await meetingRepository.meeting(id: meetingId)?.status == .skipped {
+                    publishMeetingsChangedIfRowsChanged(
+                        recordingId: nil, recordingStatus: nil, meetingId: meetingId, meetingStatus: .skipped
+                    )
+                }
+            } catch {
+                publish(.meetingsChanged)
             }
             publish(.statusChanged(await status()))
         } catch let error as SessionError {

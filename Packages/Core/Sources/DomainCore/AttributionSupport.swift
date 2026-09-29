@@ -16,10 +16,11 @@ enum AttributionSupport {
     enum InputBuildFailure: Error {
         case transcriptNotFound(UUID)
 
+        /// Строка отказа задачи `attribute` (MEE-498): текст для человека, без идентификатора.
         var message: String {
             switch self {
-            case .transcriptNotFound(let id):
-                return "AttributionSupport: транскрипт \(id) не найден"
+            case .transcriptNotFound:
+                return "Транскрипт не найден — возможно, он уже удалён"
             }
         }
     }
