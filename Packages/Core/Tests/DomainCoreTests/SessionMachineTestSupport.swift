@@ -33,7 +33,14 @@ struct SessionMachineBench {
 
     var meetings: InMemoryMeetingRepository { repositories.meetings }
 
-    init(settings: AppSettings, weights: SignalWeights) {
+    /// `recordingDirectory` подменяется только тестом отказа каталога (MEE-447); прочие
+    /// тесты берут значение фикстуры по умолчанию.
+    init(
+        settings: AppSettings,
+        weights: SignalWeights,
+        recordingDirectory: @escaping @Sendable (UUID) async throws -> URL
+            = SessionMachineFixtures.recordingDirectory
+    ) {
         let shared = PortCallLog()
         log = shared
         processes = FakeProcessMonitorPort()
@@ -53,7 +60,7 @@ struct SessionMachineBench {
             power: power,
             settings: settings,
             weights: weights,
-            recordingDirectory: SessionMachineFixtures.recordingDirectory,
+            recordingDirectory: recordingDirectory,
             captureInput: SessionMachineFixtures.captureInput,
             systemFormat: SessionMachineFixtures.systemFormat,
             micFormat: SessionMachineFixtures.micFormat
