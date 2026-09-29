@@ -106,7 +106,8 @@ extension ModelCatalogManager {
     }
 
     /// Решение по ответу (§6 п. 3–5). `true` — файл докачан; `false` — повторить с нуля.
-    private func accept(_ response: HTTPRangeResponse, start: Int64, partURL: URL, restarted: inout Bool) throws -> Bool {
+    private func accept(_ response: HTTPRangeResponse, start: Int64, partURL: URL,
+                        restarted: inout Bool) throws -> Bool {
         switch response.statusCode {
         case 206 where (response.firstByte ?? start) == start:
             return true
