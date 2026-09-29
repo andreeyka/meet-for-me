@@ -10,13 +10,18 @@ import Foundation
 
 // MARK: - Строка списка
 
-/// Строка таблицы встреч. `Kind` — точка расширения: ad-hoc запись (ручной старт без события)
-/// ляжет сюда своим случаем, когда фасад начнёт её отдавать (IR-146, MEE-470). Сейчас ни один
-/// запрос чтения C-016 её не возвращает, строки нет.
+/// Строка таблицы встреч. `Kind` — точка расширения (MEE-474): встреча `meetings(from:to:)` или
+/// запись без встречи `adHocRecordings(from:to:)` (C-016 v12 инв. 33, MEE-487) — строки обоих
+/// видов лежат в одной таблице и сортируются одной осью (`start`).
 struct MeetingRow: Equatable, Sendable, Identifiable {
-    enum Kind: Equatable, Sendable {
+    enum Kind: Hashable, Sendable {
         case meeting(UUID)
+        /// Ручная запись без события (или чью встречу удалили) — по `recordingId`.
+        case adHoc(recordingId: UUID)
     }
+
+    /// Название ad-hoc записи — то же, что `ActiveSessionView.title` у фасада для такой сессии.
+    static let adHocTitle = "Созвон без события"
 
     let kind: Kind
     let title: String
@@ -40,6 +45,18 @@ struct MeetingRow: Equatable, Sendable, Identifiable {
         cancelled = item.isCancelled ? "отменена" : ""
         start = item.start
     }
+
+    /// «Есть транскрипт» — `!transcripts.isEmpty` (инв. 33).
+    init(adHoc summary: RecordingSummary) {
+        kind = .adHoc(recordingId: summary.recordingId)
+        title = Self.adHocTitle
+        time = MeetingsFormat.timeRange(summary.startedAt, summary.endedAt)
+        status = MeetingsFormat.recordingStatus(summary.status).capitalizedFirst
+        recording = "есть"
+        transcript = summary.transcripts.isEmpty ? "—" : "есть"
+        cancelled = ""
+        start = summary.startedAt
+    }
 }
 
 // MARK: - Список
@@ -47,14 +64,16 @@ struct MeetingRow: Equatable, Sendable, Identifiable {
 struct MeetingsListPresentation: Equatable, Sendable {
     var weekTitle: String
     var rows: [MeetingRow] = []
-    /// Заглушка на месте таблицы: загрузка, пустая неделя или ошибка.
+    /// Заглушка на месте таблицы: загрузка, пустая неделя или ошибка списка встреч.
     var placeholder: String?
     var isError = false
+    /// Отказ второго чтения (`adHocRecordings`) при загруженных встречах — строка под таблицей.
+    var adHocError: String?
     var selectedRowId: String?
 
     init(state: MeetingsWindowState) {
         weekTitle = MeetingsFormat.weekTitle(state.week)
-        selectedRowId = state.selectedMeetingId.map { MeetingRow.Kind.meeting($0) }.map(Self.rowId)
+        selectedRowId = state.selectedRow.map(Self.rowId)
         switch state.list {
         case .loading:
             placeholder = "Загрузка…"
@@ -62,14 +81,27 @@ struct MeetingsListPresentation: Equatable, Sendable {
             placeholder = FacadeErrorText.line(error)
             isError = true
         case .loaded(let items):
-            rows = items.map(MeetingRow.init(item:)).sorted { $0.start < $1.start }
-            if rows.isEmpty { placeholder = "За эту неделю встреч нет" }
+            rows = items.map(MeetingRow.init(item:))
+            switch state.adHocList {
+            case .loaded(let recordings):
+                rows += recordings.map(MeetingRow.init(adHoc:))
+            case .failed(let error):
+                adHocError = "\(MeetingRow.adHocTitle): " + FacadeErrorText.line(error)
+            case .loading:
+                break
+            }
+            // Равные начала — по id строки: порядок не прыгает между перечитываниями.
+            rows.sort { ($0.start, $0.id) < ($1.start, $1.id) }
+            if rows.isEmpty, adHocError == nil {
+                placeholder = state.adHocList == .loading ? "Загрузка…" : "За эту неделю встреч нет"
+            }
         }
     }
 
     static func rowId(_ kind: MeetingRow.Kind) -> String {
         switch kind {
         case .meeting(let meetingId): return "meeting.\(meetingId.uuidString)"
+        case .adHoc(let recordingId): return "adHoc.\(recordingId.uuidString)"
         }
     }
 
@@ -109,6 +141,24 @@ struct MeetingCardPresentation: Equatable, Sendable {
     var processingError: String?
 
     init(state: MeetingsWindowState) {
+        switch state.selectedRow {
+        case .meeting, nil:
+            fillMeeting(state: state)
+        case .adHoc:
+            if let recording = state.selectedAdHoc {
+                fill(adHoc: recording, state: state)
+            } else if case .failed(let error) = state.adHocList {
+                placeholder = FacadeErrorText.line(error)
+                isError = true
+            } else {
+                placeholder = "Загрузка…"
+            }
+        }
+        actionError = state.actionError.map(FacadeErrorText.line)
+        processingError = state.processingError.map { "Очередь: " + FacadeErrorText.line($0) }
+    }
+
+    private mutating func fillMeeting(state: MeetingsWindowState) {
         switch state.detail {
         case .none: placeholder = "Выберите встречу"
         case .loading: placeholder = "Загрузка…"
@@ -119,8 +169,6 @@ struct MeetingCardPresentation: Equatable, Sendable {
         case .loaded(let detail):
             fill(detail, state: state)
         }
-        actionError = state.actionError.map(FacadeErrorText.line)
-        processingError = state.processingError.map { "Очередь: " + FacadeErrorText.line($0) }
     }
 
     private mutating func fill(_ detail: MeetingDetail, state: MeetingsWindowState) {
@@ -132,19 +180,30 @@ struct MeetingCardPresentation: Equatable, Sendable {
         attendees = detail.attendees.map(Self.personTitle)
         recordings = detail.recordings
             .sorted { $0.startedAt < $1.startedAt }
-            .map { recording in
-                RecordingRow(
-                    id: recording.recordingId,
-                    title: MeetingsFormat.recordingTitle(recording),
-                    transcriptVersions: recording.transcripts
-                        .sorted { $0.createdAt > $1.createdAt }
-                        .map { TranscriptVersionRow(id: $0.id, title: MeetingsFormat.versionTitle($0)) },
-                    processing: recording.transcripts.isEmpty
-                        ? ProcessingLine.make(recording: recording, state: state)
-                        : nil
-                )
-            }
+            .map { Self.recordingRow($0, state: state) }
         selectedRecordingId = state.selectedRecordingId
+    }
+
+    /// Ad-hoc запись: ни события, ни участников — карточка из одной записи.
+    private mutating func fill(adHoc recording: RecordingSummary, state: MeetingsWindowState) {
+        title = MeetingRow.adHocTitle
+        time = MeetingsFormat.timeRange(recording.startedAt, recording.endedAt)
+        status = MeetingsFormat.recordingStatus(recording.status).capitalizedFirst
+        recordings = [Self.recordingRow(recording, state: state)]
+        selectedRecordingId = state.selectedRecordingId
+    }
+
+    static func recordingRow(_ recording: RecordingSummary, state: MeetingsWindowState) -> RecordingRow {
+        RecordingRow(
+            id: recording.recordingId,
+            title: MeetingsFormat.recordingTitle(recording),
+            transcriptVersions: recording.transcripts
+                .sorted { $0.createdAt > $1.createdAt }
+                .map { TranscriptVersionRow(id: $0.id, title: MeetingsFormat.versionTitle($0)) },
+            processing: recording.transcripts.isEmpty
+                ? ProcessingLine.make(recording: recording, state: state)
+                : nil
+        )
     }
 
     static func personTitle(_ person: PersonRecord) -> String {
@@ -158,25 +217,30 @@ struct MeetingCardPresentation: Equatable, Sendable {
 enum MeetingsFormat {
 
     static func timeRange(_ start: Date, _ end: Date) -> String {
-        let day = formatter("EE d MMM, HH:mm").string(from: start)
         let sameDay = MeetingsWeek.calendar.isDate(start, inSameDayAs: end)
-        let tail = formatter(sameDay ? "HH:mm" : "d MMM, HH:mm").string(from: end)
-        return "\(day)–\(tail)"
+        let tail = (sameDay ? time : dayMonthTime).string(from: end)
+        return "\(weekdayDayMonthTime.string(from: start))–\(tail)"
+    }
+
+    /// Незавершённая запись (`endedAt == nil`) — правая граница открыта: «…».
+    static func timeRange(_ start: Date, _ end: Date?) -> String {
+        guard let end else { return "\(weekdayDayMonthTime.string(from: start))–…" }
+        return timeRange(start, end)
     }
 
     static func weekTitle(_ week: MeetingsWeek) -> String {
         let lastDay = week.end.addingTimeInterval(-1)
-        return "\(formatter("d MMM").string(from: week.start)) – \(formatter("d MMM yyyy").string(from: lastDay))"
+        return "\(dayMonth.string(from: week.start)) – \(dayMonthYear.string(from: lastDay))"
     }
 
     static func recordingTitle(_ recording: RecordingSummary) -> String {
-        let start = formatter("HH:mm").string(from: recording.startedAt)
-        let end = recording.endedAt.map { "–" + formatter("HH:mm").string(from: $0) } ?? ""
+        let start = time.string(from: recording.startedAt)
+        let end = recording.endedAt.map { "–" + time.string(from: $0) } ?? ""
         return "Запись \(start)\(end) · \(recordingStatus(recording.status))"
     }
 
     static func versionTitle(_ header: TranscriptHeader) -> String {
-        let created = formatter("d MMM, HH:mm").string(from: header.createdAt)
+        let created = dayMonthTime.string(from: header.createdAt)
         return "\(created) · \(header.engine) \(header.modelVersion) · \(header.language)"
     }
 
@@ -214,11 +278,28 @@ enum MeetingsFormat {
             : String(format: "%d:%02d", minutes, seconds)
     }
 
+    // MARK: Форматтеры
+
+    // Создаются один раз (MEE-487 п. 9): `DateFormatter` дорог, а вид пересчитывает строки на
+    // каждое изменение состояния. Пояс — `autoupdatingCurrent`: смена пояса в системе
+    // подхватывается без пересоздания. Форматирование из разных потоков у `DateFormatter`
+    // безопасно (macOS 10.9+); здесь его и так зовёт только главный поток вида.
+    private static let weekdayDayMonthTime = formatter("EE d MMM, HH:mm")
+    private static let dayMonthTime = formatter("d MMM, HH:mm")
+    private static let time = formatter("HH:mm")
+    private static let dayMonth = formatter("d MMM")
+    private static let dayMonthYear = formatter("d MMM yyyy")
+
     private static func formatter(_ format: String) -> DateFormatter {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "ru_RU")
-        formatter.timeZone = .current
+        formatter.timeZone = .autoupdatingCurrent
         formatter.dateFormat = format
         return formatter
     }
+}
+
+extension String {
+    /// Первая буква заглавной: «идёт запись» → «Идёт запись».
+    var capitalizedFirst: String { prefix(1).uppercased() + dropFirst() }
 }

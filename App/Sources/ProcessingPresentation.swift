@@ -2,13 +2,12 @@
 //  Чистая функция от `MeetingsWindowState`, без SwiftUI.
 //
 //  Порядок источников:
-//   1. `status().runningJobs` по `recordingId` — доля (накрытая `AppEvent.jobProgressed`) и этап;
-//   2. `jobs(status: .running)` по `JobPayload` — задача идёт, доли нет. Нужен, пока
-//      `status().runningJobs` у фасада пуст константой (IR-147 п. 1, MEE-476);
-//   3. `jobs(status: .pending)` — задача в очереди;
-//   4. `jobs(status: .failed)` — последняя по `updatedAt` отказавшая задача записи, кнопка
+//   1. `status().runningJobs` по `recordingId` — доля (накрытая `AppEvent.jobProgressed`) и этап
+//      (C-016 v13 инв. 35 (а); запасного `jobs(status: .running)` больше нет — MEE-487 п. 2);
+//   2. `jobs(status: .pending)` — задача в очереди;
+//   3. `jobs(status: .failed)` — последняя по `updatedAt` отказавшая задача записи, кнопка
 //      «Повторить» → `retryJob(id:)`. Уже повторённая этим окном — не показывается;
-//   5. иначе — по статусу записи.
+//   4. иначе — по статусу записи.
 //
 //  Задачи `attribute`/`summarize` записи не называют (`JobPayload` несёт `transcriptId`/
 //  `meetingId`) и идут после транскрипта — блоку, который виден только без транскрипта, они
@@ -38,9 +37,6 @@ struct ProcessingLine: Equatable, Sendable {
             return info("\(FacadeErrorText.jobTitle(view.type))\(stage): \(Int((fraction * 100).rounded()))%")
         }
         let jobs = state.processing
-        if let job = Self.latest(jobs.running, recordingId: recordingId) {
-            return info("\(FacadeErrorText.jobTitle(job.type)): идёт")
-        }
         if let job = Self.latest(jobs.pending, recordingId: recordingId) {
             return info("\(FacadeErrorText.jobTitle(job.type)): в очереди")
         }

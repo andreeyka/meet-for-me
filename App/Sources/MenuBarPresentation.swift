@@ -170,7 +170,3 @@ struct MenuBarPresentation: Equatable, Sendable {
         return String(repeating: "▮", count: filled) + String(repeating: "▯", count: 5 - filled)
     }
 }
-
-private extension String {
-    var capitalizedFirst: String { prefix(1).uppercased() + dropFirst() }
-}

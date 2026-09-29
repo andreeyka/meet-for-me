@@ -26,6 +26,8 @@ enum MenuCommand: Equatable, Sendable {
 enum MenuCommandResult: Equatable, Sendable {
     case succeeded
     case failed(AppErrorView)
+    /// Бросок не `AppFacadeError` (`CancellationError`): не показывается (C-016 инв. 37).
+    case silentFailure
     case permissionsRequested([PermissionOutcomeLine])
 }
 
@@ -97,6 +99,8 @@ struct MenuBarState: Equatable, Sendable {
             if case .startRecording = command { lastError = nil }
         case .failed(let view):
             lastError = view
+        case .silentFailure:
+            return
         case .permissionsRequested(let lines):
             permissionOutcomes = lines
         }
@@ -111,10 +115,10 @@ struct MenuBarState: Equatable, Sendable {
 
 extension MenuBarState {
 
-    /// Бросок команды фасада → `AppErrorView` для строки меню (п. 5 постановки). Правило общее
-    /// с окном «Встречи» — `FacadeErrorText.swift` (явный `switch`, MEE-478 п. 2).
-    static func errorView(for error: Error) -> AppErrorView {
-        FacadeErrorText.view(for: error)
+    /// Бросок команды фасада → исход для строки меню (п. 5 постановки). Перевод — `AppFacadeError.view`
+    /// фасада (C-016 инв. 37); не `AppFacadeError` не показывается.
+    static func result(for error: Error) -> MenuCommandResult {
+        FacadeErrorText.shownError(error).map(MenuCommandResult.failed) ?? .silentFailure
     }
 
     static func permissionTitle(_ kind: PermissionKind) -> String {
