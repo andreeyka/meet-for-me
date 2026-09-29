@@ -137,6 +137,29 @@ jobs:
           bash .github/scripts/annotate.sh "К58/К59 · Core (Linux)" "$status" "$log" || true
           exit $status
 
+      # MEE-495, п. 1: правило MEE-430 §3 («DomainTestKit не тянется в релизный App») держалось
+      # только на комментарии в project.yml и ревью. Здесь — текстовая половина проверки:
+      # зависимости таргета `MeetForMe` и таргетов, которые он встраивает (`target:`), в
+      # project.yml. Сборки не требует, поэтому стоит в этой работе — вердикт приходит раньше
+      # сборки App. Вторая половина — по слинкованным символам собранного бандла — в работе
+      # macOS после шага «Каркас app-ui»: она ловит и транзитивную зависимость через продукт
+      # пакета, которой текст project.yml не видит.
+      - name: DomainTestKit вне App (project.yml)
+        if: ${{ !cancelled() }}
+        shell: bash
+        env:
+          PYTHONIOENCODING: utf-8
+        run: |
+          set -o pipefail
+          log="$RUNNER_TEMP/app-test-kit-guard.log"
+          status=0
+          ( set -eux
+            python3 .github/scripts/app-test-kit-guard.py --self-test
+            python3 .github/scripts/app-test-kit-guard.py --project project.yml
+          ) 2>&1 | tee "$log" || status=$?
+          bash .github/scripts/annotate.sh "DomainTestKit вне App · project.yml" "$status" "$log" || true
+          exit $status
+
       # Исход шага называл таргет, а не вектор: в сессии без сырых логов
       # красная CI говорила «что-то в Core упало», а не «упал Q50» (MEE-263).
       # Разложить весь файл по векторам отвергнуто: это заводит зависимость
@@ -593,7 +616,11 @@ jobs:
       # ошибку кода в `App/`/`Services/TranscriptionEngineXPC/`, а не чтобы произвести
       # подписанный бандл (тот прогон — только на живом Mac DEV-1, project.yml сам называет
       # это в комментарии к hardened runtime).
+      #
+      # `-derivedDataPath` задан явно (MEE-495): шаг ниже читает собранный бандл по известному
+      # пути, а не выясняет его через `-showBuildSettings`.
       - name: Каркас app-ui (XcodeGen + xcodebuild)
+        id: app
         if: ${{ !cancelled() }}
         shell: bash
         run: |
@@ -606,7 +633,31 @@ jobs:
               -project MeetForMe.xcodeproj \
               -scheme MeetForMe \
               -destination 'platform=macOS' \
+              -derivedDataPath "$RUNNER_TEMP/DerivedData" \
               CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO
           ) 2>&1 | tee "$log" || status=$?
           bash .github/scripts/annotate.sh "Каркас app-ui · XcodeGen + xcodebuild" "$status" "$log" || true
+          exit $status
+
+      # MEE-495, п. 1, вторая половина (первая — текстовая, в работе Core (Linux)): символы
+      # модуля DomainTestKit во всех Mach-O собранного бандла — главный исполняемый файл,
+      # `MeetForMe.debug.dylib` отладочной сборки, встроенный `TranscriptionEngine.xpc`.
+      # Ловит и транзитивную зависимость (продукт пакета, который сам тянет DomainTestKit).
+      # Проверено на живом Mac: с `product: DomainTestKit` у `MeetForMe` в debug.dylib
+      # слинковано 6 497 символов `$s13DomainTestKit…`, хотя App модуль не импортирует.
+      # Гейт — успех сборки App: без бандла проверять нечего, а её отказ уже назван своим шагом.
+      - name: DomainTestKit вне App (собранный бандл)
+        if: ${{ !cancelled() && steps.app.outcome == 'success' }}
+        shell: bash
+        env:
+          PYTHONIOENCODING: utf-8
+        run: |
+          set -o pipefail
+          log="$RUNNER_TEMP/app-test-kit-binary.log"
+          status=0
+          ( set -eux
+            python3 .github/scripts/app-test-kit-guard.py \
+              --app "$RUNNER_TEMP/DerivedData/Build/Products/Debug/MeetForMe.app"
+          ) 2>&1 | tee "$log" || status=$?
+          bash .github/scripts/annotate.sh "DomainTestKit вне App · бандл" "$status" "$log" || true
           exit $status

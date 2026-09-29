@@ -19,29 +19,9 @@ public final class AnyIdFinalizedRecordingRepository: RecordingRepository, @unch
 
     public init() {}
 
+    /// Манифест — `RecordingFixtures.record` (MEE-495, п. 2): не повторяется здесь вручную.
     public func recording(id: UUID) async throws -> RecordingRecord? {
-        let startedAt = Date(timeIntervalSince1970: 1_789_113_600)
-        let manifest = try RecordingManifest(
-            recordingId: id, meetingId: nil, directoryName: id.uuidString,
-            startedAt: startedAt, endedAt: startedAt.addingTimeInterval(600),
-            tracks: [
-                try RecordingManifest.Track(
-                    channel: .system, fileName: "audio-system.caf", sampleRate: 48_000,
-                    channelCount: 2, format: "pcm-caf"
-                ),
-                try RecordingManifest.Track(
-                    channel: .mic, fileName: "audio-mic.caf", sampleRate: 48_000, channelCount: 1, format: "pcm-caf"
-                )
-            ],
-            markers: [], capturedProcesses: [], captureGroupKey: nil,
-            inputDevices: [
-                try RecordingManifest.InputDeviceSpan(
-                    atMs: 0, present: true, name: "MacBook Pro Microphone", uid: "BuiltInMicrophoneDevice"
-                )
-            ],
-            discontinuities: [], isFinalized: false
-        )
-        return RecordingRecord(manifest: manifest, status: .finalized)
+        try RecordingFixtures.record(recordingId: id)
     }
 
     public func save(_ record: RecordingRecord) async throws {}
