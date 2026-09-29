@@ -57,11 +57,19 @@ extension AppFacadeImpl {
         case let attributionError as AttributionError: wrapped = wrap(attributionError)
         case let permissionsError as PermissionsError: wrapped = wrap(permissionsError)
         case let serviceError as TranscriptionServiceError: wrapped = wrap(serviceError)
-        case let catalogError as ModelCatalogError: wrapped = wrap(catalogError)
-        case let queueError as JobQueueError: wrapped = wrap(queueError)
-        default: wrapped = wrapUnexpected(error)
+        default: wrapped = wrapCatalogOrQueue(error)
         }
         return Self.errorView(for: wrapped)
+    }
+
+    /// Источники групп М/Н (MEE-420) — тот же `wrap`, что у их синхронных команд; прочее —
+    /// `app.internalError`. Вынесено из `errorView(for:)` по сложности (SwiftLint), не по смыслу.
+    private func wrapCatalogOrQueue(_ error: Error) -> AppFacadeError {
+        switch error {
+        case let catalogError as ModelCatalogError: return wrap(catalogError)
+        case let queueError as JobQueueError: return wrap(queueError)
+        default: return wrapUnexpected(error)
+        }
     }
 
     // MARK: - `facade.*` (§3.1, строка `AppFacadeError`)
