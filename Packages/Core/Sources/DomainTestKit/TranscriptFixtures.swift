@@ -158,6 +158,25 @@ public enum TranscriptFixtures {
         speakers: []
     )
 
+    /// Системный канал без диаризации (C-011, инвариант 18): содержательные сегменты `.system` несут
+    /// кластер 0, один `Speaker(0, nil, nil, S)` без эмбеддинга, `.mic` кластера не несёт. Вне
+    /// `allFixtures`: набор из шести случаев раздела «Фейк для тестов» C-003 не расширяется.
+    public static let systemChannelWithoutDiarization: Transcript = try! Transcript(
+        recordingId: recordingId,
+        language: "ru",
+        engine: "gigaam-sherpa-onnx",
+        modelVersion: "3.0.0",
+        createdAt: createdAt,
+        segments: [
+            segment(0, 2_000, .system, 0, "Добрый день, коллеги."),
+            segment(1_000, 1_800, .mic, nil, "Слышно."),
+            segment(3_000, 5_500, .system, 0, "Начнём с повестки.")
+        ],
+        speakers: [
+            try! Transcript.Speaker(cluster: 0, embedding: nil, embeddingModelVersion: nil, totalMs: 4_500)
+        ]
+    )
+
     /// Все фикстуры набора.
     public static let allFixtures: [Transcript] = [
         oneOnOne,
