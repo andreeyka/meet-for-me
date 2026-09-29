@@ -36,13 +36,30 @@ struct SystemMachineEnvironment: MachineEnvironment {
         ProcessInfo.processInfo.physicalMemory
     }
 
+    /// MEE-458 п.3: на macOS — `volumeAvailableCapacityForImportantUsage`: место, которое
+    /// система готова отдать под важные данные пользователя (с учётом очищаемого — кешей,
+    /// локальных снимков), а не `systemFreeSize`, который его не считает и на APFS занижает
+    /// доступное. Ключа нет на swift-corelibs, поэтому на Linux — `systemFreeSize`, как прежде.
+    /// Если на macOS ключ не отдал значения, берётся тот же `systemFreeSize`.
     func availableDiskBytes(at url: URL) -> Int64? {
+        let probe = Self.existingAncestor(of: url)
+        #if os(macOS)
+        if let important = try? probe.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey])
+            .volumeAvailableCapacityForImportantUsage {
+            return important
+        }
+        #endif
+        let attributes = try? FileManager.default.attributesOfFileSystem(forPath: probe.path)
+        return (attributes?[.systemFreeSize] as? NSNumber)?.int64Value
+    }
+
+    /// Каталог модели на момент проверки ещё не создан — спрашиваем ближайшего существующего предка.
+    static func existingAncestor(of url: URL) -> URL {
         var probe = url
         while !FileManager.default.fileExists(atPath: probe.path), probe.pathComponents.count > 1 {
             probe.deleteLastPathComponent()
         }
-        let attributes = try? FileManager.default.attributesOfFileSystem(forPath: probe.path)
-        return (attributes?[.systemFreeSize] as? NSNumber)?.int64Value
+        return probe
     }
 
     /// «Apple M2 Pro» → `.m2`; чип новее `m4` считается `m4` — старше него `MinChip` не знает.
