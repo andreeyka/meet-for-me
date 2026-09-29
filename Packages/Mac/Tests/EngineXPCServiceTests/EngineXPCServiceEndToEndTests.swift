@@ -79,7 +79,7 @@ final class EngineXPCServiceEndToEndTests: XCTestCase {
     }
 
     /// Возврат РП по MEE-438 (11:50 UTC): обратный канал прогресса до сих пор проверялся
-    /// только `rawServiceProxy` (`didReceiveProgress` напрямую, без настоящего клиентского
+    /// только `rawServiceProxy` (`engineDidReportProgress` напрямую, без настоящего клиентского
     /// приёмника) — здесь тот же прогресс идёт ЦЕЛИКОМ настоящим путём: сервис
     /// (`EngineXPCRequestHandler.pushProgress`) → настоящий `NSXPCConnection` → настоящий
     /// `EngineXPCClient.ProgressReceiver` → замыкание прогресса `transcribe(_:progress:)`.

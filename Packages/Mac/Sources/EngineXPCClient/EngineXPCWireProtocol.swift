@@ -12,14 +12,14 @@
 //  сама форма кадра решает, что это, декодированием на той стороне, что его читает. Реплай-блок
 //  того самого вызова, что запустил долгую работу (`transcribe`/`diarize`/`embed`/`postProcess`),
 //  срабатывает один раз, когда для ЭТОГО `jobId` готов финальный `EngineReply` — сколько бы это
-//  ни заняло; отдельный вызов `send` с кадром `.cancel(jobId)` — свой, короткий, получает
+//  ни заняло; отдельный вызов `handle` с кадром `.cancel(jobId)` — свой, короткий, получает
 //  собственный быстрый ответ независимо от вызова, который он отменяет.
 //
 //  `EngineXPCClientProtocol` — интерфейс, который экспортирует КЛИЕНТ (`exportedInterface`
 //  со стороны клиента, `remoteObjectInterface` со стороны сервиса): сервис зовёт его сам,
 //  без ответа, чтобы протолкнуть `EngineProgressMessage` в любой момент между отправкой
-//  запроса и его финальным ответом — прогресс не привязан к реплай-блоку `send`, потому что
-//  один вызов `send` может породить сколько угодно сообщений прогресса до одного финального.
+//  запроса и его финальным ответом — прогресс не привязан к реплай-блоку `handle`, потому что
+//  один вызов `handle` может породить сколько угодно сообщений прогресса до одного финального.
 
 import Foundation
 
@@ -33,11 +33,11 @@ import Foundation
     /// `EngineWire.encode(EngineReply)` при успешном разборе и исполнении, либо `nil` с
     /// `NSError` в домене `EngineTransportFault.errorDomain` при отказе транспорта (§3.1) —
     /// никогда оба сразу и никогда ни одного.
-    func send(_ requestData: Data, reply: @escaping (Data?, Error?) -> Void)
+    func handle(_ requestData: Data, reply: @escaping (Data?, NSError?) -> Void)
 }
 
 @objc public protocol EngineXPCClientProtocol {
     /// `progressData` — `EngineWire.encode(EngineProgressMessage)`. Без ответа (`Void`) —
     /// сервис не ждёт подтверждения доставки, клиент вправе отбросить кадр молча (К40 ii-iii).
-    func didReceiveProgress(_ progressData: Data)
+    func engineDidReportProgress(_ progressData: Data)
 }
