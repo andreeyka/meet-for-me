@@ -1,9 +1,10 @@
 //  AppDelegate — строит composition root при запуске, показывает отказ и завершает процесс
 //  на сломанном окружении, останавливает граф при выходе (MEE-433, MEE-430 «жизненный
-//  цикл»). Владеет контроллером меню-бара (М4, возврат РП; MEE-473): подписка на
-//  `AppFacade.events()` живёт на времени жизни делегата (`MenuBarController`), не на времени
-//  жизни `StatusMenu` — в menu-стиле `MenuBarExtra` вид пересобирается при каждом открытии
-//  меню, и `.task` внутри него не гарантированно переживает это пересоздание.
+//  цикл»). Владеет окном «Встречи» (MEE-474, `MeetingsWindowPresenter`) и контроллером
+//  меню-бара (М4, возврат РП; MEE-473): подписка на `AppFacade.events()` живёт на времени
+//  жизни делегата (`MenuBarController`), не на времени жизни `StatusMenu` — в menu-стиле
+//  `MenuBarExtra` вид пересобирается при каждом открытии меню, и `.task` внутри него не
+//  гарантированно переживает это пересоздание.
 //
 //  Модуль: app-ui · Владелец: DEV-1 · Слой: UI
 
@@ -21,6 +22,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     /// Состояние и команды меню (MEE-473). `nil`, пока нет графа.
     @Published private(set) var menu: MenuBarController?
 
+    /// Окно «Встречи» (MEE-474). `nil`, пока нет графа.
+    private var meetingsWindow: MeetingsWindowPresenter?
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         Task {
             do {
@@ -29,9 +33,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
                 if graph.settingsUsedDefaults {
                     Self.presentSettingsFallbackNotice()
                 }
+                meetingsWindow = MeetingsWindowPresenter(facade: graph.facade)
                 let menu = MenuBarController(facade: graph.facade)
                 self.menu = menu
                 menu.start()
+                // Проверка запуска без клика по меню-бару (MEE-474, «Готовность»: окно
+                // открывается на пустой базе): `-MeetForMeOpenMeetingsOnLaunch YES`.
+                if UserDefaults.standard.bool(forKey: "MeetForMeOpenMeetingsOnLaunch") {
+                    showMeetings()
+                }
             } catch {
                 Self.presentStartupFailureAndTerminate(error)
             }
@@ -44,11 +54,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         guard let graph else { return .terminateNow }
         menu?.stop()
+        meetingsWindow?.close()
         Task {
             await graph.shutdown()
             NSApp.reply(toApplicationShouldTerminate: true)
         }
         return .terminateLater
+    }
+
+    /// Пункт меню-бара «Открыть встречи…».
+    func showMeetings() {
+        meetingsWindow?.show()
     }
 
     /// IR-140 (MEE-439, решение архитектора): нечитаемая строка настроек на старте — БОЛЬШЕ

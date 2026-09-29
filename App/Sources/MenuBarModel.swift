@@ -55,7 +55,11 @@ struct MenuBarState: Equatable, Sendable {
 
     // MARK: Входы
 
+    /// Снимок старше текущего по `updatedAt` отбрасывается (MEE-478 п. 1): опрос, начатый до
+    /// стопа, может ответить позже события `statusChanged` после стопа — без этой проверки на
+    /// долю секунды возвращалась бы «Остановить запись». Равный по времени принимается.
     mutating func apply(status newStatus: AppStatus) {
+        if let current = status, newStatus.updatedAt < current.updatedAt { return }
         status = newStatus
         // Доли держим только для задач, которые снимок ещё называет идущими.
         let running = Set(newStatus.runningJobs.map(\.jobId))
@@ -107,57 +111,13 @@ struct MenuBarState: Equatable, Sendable {
 
 extension MenuBarState {
 
-    /// Бросок команды фасада → `AppErrorView` для строки меню (п. 5 постановки). `underlying`
-    /// уже несёт вид. Для остальных случаев `AppFacadeError` фасад публичного перевода в
-    /// `AppErrorView` не даёт (`AppFacadeImpl.errorView(for:)` — internal), поэтому код
-    /// строится по C-016 §3.1 (`facade.<имя случая>`), а `message` — текст для человека.
+    /// Бросок команды фасада → `AppErrorView` для строки меню (п. 5 постановки). Правило общее
+    /// с окном «Встречи» — `FacadeErrorText.swift` (явный `switch`, MEE-478 п. 2).
     static func errorView(for error: Error) -> AppErrorView {
-        guard let facadeError = error as? AppFacadeError else {
-            return AppErrorView(
-                code: "app.internalError", message: String(describing: error),
-                recoverySuggestion: nil, permissionKind: nil
-            )
-        }
-        switch facadeError {
-        case .underlying(let view):
-            return view
-        case .permissionRequired(let kind):
-            return AppErrorView(
-                code: "facade.permissionRequired",
-                message: "Нет права: \(permissionTitle(kind))",
-                recoverySuggestion: "Разрешите доступ в Системных настройках",
-                permissionKind: kind
-            )
-        case .notAllowed(let reason):
-            return AppErrorView(
-                code: "facade.notAllowed", message: reason, recoverySuggestion: nil, permissionKind: nil
-            )
-        case .notFound(let entity, let id):
-            return AppErrorView(
-                code: "facade.notFound", message: "\(entity) \(id) не найден",
-                recoverySuggestion: nil, permissionKind: nil
-            )
-        case .profileNotReady, .settingsUnreadable, .jobFailed:
-            return AppErrorView(
-                code: "facade.\(caseName(facadeError))", message: String(describing: facadeError),
-                recoverySuggestion: nil, permissionKind: nil
-            )
-        }
-    }
-
-    private static func caseName(_ error: AppFacadeError) -> String {
-        let description = String(describing: error)
-        return description.split(separator: "(", maxSplits: 1).first.map(String.init) ?? description
+        FacadeErrorText.view(for: error)
     }
 
     static func permissionTitle(_ kind: PermissionKind) -> String {
-        switch kind {
-        case .microphone: return "микрофон"
-        case .systemAudioRecording: return "запись системного звука"
-        case .screenRecording: return "запись экрана и звука"
-        case .calendars: return "календари"
-        case .notifications: return "уведомления"
-        case .accessibility: return "универсальный доступ"
-        }
+        FacadeErrorText.permissionTitle(kind)
     }
 }

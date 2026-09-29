@@ -70,11 +70,16 @@ GigaAMSpikeHarness — спайк R12 (docs/architecture.md): GigaAM v3 e2e_ctc 
 через sherpa-onnx (NeMo-CTC).
 
   run --model PATH-К-ONNX --tokens PATH-К-TOKENS.TXT --wav PATH [--threads 4]
+      [--chunk-seconds N] [--timestamps 1]
       --model  файл энкодера CTC (`gigaam_v3_e2e_ctc_int8.onnx` — точное имя и источник
                называет записка MEE-426, §2, и приёмка РП).
       --tokens файл словаря токенов, тем же экспортом.
       --wav    16 кГц, моно, PCM — отказ с точным несовпадением на любом другом формате.
       --threads число потоков ONNX Runtime, целое число (по умолчанию 4).
+      --chunk-seconds  резать запись на куски по N с (жёстко, без VAD) и расшифровывать
+               их одним распознавателем в одном процессе; 0 или без флага — весь файл
+               одним куском. GigaAM v3 e2e_ctc не принимает кусок длиннее ~200 с.
+      --timestamps 1   напечатать метки времени токенов первого куска (токен@с).
 
   Печатает: распознанный текст, RTF (время расшифровки / длительность записи),
   пиковую резидентную память процесса (МБ), время загрузки модели (с).
@@ -100,6 +105,21 @@ if let rawThreads = arguments["threads"] {
 } else {
     threadCount = 4
 }
+
+// Кусок длиннее ~200 с энкодер не примет вовсе: позиционное кодирование экспорта рассчитано
+// на 5000 кадров по 40 мс, дальше ONNX Runtime падает на broadcast в self_attn (замер R12,
+// MEE-426, 29.09). Память на куске растёт квадратично (внимание), поэтому запись длиннее
+// минуты стенду нужно подавать кусками — как её и подаст реальный движок.
+let chunkSeconds: Double
+if let rawChunk = arguments["chunk-seconds"] {
+    guard let parsed = Double(rawChunk), parsed >= 0 else {
+        fail("--chunk-seconds: '\(rawChunk)' не неотрицательное число")
+    }
+    chunkSeconds = parsed
+} else {
+    chunkSeconds = 0
+}
+let printTimestamps = arguments["timestamps"] == "1"
 
 // MARK: - Загрузка WAV: 16 кГц, моно — точное несовпадение обязано отказать, не подгонять
 
@@ -167,14 +187,54 @@ let loadSeconds = Date().timeIntervalSince(loadStart)
 let samples = loadMono16kSamples(wavPath: wavPath)
 let audioSeconds = Double(samples.count) / 16_000.0
 
+let chunkSize = chunkSeconds > 0 ? max(Int(chunkSeconds * 16_000), 1) : max(samples.count, 1)
+
+/// Метки CTC — кадр, на котором модель выдала токен (шаг 40 мс), а не границы слова.
+private func timestampsLine(_ result: SherpaOnnxOfflineRecognitionResult) -> String {
+    let raw = result.result.pointee
+    guard let tokens = raw.tokens_arr, let stamps = raw.timestamps else {
+        return "метки: модель их не выдала"
+    }
+    var line = "метки (токен@с):"
+    for index in 0..<Int(raw.count) {
+        let token = tokens[index].map { String(cString: $0) } ?? "?"
+        line += String(format: " %@@%.2f", token, stamps[index])
+    }
+    return line
+}
+
+var texts: [String] = []
+var worstChunkSeconds = 0.0
 let inferenceStart = Date()
-let result = recognizer.decode(samples: samples, sampleRate: 16_000)
+var offset = 0
+while offset < samples.count {
+    let end = min(offset + chunkSize, samples.count)
+    let chunkStart = Date()
+    let result = recognizer.decode(samples: Array(samples[offset..<end]), sampleRate: 16_000)
+    worstChunkSeconds = max(worstChunkSeconds, Date().timeIntervalSince(chunkStart))
+    texts.append(result.text)
+    if texts.count == 1 {
+        if printTimestamps { print(timestampsLine(result)) }
+        // Сравнение с итоговым пиком показывает, копится ли память от куска к куску.
+        print(String(format: "пиковая память после 1-го куска: %.1f МБ",
+                     Double(peakResidentMemoryBytes()) / 1_048_576.0))
+    }
+    offset = end
+}
 let inferenceSeconds = Date().timeIntervalSince(inferenceStart)
 
 let rtf = audioSeconds > 0 ? inferenceSeconds / audioSeconds : .nan
 let peakMB = Double(peakResidentMemoryBytes()) / 1_048_576.0
 
-print("текст: \(result.text)")
-print(String(format: "RTF: %.3f (расшифровка %.2f с на %.2f с звука)", rtf, inferenceSeconds, audioSeconds))
+if texts.count == 1 {
+    print("текст: \(texts[0])")
+} else {
+    // Час речи — десятки тысяч символов: печатаются начало и последний кусок, не всё.
+    let fullText = texts.joined(separator: " ")
+    print("текст (\(fullText.count) симв., кусков \(texts.count)), начало: \(fullText.prefix(400))")
+    print("последний кусок: \(texts.last ?? "")")
+}
+print(String(format: "RTF: %.3f (расшифровка %.2f с на %.2f с звука; худший кусок %.2f с)",
+             rtf, inferenceSeconds, audioSeconds, worstChunkSeconds))
 print(String(format: "пиковая память: %.1f МБ", peakMB))
 print(String(format: "время загрузки модели: %.2f с", loadSeconds))

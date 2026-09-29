@@ -15,18 +15,27 @@ struct MenuAction: Equatable, Sendable, Identifiable {
     var id: String { title }
 }
 
+/// Строка меню со стабильным id (MEE-478 п. 3): `ForEach` не берёт id из текста — две задачи
+/// одного типа с одинаковой долей дали бы одну и ту же строку.
+struct MenuLine: Equatable, Sendable, Identifiable {
+    let id: String
+    let text: String
+}
+
 struct MenuBarPresentation: Equatable, Sendable {
     /// Строки блока активной сессии (название, время, уровни, предупреждение).
-    var sessionLines: [String] = []
+    var sessionLines: [MenuLine] = []
     /// Главная кнопка: «Начать запись» или «Остановить запись». `nil` — статуса ещё нет.
     var recordingAction: MenuAction?
-    /// «Разрешить запись…» — пока `permissionsReady != .ready`.
+    /// «Разрешить запись…» (`.notReady`) или «Проверить права на запись…»
+    /// (`.unknownUntilFirstUse`) — пока `permissionsReady != .ready`.
     var permissionAction: MenuAction?
-    /// Исходы последнего запроса прав и кнопки «Открыть настройки» к отказанным.
-    var permissionLines: [String] = []
+    /// Исходы последнего запроса прав (или пояснение к `.unknownUntilFirstUse`) и кнопки
+    /// «Открыть настройки» к отказанным.
+    var permissionLines: [MenuLine] = []
     var settingsActions: [MenuAction] = []
     /// Очередь: идущие задачи с долей и счётчики.
-    var jobLines: [String] = []
+    var jobLines: [MenuLine] = []
     /// Последний отказ одной строкой (п. 5 постановки).
     var errorLine: String?
     /// Строка-заглушка, пока нет ни одного снимка.
@@ -45,15 +54,19 @@ struct MenuBarPresentation: Equatable, Sendable {
                 command: .stopRecording(recordingId: session.recordingId), isEnabled: !busy
             )
         } else {
-            sessionLines = ["Нет активной записи"]
+            sessionLines = [MenuLine(id: "session.none", text: "Нет активной записи")]
             recordingAction = MenuAction(title: "Начать запись", command: .startRecording, isEnabled: !busy)
         }
-        if status.permissionsReady != .ready {
-            permissionAction = MenuAction(
-                title: "Разрешить запись…", command: .requestRecordingPermissions, isEnabled: !busy
-            )
+        if let title = Self.permissionActionTitle(status.permissionsReady) {
+            permissionAction = MenuAction(title: title, command: .requestRecordingPermissions, isEnabled: !busy)
         }
         permissionLines = state.permissionOutcomes.map(Self.permissionLine)
+        if permissionLines.isEmpty, status.permissionsReady == .unknownUntilFirstUse {
+            permissionLines = [MenuLine(
+                id: "permissions.unknownUntilFirstUse",
+                text: "Системный звук: macOS спросит разрешение при первой записи"
+            )]
+        }
         var settingsKinds = state.permissionOutcomes
             .filter { $0.outcome == .denied || $0.outcome == .cannotPrompt }
             .map(\.kind)
@@ -70,54 +83,74 @@ struct MenuBarPresentation: Equatable, Sendable {
         errorLine = state.lastError.map(Self.errorLine)
     }
 
+    /// MEE-478 п. 4: `.unknownUntilFirstUse` — не «запрещено»: системный звук у macOS до первой
+    /// записи неизвестен (C-007), и зовущая подпись «Разрешить» вводила бы в заблуждение.
+    static func permissionActionTitle(_ readiness: PermissionsReadiness) -> String? {
+        switch readiness {
+        case .ready: return nil
+        case .notReady: return "Разрешить запись…"
+        case .unknownUntilFirstUse: return "Проверить права на запись…"
+        }
+    }
+
     // MARK: Строки
 
-    static func sessionLines(_ session: ActiveSessionView, now: Date) -> [String] {
-        var lines = ["● \(session.title) — \(elapsed(from: session.startedAt, to: now))"]
+    static func sessionLines(_ session: ActiveSessionView, now: Date) -> [MenuLine] {
+        let recordingId = session.recordingId.uuidString
+        var lines = [MenuLine(
+            id: "session.\(recordingId).title",
+            text: "● \(session.title) — \(elapsed(from: session.startedAt, to: now))"
+        )]
         var levels: [String] = []
         if let mic = session.micLevel { levels.append("микрофон \(meter(mic))") }
         if let system = session.systemLevel { levels.append("система \(meter(system))") }
-        if !levels.isEmpty { lines.append(levels.joined(separator: "  ")) }
+        if !levels.isEmpty {
+            lines.append(MenuLine(id: "session.\(recordingId).levels", text: levels.joined(separator: "  ")))
+        }
         if session.containsUnrequested {
-            lines.append("⚠︎ В запись попал звук других приложений")
+            lines.append(MenuLine(
+                id: "session.\(recordingId).unrequested", text: "⚠︎ В запись попал звук других приложений"
+            ))
         }
         return lines
     }
 
-    static func permissionLine(_ line: PermissionOutcomeLine) -> String {
+    static func permissionLine(_ line: PermissionOutcomeLine) -> MenuLine {
         let title = MenuBarState.permissionTitle(line.kind).capitalizedFirst
+        let text: String
         switch line.outcome {
-        case .granted: return "\(title): разрешено"
-        case .promptOnUse: return "\(title): система спросит при первой записи"
-        case .denied: return "\(title): запрещено"
-        case .cannotPrompt: return "\(title): разрешить можно только в настройках"
+        case .granted: text = "\(title): разрешено"
+        case .promptOnUse: text = "\(title): система спросит при первой записи"
+        case .denied: text = "\(title): запрещено"
+        case .cannotPrompt: text = "\(title): разрешить можно только в настройках"
         }
+        return MenuLine(id: "permission.\(line.kind.rawValue)", text: text)
     }
 
-    static func jobLines(_ status: AppStatus, fractions: [UUID: Double]) -> [String] {
-        var lines = status.runningJobs.map { job -> String in
+    static func jobLines(_ status: AppStatus, fractions: [UUID: Double]) -> [MenuLine] {
+        var lines = status.runningJobs.map { job -> MenuLine in
             let fraction = fractions[job.jobId] ?? job.fraction
             let stage = job.stage.map { " (\($0))" } ?? ""
-            return "\(jobTitle(job.type))\(stage): \(Int((fraction * 100).rounded()))%"
+            return MenuLine(
+                id: "job.\(job.jobId.uuidString)",
+                text: "\(jobTitle(job.type))\(stage): \(Int((fraction * 100).rounded()))%"
+            )
         }
-        if status.pendingJobCount > 0 { lines.append("В очереди: \(status.pendingJobCount)") }
-        if status.failedJobCount > 0 { lines.append("С ошибкой: \(status.failedJobCount)") }
+        if status.pendingJobCount > 0 {
+            lines.append(MenuLine(id: "jobs.pending", text: "В очереди: \(status.pendingJobCount)"))
+        }
+        if status.failedJobCount > 0 {
+            lines.append(MenuLine(id: "jobs.failed", text: "С ошибкой: \(status.failedJobCount)"))
+        }
         return lines
     }
 
     static func errorLine(_ view: AppErrorView) -> String {
-        let suggestion = view.recoverySuggestion.map { ". \($0)" } ?? ""
-        return "Ошибка: \(view.message)\(suggestion)"
+        FacadeErrorText.line(view)
     }
 
     static func jobTitle(_ type: JobType) -> String {
-        switch type {
-        case .transcode: return "Перекодирование"
-        case .transcribe: return "Транскрибация"
-        case .diarize: return "Разметка говорящих"
-        case .attribute: return "Опознание говорящих"
-        case .summarize: return "Резюме"
-        }
+        FacadeErrorText.jobTitle(type)
     }
 
     /// «м:сс» до часа, «ч:мм:сс» после. Отрицательное (часы разошлись) — ноль.

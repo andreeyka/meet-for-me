@@ -24,7 +24,11 @@ final class FailureSourcesInv31Tests: XCTestCase {
 
         fixture.jobQueue.emit(.failed(jobId: jobId, type: .transcribe, error: "engine.engineFailure.modelMissing",
                                       willRetry: false))
-        let events = await collectEvents(stream, count: 3, timeoutSeconds: 1)
+        // C-016 v13, инв. 35 (е): окончательный отказ ещё и `statusChanged` — считаются `failure`.
+        let events = await collectEvents(stream, count: 3, timeoutSeconds: 1).filter { event in
+            if case .failure = event { return true }
+            return false
+        }
 
         XCTAssertEqual(events.count, 1, "ровно один failure на событие-источник")
         guard case .failure(let view)? = events.first else { return XCTFail("ожидался .failure, пришло \(events)") }
@@ -55,7 +59,12 @@ final class FailureSourcesInv31Tests: XCTestCase {
         fixture.jobQueue.emit(.succeeded(jobId: retried, type: .diarize))
         fixture.jobQueue.emit(.cancelled(jobId: retried, type: .diarize))
         fixture.jobQueue.emit(.failed(jobId: final, type: .attribute, error: "окончательно", willRetry: false))
-        let events = await collectEvents(stream, count: 3, timeoutSeconds: 1)
+        // C-016 v13, инв. 35 (е): каждое из четырёх событий ещё и `statusChanged` — здесь
+        // считаются только `failure`.
+        let events = await collectEvents(stream, count: 7, timeoutSeconds: 1).filter { event in
+            if case .failure = event { return true }
+            return false
+        }
 
         XCTAssertEqual(events.count, 1, "willRetry: true и прочие события — ни одного failure; один — от барьера")
         guard case .failure(let view)? = events.first else { return XCTFail("ожидался .failure, пришло \(events)") }

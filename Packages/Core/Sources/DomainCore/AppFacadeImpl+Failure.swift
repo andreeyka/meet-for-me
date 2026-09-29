@@ -55,7 +55,7 @@ extension AppFacadeImpl {
         case let serviceError as TranscriptionServiceError: wrapped = wrap(serviceError)
         default: wrapped = wrapCatalogOrQueue(error)
         }
-        return Self.errorView(for: wrapped)
+        return wrapped.view
     }
 
     /// Источники групп М/Н (MEE-420) — тот же `wrap`, что у их синхронных команд; прочее —
@@ -71,13 +71,17 @@ extension AppFacadeImpl {
     // MARK: - Инв. 31, источник (1): окончательно упавшая задача
 
     /// `.failed(willRetry: false)` → ровно один `failure` с `facade.jobFailed`. `willRetry: true`
-    /// не публикуется: исход ещё наступит. Прочие события очереди фасад здесь не разбирает.
+    /// не публикуется: исход ещё наступит. Затем то же событие идёт в наблюдение очереди
+    /// (инв. 35 (д), (е), C-016 v13) — `AppFacadeImpl+JobObservation.swift`.
     func handleJobEvent(_ event: JobEvent) async {
         // Инв. 34 (в), IR-146: `transcribe` завершилась — у записи появился транскрипт. `transcriptChanged`
-        // не публикуется: идентификатора нового транскрипта UI не знает.
+        // не публикуется: идентификатора нового транскрипта UI не знает. Идёт первой — `meetingsChanged`
+        // раньше `statusChanged` из наблюдения очереди (инв. 34 (б)).
         if case .succeeded(_, .transcribe) = event { publish(.meetingsChanged) }
-        guard let error = Self.jobFailedError(for: event) else { return }
-        await publishFailure(error)
+        if let error = Self.jobFailedError(for: event) {
+            await publishFailure(error)
+        }
+        await observeJobEvent(event)
     }
 
     /// Значение `AppFacadeError.jobFailed` для события очереди; `nil` — событие не источник.
@@ -86,34 +90,6 @@ extension AppFacadeImpl {
     static func jobFailedError(for event: JobEvent) -> AppFacadeError? {
         guard case let .failed(jobId, type, error, willRetry) = event, !willRetry else { return nil }
         return .jobFailed(jobId: jobId, type: type, message: error)
-    }
-
-    // MARK: - `facade.*` (§3.1, строка `AppFacadeError`)
-
-    /// `facade.<имя case>`; `underlying` кода не образует — вложенный `AppErrorView` проходит
-    /// без изменений (§3.1, «Три строки…», п. 2). `permissionKind` (инв. 23, §3.1): у
-    /// `facade.permissionRequired` — «тем `PermissionKind`, который несёт сам случай», у
-    /// прочих — `nil`. `switch` без `default:` — новый случай `AppFacadeError`
-    /// обязан стать ошибкой компиляции, а не молча уехать в чужой код.
-    static func errorView(for error: AppFacadeError) -> AppErrorView {
-        let name: String
-        var permissionKind: PermissionKind?
-        switch error {
-        case .underlying(let view):
-            return view
-        case .notFound: name = "notFound"
-        case .notAllowed: name = "notAllowed"
-        case .permissionRequired(let kind):
-            name = "permissionRequired"
-            permissionKind = kind
-        case .profileNotReady: name = "profileNotReady"
-        case .settingsUnreadable: name = "settingsUnreadable"
-        case .jobFailed: name = "jobFailed"
-        }
-        return AppErrorView(
-            code: "facade.\(name)", message: String(describing: error),
-            recoverySuggestion: nil, permissionKind: permissionKind
-        )
     }
 
     // MARK: - `engine.*` (§3.1, строки `TranscriptionServiceError` и `EngineError`)
@@ -143,5 +119,38 @@ extension AppFacadeImpl {
         return .underlying(AppErrorView(
             code: code, message: String(describing: error), recoverySuggestion: nil, permissionKind: nil
         ))
+    }
+}
+
+// MARK: - `facade.*` (§3.1, строка `AppFacadeError`) — инв. 37, C-016 v13 (IR-147)
+
+extension AppFacadeError {
+
+    /// Единственный перевод ошибки фасада в модель показа (инв. 37): им же фасад строит
+    /// `AppEvent.failure` (`errorView(for:)` выше), поэтому синхронный и асинхронный пути
+    /// разойтись не могут (инв. 24). `facade.<имя case>`; `underlying` кода не образует —
+    /// вложенный `AppErrorView` проходит без изменений (§3.1, «Три строки…», п. 2).
+    /// `permissionKind` (инв. 23, §3.1): у `facade.permissionRequired` — «тем `PermissionKind`,
+    /// который несёт сам случай», у прочих — `nil`. `switch` без `default:` — новый случай
+    /// `AppFacadeError` обязан стать ошибкой компиляции, а не молча уехать в чужой код.
+    public var view: AppErrorView {
+        let name: String
+        var permissionKind: PermissionKind?
+        switch self {
+        case .underlying(let view):
+            return view
+        case .notFound: name = "notFound"
+        case .notAllowed: name = "notAllowed"
+        case .permissionRequired(let kind):
+            name = "permissionRequired"
+            permissionKind = kind
+        case .profileNotReady: name = "profileNotReady"
+        case .settingsUnreadable: name = "settingsUnreadable"
+        case .jobFailed: name = "jobFailed"
+        }
+        return AppErrorView(
+            code: "facade.\(name)", message: String(describing: self),
+            recoverySuggestion: nil, permissionKind: permissionKind
+        )
     }
 }
