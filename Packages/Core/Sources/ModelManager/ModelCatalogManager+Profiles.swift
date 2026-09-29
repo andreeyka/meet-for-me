@@ -27,12 +27,15 @@ extension ModelCatalogManager {
         guard !profile.isBuiltIn else {
             throw ModelCatalogError.builtInProfileImmutable(id: profile.id)
         }
+        // Порядок отказов (инв. 13 v7, правка 7908dbf9): builtInProfileImmutable → unknownModel →
+        // userProfilesUnreadable → StorageError записи — сначала видное из самого входа, затем
+        // требующее чтения хранилища.
         try await withProfileWriteLock {
-            var current = try await loadUserProfiles()
             // Инв. 13 (v7): все четыре роли, в порядке asr, vad, diarization, embedding.
             for modelId in Self.modelIds(of: profile) where versionCandidates(modelId: modelId).isEmpty {
                 throw ModelCatalogError.unknownModel(id: modelId, version: Self.unnamedVersion)
             }
+            var current = try await loadUserProfiles()
             current[profile.id] = profile
             try await storeUserProfiles(current)
         }
