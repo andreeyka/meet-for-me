@@ -1,6 +1,6 @@
-//  C-014 v7 (IR-141; MEE-459): версия для профиля и что она защищает — инв. 11 (по версии,
-//  `modelInUse`), 13 (все четыре роли), 34 (пользовательский профиль на исчезнувшую модель),
-//  35 (новейшая готовая по SemVer §11, модели инв. 33 участвуют).
+//  К52–К54 перечня MEE-429 (поправка `d999d708`, C-014 v7; MEE-459): инв. 11 защищает только
+//  версию, которую разрешает профиль (инв. 35); `loaded` без профиля — `modelInUse`, порядок
+//  «сначала профили»; инв. 13 по всем четырём ролям. К59–К60 — в `VersionRulesTests+Resolve`.
 
 import XCTest
 import DomainCore
@@ -9,173 +9,100 @@ import DomainTestKit
 
 final class VersionRulesTests: XCTestCase {
 
-    private func model(_ id: String, _ version: String, role: ModelRole = .asr, seed: UInt8) -> TestModel {
+    func model(_ id: String, _ version: String, role: ModelRole = .asr, seed: UInt8) -> TestModel {
         TestModel.make(id: id, version: version, role: role, files: [("m.bin", TestModel.bytes(24, seed: seed))])
     }
 
-    // MARK: - Инв. 11 по версии
+    // MARK: - К52
 
-    func test_inv11_onlyResolvedVersionProtectedOlderAndUnfinishedDeletable() async throws {
-        let old = model("vr-asr", "1.0.0", seed: 1)
-        let current = model("vr-asr", "2.0.0", seed: 2)
-        let unfinished = model("vr-asr", "3.0.0", seed: 3)
-        let harness = ModelHarness(models: [old, current, unfinished], profiles: [testProfile(id: "p", asr: "vr-asr")])
+    func test_k52_olderAndUnfinishedVersionsDeletableResolvedVersionStaysProtected() async throws {
+        let old = model("m", "1.0.0", seed: 1)
+        let current = model("m", "2.0.0", seed: 2)
+        let unfinished = model("m", "3.0.0", seed: 3)
+        let harness = ModelHarness(models: [old, current, unfinished], profiles: [testProfile(id: "p", asr: "m")])
         harness.transport.chunkSize = 8
         harness.transport.script(unfinished.url("m.bin"), [.dropAfter(bytes: 8)])
         let manager = try harness.makeManager()
-        try await manager.download(id: "vr-asr", version: "1.0.0")
-        try await manager.download(id: "vr-asr", version: "2.0.0")
-        _ = try? await manager.download(id: "vr-asr", version: "3.0.0")
-        let unfinishedState = await manager.state(id: "vr-asr", version: "3.0.0")
+        try await manager.download(id: "m", version: "1.0.0")
+        try await manager.download(id: "m", version: "2.0.0")
+        _ = try? await manager.download(id: "m", version: "3.0.0")
+        let unfinishedState = await manager.state(id: "m", version: "3.0.0")
         XCTAssertEqual(unfinishedState, .paused(bytesOnDisk: 8), "вектор: 3.0.0 недокачана")
 
-        await expectCatalogError(.modelInUseByProfile(modelId: "vr-asr", profileIds: ["p"])) {
-            try await manager.delete(id: "vr-asr", version: "2.0.0")
+        try await manager.delete(id: "m", version: "1.0.0")
+        try await manager.delete(id: "m", version: "3.0.0")
+        for item in [old, unfinished] {
+            let version = item.descriptor.version
+            XCTAssertFalse(harness.exists(harness.directory(item)), "\(version): каталог удалён целиком")
+            let state = await manager.state(id: "m", version: version)
+            XCTAssertEqual(state, .available, version)
         }
-        try await manager.delete(id: "vr-asr", version: "1.0.0")
-        try await manager.delete(id: "vr-asr", version: "3.0.0")
-        for version in ["1.0.0", "3.0.0"] {
-            let state = await manager.state(id: "vr-asr", version: version)
-            XCTAssertEqual(state, .available, "\(version) удалена")
+        XCTAssertTrue(harness.exists(harness.directory(current).appendingPathComponent("m.bin")))
+        await expectCatalogError(.modelInUseByProfile(modelId: "m", profileIds: ["p"])) {
+            try await manager.delete(id: "m", version: "2.0.0")
         }
-        let kept = await manager.state(id: "vr-asr", version: "2.0.0")
-        XCTAssertEqual(kept, .downloaded)
     }
 
-    func test_inv11_loadedWithoutResolvingProfileThrowsModelInUseProfilesFirstWhenBoth() async throws {
-        let free = model("vr-free", "1.0.0", seed: 4)
-        let used = model("vr-used", "1.0.0", seed: 5)
-        let harness = ModelHarness(models: [free, used], profiles: [testProfile(id: "p", asr: "vr-used")])
+    // MARK: - К53
+
+    func test_k53_loadedWithoutResolvingProfileThrowsModelInUseProfilesCheckedFirst() async throws {
+        let target = model("m", "1.0.0", seed: 4)
+        let base = model("base", "1.0.0", seed: 5)
+        let harness = ModelHarness(models: [target, base], profiles: [testProfile(id: "b", asr: "base")])
         let manager = try harness.makeManager()
-        var bundles: [ModelBundle] = []
-        for item in [free, used] {
-            try await manager.download(id: item.descriptor.id, version: "1.0.0")
-            bundles.append(ModelBundle(modelId: item.descriptor.id, version: "1.0.0", role: .asr, runtime: .onnx,
-                                       directoryURL: harness.directory(item)))
-        }
-        let token = try await manager.beginUse(bundles)
+        try await manager.download(id: "m", version: "1.0.0")
+        try await manager.saveProfile(testProfile(id: "p", asr: "m", builtIn: false))
 
-        await expectCatalogError(.modelInUse(modelId: "vr-free", version: "1.0.0")) {
-            try await manager.delete(id: "vr-free", version: "1.0.0")
-        }
-        await expectCatalogError(.modelInUseByProfile(modelId: "vr-used", profileIds: ["p"])) {
-            try await manager.delete(id: "vr-used", version: "1.0.0")
-        }
-        let state = await manager.state(id: "vr-free", version: "1.0.0")
-        XCTAssertEqual(state, .loaded, "ничего не удалено")
-        XCTAssertTrue(harness.exists(harness.directory(free).appendingPathComponent("m.bin")))
-
-        await manager.endUse(token)
-        try await manager.delete(id: "vr-free", version: "1.0.0")
-        let after = await manager.state(id: "vr-free", version: "1.0.0")
-        XCTAssertEqual(after, .available, "вектор: после endUse удаляется")
-    }
-
-    // MARK: - Инв. 13: все четыре роли
-
-    func test_inv13_saveProfileChecksAllFourRolesInOrderAndAcceptsDiskOnlyModel() async throws {
-        let asr = model("r-asr", "1.0.0", seed: 6)
-        let orphan = model("r-orphan", "1.0.0", role: .vad, seed: 7)
-        let harness = ModelHarness(models: [asr, orphan])
-        let manager = try harness.makeManager()
-        try await manager.download(id: "r-orphan", version: "1.0.0")
-        // Запись r-orphan исчезает из каталога — файлы и `.manifest.json` остаются (инв. 33).
-        harness.models = [asr]
-        harness.transport.setContent(try harness.catalogBytes(), at: ModelHarness.catalogURL)
-        try await manager.refreshCatalog()
-
-        let cases: [(TranscriptionProfile, String)] = [
-            (testProfile(id: "u", asr: "x-asr", vad: "x-vad", builtIn: false), "x-asr"),
-            (testProfile(id: "u", asr: "r-asr", vad: "x-vad", embedding: "x-emb", builtIn: false), "x-vad"),
-            (testProfile(id: "u", asr: "r-asr", diarization: "x-diar", embedding: "x-emb", builtIn: false), "x-diar"),
-            (testProfile(id: "u", asr: "r-asr", embedding: "x-emb", builtIn: false), "x-emb")
-        ]
-        for (profile, unknown) in cases {
-            await expectCatalogError(.unknownModel(id: unknown, version: "")) { try await manager.saveProfile(profile) }
-        }
-        let ids = await manager.profiles().map(\.id)
-        XCTAssertFalse(ids.contains("u"), "профиль не сохранён")
-        let stored = try await harness.settings.value(forKey: ModelCatalogManager.userProfilesKey)
-        XCTAssertNil(stored, "ничего не записано")
-
-        try await manager.saveProfile(testProfile(id: "u", asr: "r-asr", vad: "r-orphan", builtIn: false))
-        let saved = await manager.profiles().map(\.id)
-        XCTAssertEqual(saved, ["u"], "вектор: модель инв. 33 (только на диске) — известна")
-    }
-
-    // MARK: - Инв. 34, пользовательский профиль
-
-    func test_inv34_userProfileOnVanishedModelMissingModelsAndResolveThrowUnknownModelOtherRolesNil() async throws {
-        let asr = model("g-asr", "1.0.0", seed: 8)
-        let harness = ModelHarness(models: [asr])
-        try harness.seedUserProfiles([
-            testProfile(id: "gone-asr", asr: "gone", builtIn: false),
-            testProfile(id: "gone-vad", asr: "g-asr", vad: "gone", builtIn: false)
-        ])
-        let manager = try harness.makeManager()
-        try await manager.download(id: "g-asr", version: "1.0.0")
-
-        await expectCatalogError(.unknownModel(id: "gone", version: "")) {
-            _ = try await manager.missingModels(profileId: "gone-asr")
-        }
-        await expectCatalogError(.unknownModel(id: "gone", version: "")) {
-            _ = try await manager.resolve(profileId: "gone-asr")
-        }
-        await expectCatalogError(.unknownModel(id: "gone", version: "")) {
-            _ = try await manager.missingModels(profileId: "gone-vad")
-        }
-        let resolved = try await manager.resolve(profileId: "gone-vad")
-        XCTAssertNil(resolved.vad, "прочие роли — nil (инв. 9)")
-        XCTAssertEqual(resolved.asr.modelId, "g-asr")
-    }
-
-    // MARK: - Инв. 35
-
-    func test_inv35_newestReadyBySemverPreReleaseOlderNumericComponents() async throws {
-        let versions = ["2.9.0", "2.10.0", "3.0.0-beta"]
-        let models = versions.enumerated().map { model("s-asr", $1, seed: UInt8(20 + $0)) }
-        let harness = ModelHarness(models: models, profiles: [testProfile(id: "p", asr: "s-asr")])
-        let manager = try harness.makeManager()
-        for version in versions {
-            try await manager.download(id: "s-asr", version: version)
-        }
-        let first = try await manager.resolve(profileId: "p")
-        XCTAssertEqual(first.asr.version, "3.0.0-beta", "3.0.0-beta новее 2.10.0")
-
-        try await manager.delete(id: "s-asr", version: "2.9.0")
-        await expectCatalogError(.modelInUseByProfile(modelId: "s-asr", profileIds: ["p"])) {
-            try await manager.delete(id: "s-asr", version: "3.0.0-beta")
-        }
-        let release = model("s-asr", "3.0.0", seed: 30)
-        harness.models.append(release)
-        harness.transport.setContent(release.contents["m.bin"] ?? Data(), at: release.url("m.bin"))
-        harness.transport.setContent(try harness.catalogBytes(), at: ModelHarness.catalogURL)
-        try await manager.refreshCatalog()
-        let notYet = try await manager.resolve(profileId: "p")
-        XCTAssertEqual(notYet.asr.version, "3.0.0-beta", "3.0.0 не скачана — выбирается готовая")
-        try await manager.download(id: "s-asr", version: "3.0.0")
-        let second = try await manager.resolve(profileId: "p")
-        XCTAssertEqual(second.asr.version, "3.0.0", "релиз новее предрелиза той же тройки")
-        try await manager.delete(id: "s-asr", version: "3.0.0-beta")
-    }
-
-    func test_inv35_diskOnlyModelParticipatesWhenCatalogHasOnlyUndownloadedNewer() async throws {
-        let old = model("d-asr", "1.0.0", seed: 40)
-        let newer = model("d-asr", "2.0.0", seed: 41)
-        let harness = ModelHarness(models: [old], profiles: [testProfile(id: "p", asr: "d-asr")])
-        let manager = try harness.makeManager()
-        try await manager.download(id: "d-asr", version: "1.0.0")
-        harness.models = [newer]
-        harness.transport.setContent(try harness.catalogBytes(), at: ModelHarness.catalogURL)
-        try await manager.refreshCatalog()
-
+        // А: профиль разрешал, задача взяла расписку, профиль удалён — ни один профиль не разрешает.
         let resolved = try await manager.resolve(profileId: "p")
-        XCTAssertEqual(resolved.asr.version, "1.0.0", "модель инв. 33 на диске — кандидат")
-        XCTAssertEqual(resolved.asr.directoryURL.standardizedFileURL, harness.directory(old).standardizedFileURL)
-        let missing = try await manager.missingModels(profileId: "p")
-        XCTAssertEqual(missing, [], "профиль готов")
-        await expectCatalogError(.modelInUseByProfile(modelId: "d-asr", profileIds: ["p"])) {
-            try await manager.delete(id: "d-asr", version: "1.0.0")
+        let token = try await manager.beginUse([resolved.asr])
+        let recorder = EventRecorder(manager.events())
+        try await manager.deleteProfile(id: "p")
+        await expectCatalogError(.modelInUse(modelId: "m", version: "1.0.0")) {
+            try await manager.delete(id: "m", version: "1.0.0")
         }
+        XCTAssertTrue(harness.exists(harness.directory(target).appendingPathComponent("m.bin")), "файлы на месте")
+        let whileLoaded = await manager.state(id: "m", version: "1.0.0")
+        XCTAssertEqual(whileLoaded, .loaded)
+        await recorder.settle()
+        XCTAssertFalse(recorder.states(of: "m").contains(.available), "loaded → available не публикуется")
+        await manager.endUse(token)
+        try await manager.delete(id: "m", version: "1.0.0")
+        let after = await manager.state(id: "m", version: "1.0.0")
+        XCTAssertEqual(after, .available, "после endUse тот же delete успешен")
+
+        // Б: `loaded`, и профиль её разрешает — `modelInUseByProfile`, не `modelInUse`.
+        try await manager.download(id: "base", version: "1.0.0")
+        let busy = try await manager.beginUse([try await manager.resolve(profileId: "b").asr])
+        await expectCatalogError(.modelInUseByProfile(modelId: "base", profileIds: ["b"])) {
+            try await manager.delete(id: "base", version: "1.0.0")
+        }
+        await manager.endUse(busy)
+    }
+
+    // MARK: - К54
+
+    func test_k54_saveProfileChecksVadDiarizationEmbeddingFirstMissingInRoleOrder() async throws {
+        let harness = ModelHarness(models: [model("r-asr", "1.0.0", seed: 6)])
+        let manager = try harness.makeManager()
+        let missingVad = testProfile(id: "u", asr: "r-asr", vad: "v?", builtIn: false)
+        let runs: [(expected: String, profile: TranscriptionProfile)] = [
+            ("v?", missingVad),                                                                   // (i)
+            ("d?", testProfile(id: "u", asr: "r-asr", diarization: "d?", builtIn: false)),        // (ii)
+            ("e?", testProfile(id: "u", asr: "r-asr", embedding: "e?", builtIn: false)),          // (iii)
+            ("v?", testProfile(id: "u", asr: "r-asr", vad: "v?", embedding: "e?", builtIn: false)) // (iv)
+        ]
+        for run in runs {
+            await expectCatalogError(.unknownModel(id: run.expected, version: "")) {
+                try await manager.saveProfile(run.profile)
+            }
+            let ids = await manager.profiles().map(\.id)
+            XCTAssertFalse(ids.contains("u"), "\(run.expected): профиль не сохранён")
+        }
+        let row = try await harness.settings.value(forKey: ModelCatalogManager.userProfilesKey)
+        XCTAssertNil(row, "ничего не записано")
+        try await manager.saveProfile(testProfile(id: "u", asr: "r-asr", builtIn: false))
+        let saved = await manager.profiles().map(\.id)
+        XCTAssertEqual(saved, ["u"], "nil в необязательных ролях — не отказ")
     }
 }
