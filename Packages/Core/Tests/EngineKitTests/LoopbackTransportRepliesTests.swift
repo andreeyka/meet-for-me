@@ -1,6 +1,10 @@
 //  К26, К48 — C-012 инв. 6 (cancel неизвестного/уже завершённого — успешный no-op) и
 //  инв. 1 (ровно один финальный `EngineReply` на `jobId`). Тексты критериев — MEE-370
 //  (перечень QA), дословно по формулировкам «Вход»/«Ответ».
+//
+//  MEE-461 (решение архитектора `7fdbe58f` в MEE-389): «успешный no-op» — без ошибки и без
+//  изменения задач, но с ответом `.cancelled(jobId)` на саму команду, как у настоящего
+//  сервиса после MEE-443 (инв. 7, §3). На любой `jobId` — ровно один `.cancelled`.
 
 import XCTest
 import DomainCore
@@ -39,11 +43,14 @@ final class LoopbackTransportRepliesTests: XCTestCase {
 
     func test_k26_cancelUnknownJobIdIsSuccessfulNoOp() {
         let transport = makeTransport()
-        transport.receive(.cancel(EngineJobId(rawValue: UUID())))
-        XCTAssertTrue(transport.sentReplies.isEmpty, "ни ошибки, ни ответа")
+        let jobId = EngineJobId(rawValue: UUID())
+        transport.receive(.cancel(jobId))
+        XCTAssertEqual(transport.sentReplies, [.cancelled(jobId)], "ни ошибки — ровно один .cancelled на команду")
         XCTAssertTrue(transport.sentProgress.isEmpty)
     }
 
+    /// Результат задачи остаётся единственным финальным ответом задачи; `.cancelled` после
+    /// него — ответ самой команды, тот запоздалый ответ, который клиент обязан игнорировать (К27).
     func test_k26_cancelAlreadyFinishedJobIdIsSuccessfulNoOp() async throws {
         let transport = makeTransport()
         let jobId = EngineJobId(rawValue: UUID())
@@ -52,7 +59,11 @@ final class LoopbackTransportRepliesTests: XCTestCase {
 
         transport.receive(.cancel(jobId))
         try await Task.sleep(nanoseconds: 20_000_000)
-        XCTAssertEqual(transport.sentReplies.count, 1, "второй ответ на тот же jobId не появляется")
+        XCTAssertEqual(transport.sentReplies.count, 2)
+        guard case .embedding(jobId, _) = transport.sentReplies[0] else {
+            return XCTFail("результат задачи не заменяется и не дублируется")
+        }
+        XCTAssertEqual(transport.sentReplies[1], .cancelled(jobId), "ровно один .cancelled на команду")
     }
 
     // MARK: - К48 (инв. 1)
@@ -117,9 +128,10 @@ final class LoopbackTransportRepliesTests: XCTestCase {
         try await Task.sleep(nanoseconds: 20_000_000)
         transport.receive(.cancel(jobId))
         try await waitUntil { !transport.sentReplies.isEmpty }
+        // Задача сама видит отмену и завершается `.cancelled` — дубликатом он не ложится.
+        try await Task.sleep(nanoseconds: 50_000_000)
 
-        XCTAssertEqual(transport.sentReplies.count, 1)
-        XCTAssertEqual(transport.sentReplies[0], .cancelled(jobId))
+        XCTAssertEqual(transport.sentReplies, [.cancelled(jobId)], "ровно один .cancelled на живую задачу")
     }
 
     // MARK: - К41 через LoopbackEngineTransport целиком (не напрямую EngineWire)

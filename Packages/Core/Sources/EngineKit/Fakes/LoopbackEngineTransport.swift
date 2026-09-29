@@ -13,7 +13,18 @@
 //  Инвариант 1: ровно один финальный `EngineReply` на `jobId` — каждая задача видит СВОЙ
 //  единственный путь завершения (успех/`EngineError`/отмена), второй раз `finish` для того
 //  же `jobId` не зовётся. Инвариант 6: `cancel(jobId)` неизвестного или уже завершённого —
-//  успешный no-op: `jobs[jobId]` уже `nil`, отменять нечего, ответа не будет.
+//  успешный no-op: `jobs[jobId]` уже `nil`, отменять нечего.
+//
+//  ОТВЕТ НА `cancel` (инв. 7, §3; решение архитектора `7fdbe58f` в MEE-389, MEE-461). Как
+//  настоящий сервис после MEE-443, петля отвечает на `cancel(jobId)` ответом
+//  `.cancelled(jobId)` для ЛЮБОГО `jobId` — неизвестного, живого, уже завершённого; молчание
+//  нарушало бы правило §3 «ровно один параметр не `nil`» и прятало бы от клиента запоздалый
+//  `.cancelled`, который К27 требует игнорировать после резолва. У сервиса ответ команды и
+//  финальный ответ задачи идут по разным реплай-замыканиям; здесь наблюдаемая граница одна
+//  (`sentReplies`), поэтому для живой задачи `.cancelled(jobId)` записывается ОДИН раз —
+//  ответом команды, а собственный `.cancelled` задачи после него не дублируется. Если задача
+//  успела завершиться результатом, результат остаётся в `sentReplies` рядом с `.cancelled` —
+//  ровно тот запоздалый ответ, который видит клиент настоящего сервиса.
 
 import DomainCore
 import Foundation
@@ -29,6 +40,8 @@ public final class LoopbackEngineTransport: @unchecked Sendable {
     private var jobs: [EngineJobId: Task<Void, Never>] = [:]
     private var repliesSent: [EngineReply] = []
     private var progressSent: [EngineProgressMessage] = []
+    /// `jobId`, на чей `cancel` уже записан `.cancelled` — собственный `.cancelled` задачи не дублируется.
+    private var cancelAnswered: Set<EngineJobId> = []
 
     public init(
         transcription: TranscriptionEngine, diarization: DiarizationEngine,
@@ -80,6 +93,7 @@ public final class LoopbackEngineTransport: @unchecked Sendable {
             }, reply: { .outputs(jobId, $0) })
         case .cancel(let jobId):
             cancelIfLive(jobId)
+            recordReply(.cancelled(jobId))
         case .ping:
             recordReply(.pong(serviceVersion: "loopback", protocolVersion: EngineWire.protocolVersion))
         }
@@ -125,7 +139,10 @@ public final class LoopbackEngineTransport: @unchecked Sendable {
         let value = wired(reply)
         lock.lock()
         jobs[jobId] = nil
-        repliesSent.append(value)
+        let cancelWasAnswered = cancelAnswered.remove(jobId) != nil
+        if !(cancelWasAnswered && value == .cancelled(jobId)) {
+            repliesSent.append(value)
+        }
         lock.unlock()
     }
 
@@ -144,6 +161,9 @@ public final class LoopbackEngineTransport: @unchecked Sendable {
     private func cancelIfLive(_ jobId: EngineJobId) {
         lock.lock()
         let task = jobs[jobId]
+        if task != nil {
+            cancelAnswered.insert(jobId)
+        }
         lock.unlock()
         task?.cancel()
     }
