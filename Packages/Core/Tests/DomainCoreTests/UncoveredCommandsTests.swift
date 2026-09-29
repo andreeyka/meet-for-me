@@ -51,6 +51,8 @@ final class UncoveredCommandsTests: XCTestCase {
             attribution: FakeAttributionPort(),
             settings: repositories.settings,
             connectors: repositories.connectors,
+            jobQueue: FakeJobQueue(),
+            fileLayout: FileLayout(root: FileManager.default.temporaryDirectory),
             clock: { Date(timeIntervalSince1970: 1_000) }
         )
         return Fixture(

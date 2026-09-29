@@ -80,6 +80,11 @@ final class ErrorDictionaryEngineFacadeTests: XCTestCase {
             Row(
                 error: AppFacadeError.settingsUnreadable(key: "k"),
                 expectedCode: "facade.settingsUnreadable", expectedPermissionKind: nil
+            ),
+            // C-016 v11, инв. 31 (MEE-462): новый случай — тем же правилом `facade.<case>`.
+            Row(
+                error: AppFacadeError.jobFailed(jobId: UUID(), type: .transcribe, message: "m"),
+                expectedCode: "facade.jobFailed", expectedPermissionKind: nil
             )
         ]
     }
@@ -116,11 +121,30 @@ final class ErrorDictionaryEngineFacadeTests: XCTestCase {
         XCTAssertFalse(transport?.code.hasPrefix("engine.engineFailure.") ?? true)
     }
 
-    /// К27: пять строк `facade.*`; колонка `permissionKind` — у `facade.permissionRequired`
-    /// тот `PermissionKind`, что несёт сам случай (§3.1), у остальных `nil`.
+    /// К63 (дельта `АВ`): две строки словаря v11. (i) `AppFacadeError.jobFailed` — `facade.jobFailed`
+    /// по общему правилу. (ii) §3.1, «Три строки…», п. 1 (IR-143): код движка вне перечня
+    /// `EngineError` действующего C-011 («сервис новее клиента») — дословно, не `app.internalError`.
+    func test_k63_facadeJobFailedAndEngineFailureUnknownCodeRows() async throws {
+        let fixture = FailureFixture()
+        let jobFailed = await fixture.asyncView(
+            for: AppFacadeError.jobFailed(jobId: UUID(), type: .transcribe, message: "x")
+        )
+        XCTAssertEqual(jobFailed?.code, "facade.jobFailed", "(i)")
+        XCTAssertNil(jobFailed?.permissionKind, "(i)")
+
+        XCTAssertFalse(engineErrorCaseNames.contains("futureCode"), "иначе вектор (ii) вакуумен")
+        let unknown = await fixture.asyncView(
+            for: TranscriptionServiceError.engineFailure(code: "futureCode", message: "x")
+        )
+        XCTAssertEqual(unknown?.code, "engine.engineFailure.futureCode", "(ii)")
+        XCTAssertNil(unknown?.permissionKind, "(ii)")
+    }
+
+    /// К27: шесть строк `facade.*` (v11 добавил `jobFailed`); колонка `permissionKind` — у
+    /// `facade.permissionRequired` тот `PermissionKind`, что несёт сам случай (§3.1), у остальных `nil`.
     func test_k27_facadeRows_codeAndPermissionKind() async throws {
         let rows = facadeRows
-        XCTAssertEqual(rows.count, 5)
+        XCTAssertEqual(rows.count, 6)
         await assertRows(rows)
     }
 

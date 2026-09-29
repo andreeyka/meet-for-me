@@ -29,8 +29,8 @@
 //   • Отказ чтения записи в `retranscribe` (`StorageError`) — `storage.*` по словарю, прочее —
 //     `app.internalError`, как у прочих чтений фасада; задача не ставится.
 //   • Текст `reason` у `notAllowed` — для человека, критериев на него нет (§3.1).
-//   • `requireJobQueue` (фасад без очереди — `notAllowed`) — прежняя временная форма; по
-//     уточнению инв. 31 (IR-144) снимается вместе с опциональностью `jobQueue` в MEE-462.
+//   • Очередь — обязательный параметр `AppFacadeImpl.init` (C-016 v11 инв. 31, IR-144,
+//     MEE-462): режима «фасад без очереди» и отказа `notAllowed` на этот случай нет.
 
 import Foundation
 
@@ -39,7 +39,7 @@ extension AppFacadeImpl {
     // MARK: - Чтение
 
     public func jobs(status: JobStatus) async throws -> [Job] {
-        let queue = try requireJobQueue()
+        let queue = jobQueue
         do {
             return try await queue.jobs(status: status)
         } catch {
@@ -50,7 +50,7 @@ extension AppFacadeImpl {
     // MARK: - Команды обработки (группа Н)
 
     public func retranscribe(recordingId: UUID, profileId: String) async throws -> UUID {
-        let queue = try requireJobQueue()
+        let queue = jobQueue
         try await requireFinalizedRecording(recordingId)
         let missing: [ModelDescriptor]
         do {
@@ -70,7 +70,7 @@ extension AppFacadeImpl {
     }
 
     public func cancelJob(id: UUID) async throws {
-        let queue = try requireJobQueue()
+        let queue = jobQueue
         do {
             try await queue.cancel(jobId: id)
         } catch {
@@ -80,7 +80,7 @@ extension AppFacadeImpl {
     }
 
     public func retryJob(id: UUID) async throws -> UUID {
-        let queue = try requireJobQueue()
+        let queue = jobQueue
         let previous: Job?
         do {
             previous = try await queue.job(id: id)
@@ -124,13 +124,6 @@ extension AppFacadeImpl {
                 reason: "retranscribe: запись \(recordingId) не завершена (\(record.status.rawValue))"
             )
         }
-    }
-
-    private func requireJobQueue() throws -> JobQueue {
-        guard let jobQueue else {
-            throw AppFacadeError.notAllowed(reason: "AppFacadeImpl: очередь задач (JobQueue) фасаду не передана")
-        }
-        return jobQueue
     }
 
     private func submit(_ submission: JobSubmission, to queue: JobQueue) async throws -> UUID {

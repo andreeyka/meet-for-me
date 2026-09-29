@@ -71,6 +71,8 @@ final class ErrorDictionaryTests: XCTestCase {
             attribution: FakeAttributionPort(),
             settings: repositories.settings,
             connectors: repositories.connectors,
+            jobQueue: FakeJobQueue(),
+            fileLayout: FileLayout(root: FileManager.default.temporaryDirectory),
             clock: { Date() }
         )
         return Fixture(facade: facade, repositories: repositories, permissions: permissions)

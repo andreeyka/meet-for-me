@@ -39,7 +39,7 @@ extension JobCommandsTests {
                            "запись раньше профиля: не profileNotReady")
         }
         XCTAssertTrue(fixture.queue.submissions.isEmpty, "задача не ставится")
-        XCTAssertEqual(fixture.queue.callLog.calls(port: FakeJobQueue.portName).count, 0)
+        XCTAssertEqual(fixture.queue.callLog.count(port: FakeJobQueue.portName, method: "submit(_:)"), 0)
     }
 
     // MARK: - К37, вход В: запись не `.finalized` — `notAllowed`, по вектору на статус
@@ -61,7 +61,7 @@ extension JobCommandsTests {
                     XCTFail("\(label): ожидался notAllowed, получено \(error)")
                 }
                 XCTAssertTrue(fixture.queue.submissions.isEmpty, "\(label): задача не ставится")
-                XCTAssertEqual(fixture.queue.callLog.calls(port: FakeJobQueue.portName).count, 0, label)
+                XCTAssertEqual(fixture.queue.callLog.count(port: FakeJobQueue.portName, method: "submit(_:)"), 0, label)
             }
         }
     }
