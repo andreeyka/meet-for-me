@@ -77,7 +77,7 @@ extension EngineXPCClient {
         switch reply {
         case .failed(let jobId, let engineError) where jobId == expectedJobId:
             return TranscriptionServiceError.engineFailure(
-                code: engineErrorCode(engineError), message: "\(engineError)"
+                code: engineErrorCode(engineError), message: engineErrorMessage(engineError)
             )
         case .cancelled(let jobId) where jobId == expectedJobId:
             return TranscriptionServiceError.cancelled
@@ -85,6 +85,28 @@ extension EngineXPCClient {
             return TranscriptionServiceError.serviceUnavailable(
                 message: "нарушение протокола ответа: неожиданный кадр для \(expectedJobId)"
             )
+        }
+    }
+
+    /// К2 (MEE-454): `message` — текст самой ошибки, без обёртки имени случая (имя уже
+    /// едет в `code`). Прежде здесь стояло `"\(engineError)"`, и строка начиналась с
+    /// `invalidResult(…`, а не с описания вложенной ошибки.
+    ///
+    /// Контракт называет вид строки только для `invalidResult`: C-011 инв. 1 и C-012 §3.3 —
+    /// `message == error.description` вложенного `DomainValidationError` (C-001 §0.1). Для
+    /// остальных случаев C-012 §3.2 говорит лишь «`message` — её описание», поэтому правило
+    /// единое: одно поле — его значение как есть; несколько полей — `метка: значение` через
+    /// запятую; полей нет — имя случая (то же, что `code`), чтобы строка не была пустой.
+    private static func engineErrorMessage(_ error: EngineError) -> String {
+        switch error {
+        case .modelMissing(let modelId, let version): return "modelId: \(modelId), version: \(version)"
+        case .modelIncompatible(let modelId, let message): return "modelId: \(modelId), message: \(message)"
+        case .audioUnreadable(let path): return path
+        case .unsupportedLanguage(let language): return language
+        case .unsupportedRequest(let message): return message
+        case .outOfMemory, .cancelled: return engineErrorCode(error)
+        case .invalidResult(let validationError): return validationError.description
+        case .runtimeFailure(let message): return message
         }
     }
 
