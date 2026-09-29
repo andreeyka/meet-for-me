@@ -30,7 +30,7 @@ extension ModelCatalogManager {
         if let running = runningDownloads[key] {
             return try await running.value
         }
-        let task = Task { () throws -> Void in
+        let task = Task { () throws in
             do {
                 try await self.performDownload(key)
             } catch {
