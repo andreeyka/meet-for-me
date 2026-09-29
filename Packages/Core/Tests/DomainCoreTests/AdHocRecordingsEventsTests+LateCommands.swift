@@ -179,4 +179,3 @@ extension AdHocRecordingsEventsTests {
         XCTAssertEqual(statusChangedCount(events), 1, "\(events)")
     }
 }
-
