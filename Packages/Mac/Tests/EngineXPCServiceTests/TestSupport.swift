@@ -87,6 +87,8 @@ final class RealServiceFixture: NSObject {
     let embedding = FakeEmbeddingEngine()
     let postProcessor = FakePostProcessor()
     let modelCatalog = FakeModelCatalogPort()
+    /// MEE-480: раскладка, из которой клиент строит `AudioRef.fileURL` (C-012 v12 §1.1).
+    let temporaryLayout = TemporaryFileLayout()
     let client: EngineXPCClient
     let serviceVersion: String
 
@@ -104,7 +106,8 @@ final class RealServiceFixture: NSObject {
         self.delegate = TestServiceConnectionDelegate(engines: bundle, serviceVersion: serviceVersion)
         self.client = EngineXPCClient(
             makeConnection: { NSXPCConnection(listenerEndpoint: listener.endpoint) },
-            modelCatalog: modelCatalog, clock: clock
+            modelCatalog: modelCatalog, recordings: AnyIdFinalizedRecordingRepository(),
+            fileLayout: temporaryLayout.layout, clock: clock
         )
         super.init()
         listener.delegate = delegate

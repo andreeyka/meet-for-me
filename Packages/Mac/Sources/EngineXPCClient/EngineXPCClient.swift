@@ -31,6 +31,13 @@
 //  МОДЕЛИ (К46, К53). `resolve(profileId:)` → `beginUse(бандлы)` → отправка запроса движку →
 //  `endUse(расписка)` — дословный порядок контракта. Отказ `resolve`/`beginUse` — `modelsNotReady`,
 //  запрос движку при этом не уходит вовсе (счётчик отправок транспорта не растёт).
+//
+//  ЗАПИСЬ И ДОРОЖКИ (C-012 v12 §1.1, инв. 24–26; MEE-480). До каталога моделей — один вызов
+//  `RecordingRepository.recording(id:)`; пригодна запись, которая есть и у которой
+//  `status == .finalized` (`manifest.isFinalized` не читается — v12). Отказы по записи —
+//  `recordingNotReady`, до `resolve`/`beginUse`; бросок репозитория — `serviceUnavailable`
+//  (последняя строка §3.2). `AudioRef` — по одной на каждую `Track` манифеста, `offsetMs == 0`.
+//  `.diarize` адаптер не отправляет (инв. 26): `diarizeSystemChannel` в срезе 1 не читается.
 
 import Foundation
 import DomainCore
@@ -48,6 +55,8 @@ public final class EngineXPCClient: TranscriptionServicePort, @unchecked Sendabl
 
     let makeConnection: @Sendable () -> NSXPCConnection
     private let modelCatalog: ModelCatalogPort
+    private let recordings: RecordingRepository
+    private let fileLayout: FileLayout
     let clock: @Sendable () -> Date
 
     let lock = NSLock()
@@ -73,10 +82,20 @@ public final class EngineXPCClient: TranscriptionServicePort, @unchecked Sendabl
     /// MEE-471: прежний вход `init(machServiceName:modelCatalog:)` (служба launchd) убран —
     /// контракт кладёт сервис только в `XPCServices`, вызывающих у входа не было ни одного, а
     /// второй публичный путь соединения, который никто не собирает, — непроверяемая поверхность.
-    public convenience init(serviceName: String, modelCatalog: ModelCatalogPort) {
+    ///
+    /// MEE-480 (C-012 v12 §1.1): `recordings` и `fileLayout` — те же, что получает фасад
+    /// (C-016): путь к дорожке строится той же формулой, что `AudioTrackRef.fileURL`.
+    public convenience init(
+        serviceName: String,
+        modelCatalog: ModelCatalogPort,
+        recordings: RecordingRepository,
+        fileLayout: FileLayout
+    ) {
         self.init(
             makeConnection: { NSXPCConnection(serviceName: serviceName) },
             modelCatalog: modelCatalog,
+            recordings: recordings,
+            fileLayout: fileLayout,
             clock: { Date() }
         )
     }
@@ -86,10 +105,14 @@ public final class EngineXPCClient: TranscriptionServicePort, @unchecked Sendabl
     init(
         makeConnection: @escaping @Sendable () -> NSXPCConnection,
         modelCatalog: ModelCatalogPort,
+        recordings: RecordingRepository,
+        fileLayout: FileLayout,
         clock: @escaping @Sendable () -> Date = { Date() }
     ) {
         self.makeConnection = makeConnection
         self.modelCatalog = modelCatalog
+        self.recordings = recordings
+        self.fileLayout = fileLayout
         self.clock = clock
     }
 
@@ -118,14 +141,16 @@ public final class EngineXPCClient: TranscriptionServicePort, @unchecked Sendabl
         _ spec: TranscriptionJobSpec,
         progress: @Sendable @escaping (TranscriptionProgress) -> Void
     ) async throws -> Transcript {
+        // C-012 v12 §1.1: запись — раньше каталога моделей (инв. 24).
+        let manifest = try await readyManifest(recordingId: spec.recordingId)
         let profile = try await resolveProfile(spec.profileId)
         var bundles = [profile.asr]
         if let vad = profile.vad { bundles.append(vad) }
         return try await withModelUse(profileId: spec.profileId, bundles) {
             let request = try Self.buildRequest {
-                let audio = try Self.placeholderAudioRef(recordingId: spec.recordingId)
+                let audio = try manifest.tracks.map { try self.audioRef(for: $0, of: manifest) }
                 return try TranscriptionRequest(
-                    audio: [audio], language: spec.language, wantWordTimestamps: spec.wantWordTimestamps,
+                    audio: audio, language: spec.language, wantWordTimestamps: spec.wantWordTimestamps,
                     asrModel: profile.asr, vadModel: profile.vad
                 )
             }
@@ -138,6 +163,14 @@ public final class EngineXPCClient: TranscriptionServicePort, @unchecked Sendabl
     }
 
     public func embed(recordingId: UUID, startMs: Int, endMs: Int, profileId: String) async throws -> [Float] {
+        // C-012 v12 §1.1: `embed` берёт дорожку `.system`; её отсутствие — третья причина
+        // `recordingNotReady`, и она тоже до каталога моделей.
+        let manifest = try await readyManifest(recordingId: recordingId)
+        guard let systemTrack = manifest.tracks.first(where: { $0.channel == .system }) else {
+            throw TranscriptionServiceError.recordingNotReady(
+                recordingId: recordingId, message: "нет дорожки system"
+            )
+        }
         let profile = try await resolveProfile(profileId)
         guard let embeddingModel = profile.embedding else {
             throw TranscriptionServiceError.modelsNotReady(
@@ -146,7 +179,7 @@ public final class EngineXPCClient: TranscriptionServicePort, @unchecked Sendabl
         }
         return try await withModelUse(profileId: profileId, [embeddingModel]) {
             let request = try Self.buildRequest {
-                let audio = try Self.placeholderAudioRef(recordingId: recordingId)
+                let audio = try self.audioRef(for: systemTrack, of: manifest)
                 let slice = try AudioSlice(source: audio, startMs: startMs, endMs: endMs)
                 return try EmbeddingRequest(slice: slice, model: embeddingModel)
             }
@@ -208,16 +241,40 @@ public final class EngineXPCClient: TranscriptionServicePort, @unchecked Sendabl
         }
     }
 
-    /// Заглушка на время этого тикета: чтение `RecordingManifest` (C-002) под настоящий
-    /// путь к файлу записи — отдельная зависимость (`RecordingRepository`), которой у
-    /// `EngineXPCClient` сегодня нет (не в зоне MEE-431, не в `allowed-types/EngineXPCClient.json`)
-    /// и не нужна ни одному критерию плана MEE-389 в зоне этой задачи — все они проверяют
-    /// поведение транспорта на `LoopbackEngineTransport`+фейковых движках, которым точное
-    /// содержимое `AudioRef` безразлично. Раскрыто отдельной строкой РП, не молчаливый долг.
-    private static func placeholderAudioRef(recordingId: UUID) throws -> AudioRef {
+    // MARK: - Запись и дорожки (C-012 v12 §1.1, инв. 24, 25)
+
+    /// Единственное обращение к `RecordingRepository` (инв. 24). Пригодна запись, которая
+    /// есть и у которой `status == .finalized`; `manifest.isFinalized` не читается (v12).
+    private func readyManifest(recordingId: UUID) async throws -> RecordingManifest {
+        let record: RecordingRecord?
+        do {
+            record = try await recordings.recording(id: recordingId)
+        } catch {
+            // §1.1: бросок репозитория (в том числе манифест не читается) — не
+            // `recordingNotReady`, а последняя строка §3.2.
+            throw TranscriptionServiceError.serviceUnavailable(message: "recording(id:): \(error)")
+        }
+        guard let record else {
+            throw TranscriptionServiceError.recordingNotReady(recordingId: recordingId, message: "записи нет")
+        }
+        guard record.status == .finalized else {
+            throw TranscriptionServiceError.recordingNotReady(
+                recordingId: recordingId, message: "status = \(record.status.rawValue)"
+            )
+        }
+        return record.manifest
+    }
+
+    /// Инв. 25: поля — из манифеста и `Track` как есть; путь — формулой
+    /// `AudioTrackRef.fileURL` (C-016 §1); `offsetMs == 0` всегда (§1.1, «Почему ноль»).
+    private func audioRef(for track: RecordingManifest.Track, of manifest: RecordingManifest) throws -> AudioRef {
         try AudioRef(
-            recordingId: recordingId, channel: .system,
-            fileURL: URL(fileURLWithPath: "/dev/null"), sampleRate: 16_000, channelCount: 1, offsetMs: 0
+            recordingId: manifest.recordingId,
+            channel: track.channel,
+            fileURL: fileLayout.recordingDirectory(manifest.directoryName).appendingPathComponent(track.fileName),
+            sampleRate: track.sampleRate,
+            channelCount: track.channelCount,
+            offsetMs: 0
         )
     }
 

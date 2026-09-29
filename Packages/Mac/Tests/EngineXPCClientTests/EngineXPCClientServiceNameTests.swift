@@ -1,4 +1,5 @@
-//  EngineXPCClientServiceNameTests — MEE-471: публичный вход `init(serviceName:modelCatalog:)`
+//  EngineXPCClientServiceNameTests — MEE-471, MEE-480: публичный вход
+//  `init(serviceName:modelCatalog:recordings:fileLayout:)` (C-012 v12 §1.1)
 //  соединяется со встроенным XPC-сервисом приложения (C-012 v10 §3,
 //  `Contents/XPCServices/TranscriptionEngine.xpc`) через `NSXPCConnection(serviceName:)`.
 //  Проверяется фабрикой `makeConnection` — реальный сервис не нужен: соединение создаётся и не
@@ -12,9 +13,17 @@ import DomainTestKit
 final class EngineXPCClientServiceNameTests: XCTestCase {
 
     private let serviceName = "com.example.meetforme.TranscriptionEngine"
+    private let temporaryLayout = TemporaryFileLayout()
+
+    private func makeClient() -> EngineXPCClient {
+        EngineXPCClient(
+            serviceName: serviceName, modelCatalog: FakeModelCatalogPort(),
+            recordings: InMemoryRecordingRepository(), fileLayout: temporaryLayout.layout
+        )
+    }
 
     func testServiceNameInitMakesConnectionToThatService() {
-        let client = EngineXPCClient(serviceName: serviceName, modelCatalog: FakeModelCatalogPort())
+        let client = makeClient()
 
         let connection = client.makeConnection()
         defer { connection.invalidate() }
@@ -25,7 +34,7 @@ final class EngineXPCClientServiceNameTests: XCTestCase {
     /// К30 без изменений: фабрика — не хранимое значение, каждый вызов даёт НОВОЕ соединение к
     /// тому же имени (пересоздание после обрыва идёт через неё же).
     func testServiceNameFactoryMakesFreshConnectionEachCall() {
-        let client = EngineXPCClient(serviceName: serviceName, modelCatalog: FakeModelCatalogPort())
+        let client = makeClient()
 
         let first = client.makeConnection()
         let second = client.makeConnection()

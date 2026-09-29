@@ -127,6 +127,8 @@ final class RequestSurgeryFixture: NSObject, NSXPCListenerDelegate, @unchecked S
     typealias Surgery = @Sendable (EngineRequest, String) throws -> String
 
     let modelCatalog = FakeModelCatalogPort()
+    /// MEE-480: раскладка, из которой клиент строит `AudioRef.fileURL` (C-012 v12 §1.1).
+    let temporaryLayout = TemporaryFileLayout()
     let client: EngineXPCClient
 
     private let listener: NSXPCListener
@@ -145,7 +147,8 @@ final class RequestSurgeryFixture: NSObject, NSXPCListenerDelegate, @unchecked S
         self.listener = listener
         self.client = EngineXPCClient(
             makeConnection: { NSXPCConnection(listenerEndpoint: listener.endpoint) },
-            modelCatalog: modelCatalog
+            modelCatalog: modelCatalog, recordings: AnyIdFinalizedRecordingRepository(),
+            fileLayout: temporaryLayout.layout
         )
         super.init()
         listener.delegate = self
