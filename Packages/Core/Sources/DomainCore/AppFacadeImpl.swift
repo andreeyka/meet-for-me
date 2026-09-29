@@ -185,7 +185,7 @@ public actor AppFacadeImpl: AppFacade {
         }
     }
 
-    private func wrap(_ error: PermissionsError) -> AppFacadeError {
+    func wrap(_ error: PermissionsError) -> AppFacadeError {
         let code: String
         switch error {
         case .loginItemRegistrationFailed: code = "permissions.loginItemRegistrationFailed"
