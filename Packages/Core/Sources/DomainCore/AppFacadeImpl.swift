@@ -30,8 +30,9 @@
 //  `skipMeeting` (группа Х, К47) — `AppFacadeImpl+Recording.swift`, рядом со
 //  `startRecording`/`stopRecording` (то же «Команды записи» перечня).
 //
-//  `status()` — минимальная, честно неполная реализация: `activeSession` оставлено пустым
-//  (группа Р ещё не реализована), `upcoming`/счётчики задач — нули/пусто до групп Н/К.
+//  `status()` — честно неполная реализация: `activeSession` собирается из `SessionCoordinator`
+//  и потока `AudioCapturePort.events()` (группа Р, К42, MEE-449 — `AppFacadeImpl+ActiveSession.
+//  swift`), `upcoming`/счётчики задач — нули/пусто до групп Н/К.
 //  `connectors` тоже оставлено пустым, хотя группа О (МЕЕ-441) реализована: ни один критерий
 //  плана (К39-К41) не требует его наполнения, а `ConnectorHealthView.displayName`/
 //  `needsAuthorization` не из чего честно собрать за пределами одного источника — см.
@@ -65,6 +66,9 @@ public actor AppFacadeImpl: AppFacade {
     let attribution: AttributionPort
     let settingsRepository: SettingsRepository
     let connectors: ConnectorRepository
+    /// К42 (MEE-449): источник снимков состава захвата и уровней; `nil` — фасад их не
+    /// наблюдает, и поля `ActiveSessionView` остаются «ещё не наблюдали» (инв. 27).
+    let capture: AudioCapturePort?
     let clock: @Sendable () -> Date
 
     nonisolated let broadcaster = AppEventBroadcaster()
@@ -74,6 +78,10 @@ public actor AppFacadeImpl: AppFacade {
     /// `AppFacadeImpl+PermissionsObservation.swift`. Живёт весь срок жизни актора — тот же
     /// класс долгоживущего состояния, что `AppEventBroadcaster.continuations`.
     var lastKnownPermissionsReadiness: PermissionsReadiness?
+
+    /// К42 (MEE-449): последний снимок состава и последние уровни идущего захвата —
+    /// `AppFacadeImpl+ActiveSession.swift`.
+    var captureObservation = CaptureObservation()
 
     public init(
         meetings: MeetingRepository,
@@ -88,6 +96,7 @@ public actor AppFacadeImpl: AppFacade {
         attribution: AttributionPort,
         settings: SettingsRepository,
         connectors: ConnectorRepository,
+        capture: AudioCapturePort? = nil,
         clock: @escaping @Sendable () -> Date = { Date() }
     ) {
         self.meetingRepository = meetings
@@ -102,6 +111,7 @@ public actor AppFacadeImpl: AppFacade {
         self.attribution = attribution
         self.settingsRepository = settings
         self.connectors = connectors
+        self.capture = capture
         self.clock = clock
         // Возврат РП (находка 4): подписка на смену прав живёт весь срок жизни фасада —
         // `permissions.changes()` вызван ЗДЕСЬ, синхронно, до возврата из `init` (`AsyncStream`
@@ -121,6 +131,15 @@ public actor AppFacadeImpl: AppFacade {
             for await snapshot in permissionChanges {
                 guard let self else { return }
                 await self.handlePermissionsChange(snapshot)
+            }
+        }
+        // К42 (MEE-449): тот же приём — поток захвата взят синхронно, до возврата из `init`.
+        if let captureEvents = capture?.events() {
+            Task { [weak self] in
+                for await event in captureEvents {
+                    guard let self else { return }
+                    await self.handleCaptureEvent(event)
+                }
             }
         }
     }
@@ -231,7 +250,7 @@ public actor AppFacadeImpl: AppFacade {
         }
     }
 
-    // MARK: - `status()` — минимальная реализация, см. заголовок файла
+    // MARK: - `status()` — см. заголовок файла
 
     public func status() async -> AppStatus {
         let upcomingItems = (try? await meetingListItems(from: clock(), to: .distantFuture)) ?? []
@@ -241,7 +260,7 @@ public actor AppFacadeImpl: AppFacade {
         // не читало ни разу (§2.1: «строки нет — берётся значение из slice1Defaults»).
         let currentSettings = (try? await settings()) ?? AppSettings.slice1Defaults
         return AppStatus(
-            activeSession: nil,
+            activeSession: await activeSessionView(),
             upcoming: upcomingItems,
             runningJobs: [],
             pendingJobCount: 0,

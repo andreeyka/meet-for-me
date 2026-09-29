@@ -234,14 +234,32 @@ extension AppFacadeImpl {
         ))
     }
 
-    // MARK: - Ещё не реализовано этим PR — см. заголовок AppFacadeImpl.swift
-
-    public func meeting(id: UUID) async throws -> MeetingDetail? {
-        throw notImplemented("meeting(id:)", group: "В (модели чтения — MeetingDetail)")
+    /// Поиск (C-016 §4, `// C-010`): сквозная обёртка над `TranscriptRepository.search(query:
+    /// limit:offset:)` — аргументы и ответ проходят без изменений (§«Поведение»: «тонкий слой
+    /// сборки»), отказ хранилища — `.underlying` с кодом `storage.*` (инв. 19, §3.1).
+    public func search(query: String, limit: Int, offset: Int) async throws -> [SearchHit] {
+        do {
+            return try await transcripts.search(query: query, limit: limit, offset: offset)
+        } catch let error as StorageError {
+            throw wrap(error)
+        } catch {
+            throw wrapUnexpected(error)
+        }
     }
 
-    public func search(query: String, limit: Int, offset: Int) async throws -> [SearchHit] {
-        throw notImplemented("search(query:limit:offset:)", group: "З (словарь ошибок/поиск)")
+    // MARK: - Ещё не реализовано — см. заголовок AppFacadeImpl.swift
+
+    /// MEE-449: остановлено на вопросе к контракту, а не догадкой. `MeetingDetail.attendees:
+    /// [PersonRecord]` и `organizer: PersonRecord?` (C-016 §1) не из чего собрать через C-010:
+    /// строки `attendees`/`organizer_person_id` хранилище ведёт, но ни `MeetingRepository`, ни
+    /// `PersonRepository` их не читают, а `MeetingEvent.Attendee` (C-001) несёт имя/адрес, не
+    /// `PersonRecord.id`; участник без адреса недостижим через `person(email:)` вовсе.
+    /// Вопрос — в отчёте MEE-449 (IR через РП).
+    public func meeting(id: UUID) async throws -> MeetingDetail? {
+        throw AppFacadeError.notAllowed(
+            reason: "AppFacadeImpl.meeting(id:) — ждёт ответа архитектора: источник MeetingDetail.attendees/"
+                + "organizer в C-010 не назван (MEE-449)"
+        )
     }
 
     public func jobs(status: JobStatus) async throws -> [Job] {
