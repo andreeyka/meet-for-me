@@ -12,6 +12,8 @@ public struct AudioRef: Codable, Equatable, Sendable, DomainValidatable {
     public let fileURL: URL
     public let sampleRate: Int
     public let channelCount: Int
+    /// Позиция на шкале записи (C-002), где лежит кадр 0 файла (C-011 v7, инв. 16). Из файла
+    /// по ней ничего не отрезается: метки результата = время в файле + `offsetMs` (инв. 4).
     public let offsetMs: Int
 
     public init(
@@ -60,7 +62,11 @@ public struct AudioRef: Codable, Equatable, Sendable, DomainValidatable {
     }
 }
 
-/// Вырезка `source` на его собственной шкале (после `offsetMs`, не до).
+/// Вырезка `source`; `startMs`/`endMs` — на шкале записи (C-002), не файла. C-011 v7, инв. 16
+/// (IR-148): позиция в файле = позиция на шкале − `source.offsetMs`; первый кадр —
+/// `round((startMs − source.offsetMs) · source.sampleRate / 1000)` (половина — от нуля), кадр за
+/// последним — та же формула от `endMs`; конец за концом файла обрезается; `startMs <
+/// source.offsetMs` и срез без единого кадра после обрезки — `EngineError.unsupportedRequest`.
 public struct AudioSlice: Codable, Equatable, Sendable, DomainValidatable {
     public let source: AudioRef
     public let startMs: Int

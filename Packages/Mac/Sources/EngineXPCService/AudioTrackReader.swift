@@ -12,10 +12,13 @@
 //  `[Float]`: ни один тип `AVFoundation` наружу не выходит (барьер символьного графа —
 //  заголовок `EngineXPCRequestHandler.swift`).
 //
-//  ШКАЛА (MEE-475, «Предмет»; шапка `EngineAudio.swift`). Образцы файла до `offsetMs` не
-//  отдаются; отрезок `AudioSlice` отсчитывается по шкале дорожки ПОСЛЕ `offsetMs`: кадр
-//  `startMs` вырезки — это кадр `offsetMs + startMs` файла. Части вырезки за концом файла нет —
-//  она не дополняется нулями; пустая или обратная вырезка (`endMs <= startMs`) даёт `[]`.
+//  ШКАЛА — C-011 v7, инвариант 16 (IR-148). `offsetMs` — позиция на шкале записи, где лежит
+//  кадр 0 файла; позиция в файле = позиция на шкале − `offsetMs`. Из файла ничего не
+//  отрезается: `read(AudioRef)` отдаёт файл целиком. Вырезка `AudioSlice`: первый кадр —
+//  `round((startMs − offsetMs) · sampleRate / 1000)`, кадр за последним — та же формула от
+//  `endMs`; `round` — до ближайшего, половина от нуля. Конец за концом файла обрезается по
+//  концу файла. `startMs < offsetMs` и вырезка без единого кадра после обрезки —
+//  `unsupportedRequest`.
 //
 //  ПОТОКОВО. Файл читается блоками по `blockFrames` кадров исходной частоты; каждый блок сразу
 //  уходит в `AVAudioConverter` (передискретизация и сведение в моно, `downmix = true` — среднее
@@ -27,9 +30,11 @@
 //  `AVAudioFile.length` из размера файла (неполный последний кадр отброшен). Цикл чтения идёт
 //  до этой длины — заявленная −1 на результат не влияет.
 //
-//  ОТКАЗЫ — `EngineError` (C-011), без нового случая (MEE-475): файла нет, не открывается или
-//  не читается — `.runtimeFailure(message:)` с путём; `sampleRate`/`channelCount` в `AudioRef`
-//  не совпадают с заголовком файла — то же, с обоими значениями.
+//  ОТКАЗЫ — C-011 v7, инвариант 17 (IR-148). Файла нет, он не открывается, не разбирается как
+//  аудио либо чтение оборвалось — `audioUnreadable(path:)` с путём из `fileURL`. Заголовок не
+//  совпал с `AudioRef` (`sampleRate` или число каналов) — `unsupportedRequest(message:)` с
+//  заявленным и найденным значениями. Оба перманентны (C-012 §4); `runtimeFailure` остаётся
+//  только за сбоем самого преобразования (конвертер, буфер), к файлу отношения не имеющим.
 
 import AVFoundation
 import EngineKit
@@ -43,57 +48,70 @@ public enum AudioTrackReader {
     /// Кадров исходной частоты на блок чтения: секунда при 48 кГц.
     static let blockFrames: AVAudioFrameCount = 48_000
 
-    /// Вся дорожка после `offsetMs`.
+    /// Вся дорожка, от кадра 0 файла до конца (`offsetMs` ничего не отрезает — инв. 16).
     public static func read(_ ref: AudioRef) throws -> [Float] {
-        try read(ref, startMs: 0, endMs: nil)
-    }
-
-    /// Вырезка `startMs..<endMs` на шкале дорожки после `offsetMs`.
-    public static func read(_ slice: AudioSlice) throws -> [Float] {
-        guard slice.endMs > slice.startMs else { return [] }
-        return try read(slice.source, startMs: max(0, slice.startMs), endMs: slice.endMs)
-    }
-
-    // MARK: - Реализация
-
-    private static func read(_ ref: AudioRef, startMs: Int, endMs: Int?) throws -> [Float] {
         let file = try open(ref)
-        let sourceRate = file.fileFormat.sampleRate
-        let firstFrame = frames(ms: max(0, ref.offsetMs) + startMs, rate: sourceRate)
-        let lastFrame = endMs.map { frames(ms: max(0, ref.offsetMs) + $0, rate: sourceRate) }
+        return try convert(file, frames: 0..<file.length, path: ref.fileURL.path)
+    }
 
-        // За концом файла читать нечего (`length` у CAF с длиной −1 — из размера файла).
-        if firstFrame >= file.length { return [] }
-        file.framePosition = firstFrame
+    /// Вырезка `startMs..<endMs` на шкале записи (инв. 16).
+    public static func read(_ slice: AudioSlice) throws -> [Float] {
+        let ref = slice.source
+        let file = try open(ref)
+        let range = try frameRange(
+            startMs: slice.startMs, endMs: slice.endMs, offsetMs: ref.offsetMs,
+            sampleRate: ref.sampleRate, fileLength: file.length
+        )
+        return try convert(file, frames: range, path: ref.fileURL.path)
+    }
 
-        guard let target = AVAudioFormat(
-            commonFormat: .pcmFormatFloat32, sampleRate: Double(outputSampleRate),
-            channels: 1, interleaved: false
-        ), let converter = AVAudioConverter(from: file.processingFormat, to: target) else {
-            throw EngineError.runtimeFailure(
-                message: "нет преобразования \(file.processingFormat) → 16000 Гц моно: \(ref.fileURL.path)"
+    // MARK: - Шкала (инв. 16)
+
+    /// Кадры файла для вырезки `startMs..<endMs` на шкале записи: `round((ms − offsetMs) ·
+    /// sampleRate / 1000)` на обоих концах, конец обрезан по `fileLength`.
+    static func frameRange(
+        startMs: Int, endMs: Int, offsetMs: Int, sampleRate: Int, fileLength: AVAudioFramePosition
+    ) throws -> Range<AVAudioFramePosition> {
+        guard startMs >= offsetMs else {
+            throw EngineError.unsupportedRequest(
+                message: "начало среза \(startMs) мс раньше начала файла на шкале записи (offsetMs \(offsetMs))"
             )
         }
-        converter.downmix = true
-
-        let source = BlockSource(file: file, remaining: lastFrame.map { max(0, $0 - firstFrame) })
-        return try convert(from: source, with: converter, into: target, path: ref.fileURL.path)
+        let first = frame(ms: startMs - offsetMs, sampleRate: sampleRate)
+        let last = min(frame(ms: endMs - offsetMs, sampleRate: sampleRate), fileLength)
+        guard last > first else {
+            throw EngineError.unsupportedRequest(message: """
+                срез \(startMs)..<\(endMs) мс (offsetMs \(offsetMs)) не содержит ни одного кадра файла \
+                длиной \(fileLength) кадров
+                """)
+        }
+        return first..<last
     }
+
+    /// `round(ms · sampleRate / 1000)`, половина — от нуля. В целых: без погрешности `Double`.
+    static func frame(ms: Int, sampleRate: Int) -> AVAudioFramePosition {
+        let scaled = Int64(ms) * Int64(sampleRate)
+        let (quotient, remainder) = scaled.quotientAndRemainder(dividingBy: 1000)
+        let roundsAway = abs(remainder) * 2 >= 1000
+        return AVAudioFramePosition(quotient + (roundsAway ? (scaled < 0 ? -1 : 1) : 0))
+    }
+
+    // MARK: - Файл (инв. 17)
 
     private static func open(_ ref: AudioRef) throws -> AVAudioFile {
         let path = ref.fileURL.path
         guard FileManager.default.fileExists(atPath: path) else {
-            throw EngineError.runtimeFailure(message: "дорожка не найдена: \(path)")
+            throw EngineError.audioUnreadable(path: path)
         }
         let file: AVAudioFile
         do {
             file = try AVAudioFile(forReading: ref.fileURL, commonFormat: .pcmFormatFloat32, interleaved: false)
         } catch {
-            throw EngineError.runtimeFailure(message: "дорожка не читается: \(path): \(error.localizedDescription)")
+            throw EngineError.audioUnreadable(path: path)
         }
         let header = file.fileFormat
         if Double(ref.sampleRate) != header.sampleRate || ref.channelCount != Int(header.channelCount) {
-            throw EngineError.runtimeFailure(message: """
+            throw EngineError.unsupportedRequest(message: """
                 заголовок дорожки не совпадает с AudioRef: \(path): \
                 sampleRate AudioRef \(ref.sampleRate), файл \(Int(header.sampleRate)); \
                 channelCount AudioRef \(ref.channelCount), файл \(header.channelCount)
@@ -102,8 +120,24 @@ public enum AudioTrackReader {
         return file
     }
 
-    private static func frames(ms: Int, rate: Double) -> AVAudioFramePosition {
-        AVAudioFramePosition((Double(ms) * rate / 1000).rounded())
+    // MARK: - Преобразование
+
+    private static func convert(
+        _ file: AVAudioFile, frames: Range<AVAudioFramePosition>, path: String
+    ) throws -> [Float] {
+        guard !frames.isEmpty else { return [] }
+        file.framePosition = frames.lowerBound
+        guard let target = AVAudioFormat(
+            commonFormat: .pcmFormatFloat32, sampleRate: Double(outputSampleRate),
+            channels: 1, interleaved: false
+        ), let converter = AVAudioConverter(from: file.processingFormat, to: target) else {
+            throw EngineError.runtimeFailure(
+                message: "нет преобразования \(file.processingFormat) → 16000 Гц моно: \(path)"
+            )
+        }
+        converter.downmix = true
+        let source = BlockSource(file: file, remaining: AVAudioFramePosition(frames.count))
+        return try convert(from: source, with: converter, into: target, path: path)
     }
 
     private static func convert(
@@ -135,10 +169,9 @@ public enum AudioTrackReader {
                 inputStatus.pointee = .endOfStream
                 return nil
             }
-            if let readError {
-                throw EngineError.runtimeFailure(
-                    message: "дорожка не читается: \(path): \(readError.localizedDescription)"
-                )
+            if readError != nil {
+                // Чтение оборвалось посреди файла — инв. 17: `audioUnreadable`.
+                throw EngineError.audioUnreadable(path: path)
             }
             if status == .error {
                 let reason = conversionError?.localizedDescription ?? "неизвестная ошибка"

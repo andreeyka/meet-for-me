@@ -1,5 +1,7 @@
 //  AudioTrackReaderTests — MEE-475, «Готовность»: чтение `pcm-caf` 48 кГц в 16 кГц моно Float32
 //  на синтетических CAF (синус известной частоты), сгенерированных в тесте во временной папке.
+//  Формат и длина результата, потоковое чтение, CAF с длиной −1. Шкала вырезки (C-011 v7,
+//  инв. 16) — `AudioTrackReaderScaleTests`, отказы (инв. 17) — `AudioTrackReaderFailureTests`.
 
 import XCTest
 import EngineKit
@@ -58,60 +60,6 @@ final class AudioTrackReaderTests: AudioTrackReaderTestCase {
         XCTAssertLessThan(maxStep, 0.18)
     }
 
-    /// `offsetMs`: образцы файла до смещения не отдаются. Файл — 250 мс тишины, затем 750 мс
-    /// синуса; при `offsetMs == 250` результат короче на 250 мс и начинается сразу с синуса.
-    func testOffsetMsDropsSamplesBeforeOffset() throws {
-        let url = try SyntheticCAF.write(
-            [SyntheticCAF.silence(ms: 250, channels: 2), SyntheticCAF.tone(ms: 750, hz: 440, amplitudes: [1, 1])],
-            sampleRate: 48_000, channels: 2, to: directory
-        )
-
-        let whole = try AudioTrackReader.read(audioRef(url, channelCount: 2))
-        let shifted = try AudioTrackReader.read(audioRef(url, channelCount: 2, offsetMs: 250))
-
-        XCTAssertEqual(Double(whole.count), 16_000, accuracy: 1)
-        XCTAssertEqual(Double(shifted.count), 12_000, accuracy: 1)
-        XCTAssertLessThan(SignalProbe.rms(whole, in: 100..<3_800), 0.01, "без смещения начало — тишина")
-        XCTAssertGreaterThan(SignalProbe.rms(shifted, in: 100..<3_800), 0.6, "со смещением начало — синус")
-    }
-
-    /// Отрезок `AudioSlice` — на шкале дорожки после `offsetMs`. Файл: 500 мс тишины, 500 мс
-    /// синуса; `offsetMs == 250` — дорожка: [0, 250) тишина, [250, 750) синус.
-    func testAudioSliceIsOnTrackScaleAfterOffset() throws {
-        let url = try SyntheticCAF.write(
-            [SyntheticCAF.silence(ms: 500, channels: 2), SyntheticCAF.tone(ms: 500, hz: 440, amplitudes: [1, 1])],
-            sampleRate: 48_000, channels: 2, to: directory
-        )
-        let ref = try audioRef(url, channelCount: 2, offsetMs: 250)
-
-        let silent = try AudioTrackReader.read(AudioSlice(source: ref, startMs: 0, endMs: 200))
-        let tone = try AudioTrackReader.read(AudioSlice(source: ref, startMs: 300, endMs: 700))
-
-        XCTAssertEqual(Double(silent.count), 3_200, accuracy: 1)
-        XCTAssertEqual(Double(tone.count), 6_400, accuracy: 1)
-        XCTAssertLessThan(SignalProbe.rms(silent, in: 100..<3_100), 0.01)
-        let interior = 200..<6_200
-        XCTAssertGreaterThan(SignalProbe.rms(tone, in: interior), 0.6)
-        XCTAssertEqual(SignalProbe.frequency(tone, in: interior, sampleRate: rate), 440, accuracy: 5)
-    }
-
-    /// Хвост вырезки за концом файла нулями не дополняется; пустая вырезка — `[]`.
-    func testAudioSliceIsClampedToEndOfFileAndEmptySliceIsEmpty() throws {
-        let url = try SyntheticCAF.write(
-            [SyntheticCAF.tone(ms: 1_000, hz: 440, amplitudes: [1])],
-            sampleRate: 48_000, channels: 1, to: directory
-        )
-        let ref = try audioRef(url, channelCount: 1, channel: .mic)
-
-        let tail = try AudioTrackReader.read(AudioSlice(source: ref, startMs: 750, endMs: 5_000))
-        let beyond = try AudioTrackReader.read(AudioSlice(source: ref, startMs: 2_000, endMs: 3_000))
-        let empty = try AudioTrackReader.read(AudioSlice(source: ref, startMs: 500, endMs: 500))
-
-        XCTAssertEqual(Double(tail.count), 4_000, accuracy: 1)
-        XCTAssertEqual(beyond, [])
-        XCTAssertEqual(empty, [])
-    }
-
     /// CAF с `data`-чанком длины −1 (запись оборвана `SIGKILL`, К27(б) C-004) читается до
     /// конца файла, а не отказом — тот же результат, что у честно закрытого файла.
     func testUnknownLengthCAFIsReadToEndOfFile() throws {
@@ -130,7 +78,7 @@ final class AudioTrackReaderTests: AudioTrackReaderTestCase {
         XCTAssertEqual(fromOpen, fromClosed)
         let openRef = try audioRef(open, channelCount: 2)
         let slice = try AudioTrackReader.read(AudioSlice(source: openRef, startMs: 1_000, endMs: 9_000))
-        XCTAssertEqual(Double(slice.count), 8_000, accuracy: 1)
+        XCTAssertEqual(Double(slice.count), 8_000, accuracy: 1, "конец среза обрезан по концу файла")
     }
 
     /// `SIGKILL` посреди записи блока оставляет неполный последний кадр: он отбрасывается,

@@ -125,19 +125,29 @@ class AudioTrackReaderTestCase: XCTestCase {
         )
     }
 
-    func assertRuntimeFailure(
-        _ body: () throws -> [Float], contains fragments: [String],
+    /// `unsupportedRequest(message:)`, и в `message` — каждый из `fragments` (C-011 v7, инв. 16, 17).
+    func assertUnsupportedRequest(
+        _ body: () throws -> [Float], contains fragments: [String] = [],
         file: StaticString = #filePath, line: UInt = #line
     ) {
         XCTAssertThrowsError(try body(), file: file, line: line) { error in
-            guard case EngineError.runtimeFailure(let message) = error else {
-                return XCTFail("ожидался EngineError.runtimeFailure, получено \(error)", file: file, line: line)
+            guard case EngineError.unsupportedRequest(let message) = error else {
+                return XCTFail("ожидался EngineError.unsupportedRequest, получено \(error)", file: file, line: line)
             }
             for fragment in fragments {
                 XCTAssertTrue(
                     message.contains(fragment), "«\(message)» не содержит «\(fragment)»", file: file, line: line
                 )
             }
+        }
+    }
+
+    /// `audioUnreadable(path:)` ровно с путём из `fileURL` (C-011 v7, инв. 17).
+    func assertAudioUnreadable(
+        _ body: () throws -> [Float], path: String, file: StaticString = #filePath, line: UInt = #line
+    ) {
+        XCTAssertThrowsError(try body(), file: file, line: line) { error in
+            XCTAssertEqual(error as? EngineError, .audioUnreadable(path: path), file: file, line: line)
         }
     }
 }
