@@ -43,7 +43,7 @@ final class EngineXPCClientCancelRaceTests: XCTestCase {
     /// сервис не уходит вовсе (тот же `jobId` на сервисе ровно один раз — сам `transcribe`).
     func test_k27_cancelAfterResultArrivedStillReturnsNormalResult() async throws {
         let gate = EndUseGate()
-        let fixture = XPCFixture(wrapCatalog: { GatedEndUseCatalog(base: $0, gate: gate) })
+        let fixture = XPCFixture.transportOnly(wrapCatalog: { GatedEndUseCatalog(base: $0, gate: gate) })
         configureReadyProfile(fixture.modelCatalog)
 
         let task = Task {
@@ -68,7 +68,7 @@ final class EngineXPCClientCancelRaceTests: XCTestCase {
     func test_k53_transcribeTaskCancelReleasesModelUseTokenExactlyOnce() async throws {
         let engine = FakeTranscriptionEngine()
         engine.simulatedWorkNanoseconds = 2_000_000_000
-        let fixture = XPCFixture(service: TestEngineXPCService(transcription: engine))
+        let fixture = XPCFixture.transportOnly(service: TestEngineXPCService(transcription: engine))
         configureReadyProfile(fixture.modelCatalog)
 
         let task = Task {
@@ -89,7 +89,7 @@ final class EngineXPCClientCancelRaceTests: XCTestCase {
     }
 
     func test_k53_embedTaskCancelReleasesModelUseTokenExactlyOnce() async throws {
-        let fixture = XPCFixture(service: TestEngineXPCService(embedding: SlowEmbeddingEngine()))
+        let fixture = XPCFixture.transportOnly(service: TestEngineXPCService(embedding: SlowEmbeddingEngine()))
         configureReadyProfile(fixture.modelCatalog, embeddingModelId: "emb-1")
 
         let task = Task {

@@ -23,7 +23,7 @@ final class EngineXPCClientReconnectTests: XCTestCase {
     func test_k29_serviceCrashedAllLiveJobsOnceThenNoAutoRetry() async throws {
         let engine = FakeTranscriptionEngine()
         engine.simulatedWorkNanoseconds = 5_000_000_000   // с большим запасом дольше обрыва
-        let fixture = XPCFixture(service: TestEngineXPCService(transcription: engine))
+        let fixture = XPCFixture.transportOnly(service: TestEngineXPCService(transcription: engine))
         configureReadyProfile(fixture.modelCatalog)
 
         let tasks = (0..<3).map { _ in
@@ -50,7 +50,7 @@ final class EngineXPCClientReconnectTests: XCTestCase {
     /// пересоздаёт соединение (`makeConnection`) на этот же анонимный слушатель прозрачно
     /// для вызывающей стороны.
     func test_k30_reconnectsTransparentlyAfterCrash() async throws {
-        let fixture = XPCFixture()
+        let fixture = XPCFixture.transportOnly()
         configureReadyProfile(fixture.modelCatalog)
 
         _ = try await fixture.client.transcribe(makeSpec()) { _ in }
@@ -75,7 +75,7 @@ final class EngineXPCClientReconnectTests: XCTestCase {
     func test_k52_clientSideInvalidationWithoutCrashMapsToServiceUnavailableNotServiceCrashed() async throws {
         let engine = FakeTranscriptionEngine()
         engine.simulatedWorkNanoseconds = 2_000_000_000   // с запасом дольше, чем сама инвалидация
-        let fixture = XPCFixture(service: TestEngineXPCService(transcription: engine))
+        let fixture = XPCFixture.transportOnly(service: TestEngineXPCService(transcription: engine))
         configureReadyProfile(fixture.modelCatalog)
 
         let task = Task { try await fixture.client.transcribe(self.makeSpec()) { _ in } }

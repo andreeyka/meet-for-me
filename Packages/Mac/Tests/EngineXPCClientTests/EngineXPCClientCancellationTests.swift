@@ -28,7 +28,7 @@ final class EngineXPCClientCancellationTests: XCTestCase {
     func test_k28_taskCancelSendsCancelFrameAndThrowsImmediately() async throws {
         let engine = FakeTranscriptionEngine()
         engine.simulatedWorkNanoseconds = 2_000_000_000   // 2с — с запасом дольше отмены
-        let fixture = XPCFixture(service: TestEngineXPCService(transcription: engine))
+        let fixture = XPCFixture.transportOnly(service: TestEngineXPCService(transcription: engine))
         configureReadyProfile(fixture.modelCatalog)
 
         let task = Task {
@@ -56,7 +56,7 @@ final class EngineXPCClientCancellationTests: XCTestCase {
     /// (то есть никогда, пока задача жива) — просто проверяем, что штатный путь без отмены
     /// доходит нормальным результатом.
     func test_k27_normalCompletionWithoutCancellationSucceeds() async throws {
-        let fixture = XPCFixture()
+        let fixture = XPCFixture.transportOnly()
         configureReadyProfile(fixture.modelCatalog)
 
         let transcript = try await fixture.client.transcribe(makeSpec()) { _ in }
@@ -70,7 +70,7 @@ final class EngineXPCClientCancellationTests: XCTestCase {
     func test_k27_lateArrivingCancelledReplyIsIgnoredAfterClientAlreadyResolved() async throws {
         let engine = FakeTranscriptionEngine()
         engine.simulatedWorkNanoseconds = 300_000_000
-        let fixture = XPCFixture(service: TestEngineXPCService(transcription: engine))
+        let fixture = XPCFixture.transportOnly(service: TestEngineXPCService(transcription: engine))
         configureReadyProfile(fixture.modelCatalog)
 
         let task = Task {
@@ -103,7 +103,7 @@ final class EngineXPCClientCancellationTests: XCTestCase {
     /// исполнения тела (тот же приём, которым тесты этого файла уже полагаются на порядок
     /// планировщика через `Task.sleep`).
     func test_inv12_taskCancelledBeforeBodyRunsNeverReachesTransport() async throws {
-        let fixture = XPCFixture()
+        let fixture = XPCFixture.transportOnly()
         configureReadyProfile(fixture.modelCatalog)
 
         let task = Task {

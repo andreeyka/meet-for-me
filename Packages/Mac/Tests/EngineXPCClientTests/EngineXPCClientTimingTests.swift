@@ -22,7 +22,7 @@ final class EngineXPCClientTimingTests: XCTestCase {
     // MARK: - К22: уникальный jobId на каждый запрос, один транспорт
 
     func test_k22_eachRequestGetsUniqueJobIdOnSameConnection() async throws {
-        let fixture = XPCFixture()
+        let fixture = XPCFixture.transportOnly()
         configureReadyProfile(fixture.modelCatalog)
 
         _ = try await fixture.client.transcribe(makeSpec()) { _ in }
@@ -45,7 +45,7 @@ final class EngineXPCClientTimingTests: XCTestCase {
     }
 
     func test_k23_lateProgressAfterFinalReplyNotPublished() async throws {
-        let fixture = XPCFixture()
+        let fixture = XPCFixture.transportOnly()
         configureReadyProfile(fixture.modelCatalog)
         let receivedCount = Counter()
 
@@ -84,7 +84,7 @@ final class EngineXPCClientTimingTests: XCTestCase {
             .advanced(stage: .asr, fraction: 0.5),
             .finished(stage: .asr)
         ]
-        let fixture = XPCFixture(service: TestEngineXPCService(transcription: engine))
+        let fixture = XPCFixture.transportOnly(service: TestEngineXPCService(transcription: engine))
         configureReadyProfile(fixture.modelCatalog)
         let collector = ProgressCollector()
 
@@ -108,7 +108,7 @@ final class EngineXPCClientTimingTests: XCTestCase {
     func test_k40ii_progressFrameWithUnrepresentableFractionSilentlyDropped() async throws {
         let engine = FakeTranscriptionEngine()
         engine.simulatedWorkNanoseconds = 2_000_000_000   // с запасом дольше, чем тест ждёт
-        let fixture = XPCFixture(service: TestEngineXPCService(transcription: engine))
+        let fixture = XPCFixture.transportOnly(service: TestEngineXPCService(transcription: engine))
         configureReadyProfile(fixture.modelCatalog)
         let collector = ProgressCollector()
 
@@ -146,7 +146,7 @@ final class EngineXPCClientTimingTests: XCTestCase {
     func test_k40iii_progressForNeverKnownForeignJobIdSilentlyDropped() async throws {
         let engine = FakeTranscriptionEngine()
         engine.simulatedWorkNanoseconds = 2_000_000_000
-        let fixture = XPCFixture(service: TestEngineXPCService(transcription: engine))
+        let fixture = XPCFixture.transportOnly(service: TestEngineXPCService(transcription: engine))
         configureReadyProfile(fixture.modelCatalog)
         let collector = ProgressCollector()
 
@@ -177,7 +177,9 @@ final class EngineXPCClientTimingTests: XCTestCase {
         let clock = ManualClock()
         let engine = FakeTranscriptionEngine()
         engine.simulatedWorkNanoseconds = 60_000_000_000   // дольше, чем тест реально будет ждать
-        let fixture = XPCFixture(service: TestEngineXPCService(transcription: engine), clock: { clock.now() })
+        let fixture = XPCFixture.transportOnly(
+            service: TestEngineXPCService(transcription: engine), clock: { clock.now() }
+        )
         configureReadyProfile(fixture.modelCatalog)
         _ = try await fixture.client.ping()   // рукопожатие — своя, уже завершённая, отправка
 
@@ -197,7 +199,7 @@ final class EngineXPCClientTimingTests: XCTestCase {
         let clock = ManualClock()
         let service = TestEngineXPCService()
         service.swallowPing = true
-        let fixture = XPCFixture(service: service, clock: { clock.now() })
+        let fixture = XPCFixture.transportOnly(service: service, clock: { clock.now() })
 
         let task = Task { try await fixture.client.ping() }
         try await Task.sleep(nanoseconds: 150_000_000)
@@ -219,7 +221,9 @@ final class EngineXPCClientTimingTests: XCTestCase {
         let clock = ManualClock()
         let engine = FakeTranscriptionEngine()
         engine.simulatedWorkNanoseconds = 60_000_000_000
-        let fixture = XPCFixture(service: TestEngineXPCService(transcription: engine), clock: { clock.now() })
+        let fixture = XPCFixture.transportOnly(
+            service: TestEngineXPCService(transcription: engine), clock: { clock.now() }
+        )
         configureReadyProfile(fixture.modelCatalog)
         _ = try await fixture.client.ping()
 
