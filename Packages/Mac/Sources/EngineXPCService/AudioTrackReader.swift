@@ -23,9 +23,9 @@
 //  итог 16 кГц моно: около 230 МБ Float32 на час.
 //
 //  CAF С ДЛИНОЙ −1 (К27(б) C-004: запись оборвана `SIGKILL`). `data`-чанк заявленной длины −1
-//  по спецификации CAF тянется до конца файла; Core Audio так его и читает. Цикл чтения
-//  останавливается на пустом блоке, а не на `AVAudioFile.length`, так что длина из заголовка
-//  на результат не влияет.
+//  по спецификации CAF тянется до конца файла; Core Audio так его и читает и выводит
+//  `AVAudioFile.length` из размера файла (неполный последний кадр отброшен). Цикл чтения идёт
+//  до этой длины — заявленная −1 на результат не влияет.
 //
 //  ОТКАЗЫ — `EngineError` (C-011), без нового случая (MEE-475): файла нет, не открывается или
 //  не читается — `.runtimeFailure(message:)` с путём; `sampleRate`/`channelCount` в `AudioRef`
@@ -62,9 +62,8 @@ public enum AudioTrackReader {
         let firstFrame = frames(ms: max(0, ref.offsetMs) + startMs, rate: sourceRate)
         let lastFrame = endMs.map { frames(ms: max(0, ref.offsetMs) + $0, rate: sourceRate) }
 
-        // За концом файла читать нечего. `length` у CAF с длиной −1 Core Audio выводит из
-        // размера файла; если он окажется меньше, цикл ниже всё равно дочитает до пустого блока.
-        if file.length > 0, firstFrame >= file.length { return [] }
+        // За концом файла читать нечего (`length` у CAF с длиной −1 — из размера файла).
+        if firstFrame >= file.length { return [] }
         file.framePosition = firstFrame
 
         guard let target = AVAudioFormat(
@@ -156,9 +155,6 @@ public enum AudioTrackReader {
 /// Источник блоков исходной частоты для `AVAudioConverter`: каждый вызов — новый буфер (конвертер
 /// вправе держать предыдущий), конец — пустое чтение либо исчерпанный остаток вырезки.
 private final class BlockSource {
-    /// `eofErr` (MacErrors.h) литералом: имя из CarbonCore не во всех SDK видно через `AVFoundation`.
-    private static let endOfFileStatus = -39
-
     let file: AVAudioFile
     private(set) var remaining: AVAudioFramePosition?
 
@@ -173,22 +169,20 @@ private final class BlockSource {
         return min(remaining, tail)
     }
 
+    /// Конец потока определяется по `AVAudioFile.length`, а не по ошибке чтения: чтение за
+    /// концом файла Core Audio отдаёт ошибкой, и её вид зависит от версии ОС (`eofErr` −39 на
+    /// macOS 27, `_GenericObjCError` 0 на macOS 14). У CAF с длиной −1 `length` выводится из
+    /// размера файла — то есть тоже «до конца файла», с отброшенным неполным последним кадром.
     func next() throws -> AVAudioPCMBuffer? {
-        var capacity = AudioTrackReader.blockFrames
-        if let remaining {
-            guard remaining > 0 else { return nil }
-            capacity = AVAudioFrameCount(min(AVAudioFramePosition(capacity), remaining))
-        }
+        var frames = max(0, file.length - file.framePosition)
+        if let remaining { frames = min(frames, remaining) }
+        frames = min(frames, AVAudioFramePosition(AudioTrackReader.blockFrames))
+        guard frames > 0 else { return nil }
+        let capacity = AVAudioFrameCount(frames)
         guard let buffer = AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: capacity) else {
             return nil
         }
-        do {
-            try file.read(into: buffer, frameCount: capacity)
-        } catch let error as NSError where error.code == Self.endOfFileStatus {
-            // Чтение на самом конце файла Core Audio отдаёт ошибкой `eofErr` (−39), а не
-            // пустым буфером — это конец потока, а не отказ.
-            return nil
-        }
+        try file.read(into: buffer, frameCount: capacity)
         guard buffer.frameLength > 0 else { return nil }
         if let remaining { self.remaining = remaining - AVAudioFramePosition(buffer.frameLength) }
         return buffer
