@@ -1,6 +1,7 @@
 //  JobQueueEventsInv35Tests — C-016 v13, инв. 35 (д), (е) (IR-147, MEE-476; задача MEE-477):
 //  `jobProgressed` по `JobEvent.progressed`, `statusChanged` по событиям, меняющим состав
-//  очереди. Векторы (35д), (35е) абзаца «Ломающие изменения против v12».
+//  очереди. Векторы (35д), (35е) абзаца «Ломающие изменения против v12». Жизненный цикл
+//  задачи и потока очереди — `JobQueueLifecycleInv35Tests.swift`.
 //
 //  «Не публикуется» наблюдается счётом до барьера — тем же приёмом, что
 //  `FailureSourcesInv31Tests`: события одного потока фасад обрабатывает по порядку, поэтому
@@ -77,40 +78,6 @@ final class JobQueueEventsInv35Tests: XCTestCase {
         let events = await collectEvents(stream, count: 3, timeoutSeconds: 1)
 
         XCTAssertEqual(events, [.jobProgressed(jobId: known.id, type: .diarize, fraction: 0.2)])
-    }
-
-    /// Критерий MEE-477: после завершения задачи фасад её забывает — поздний `progressed`
-    /// по задаче, которой очередь не знает, не публикуется.
-    func test_35e_noProgressAfterJobFinished() async {
-        let fixture = FacadeV11Fixture()
-        let jobId = UUID()
-        let stream = fixture.facade.events()
-
-        fixture.jobQueue.emit(.started(jobId: jobId, type: .transcribe))
-        fixture.jobQueue.emit(.progressed(jobId: jobId, fraction: 0.5))
-        fixture.jobQueue.emit(.succeeded(jobId: jobId, type: .transcribe))
-        fixture.jobQueue.emit(.progressed(jobId: jobId, fraction: 0.9))
-        let events = await collectEvents(stream, count: 5, timeoutSeconds: 1)
-
-        XCTAssertEqual(progressed(events), [0.5])
-        XCTAssertEqual(statusChangedCount(events), 2, "started и succeeded")
-    }
-
-    /// Критерий MEE-477: поток очереди закончился — фасад отписался и больше ничего не публикует.
-    func test_35e_noEventsAfterQueueStreamFinished() async {
-        let fixture = FacadeV11Fixture()
-        let jobId = UUID()
-        let stream = fixture.facade.events()
-        fixture.jobQueue.emit(.started(jobId: jobId, type: .transcribe))
-        _ = await collectEvents(stream, count: 1, timeoutSeconds: 1)
-
-        fixture.jobQueue.finishEvents()
-        fixture.jobQueue.emit(.progressed(jobId: jobId, fraction: 0.5))
-        fixture.jobQueue.emit(.succeeded(jobId: jobId, type: .transcribe))
-        let events = await collectEvents(stream, count: 2, timeoutSeconds: 1)
-
-        XCTAssertEqual(events, [])
-        XCTAssertEqual(fixture.jobQueue.eventSubscriberCount, 0)
     }
 
     // MARK: - (35е) statusChanged
