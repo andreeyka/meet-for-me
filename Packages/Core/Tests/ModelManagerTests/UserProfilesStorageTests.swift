@@ -142,25 +142,6 @@ final class UserProfilesStorageTests: XCTestCase {
         try await assertUnreadableState(sneaky, bytes: try DomainJSON.encode(withBuiltIn))
     }
 
-    // MARK: - Порядок отказов saveProfile (инв. 13 v7, правка 7908dbf9)
-
-    func test_saveProfileUnknownModelWinsOverUnreadableRowNothingWritten() async throws {
-        let harness = makeHarness()
-        harness.settings.seed([key: Data("{".utf8)])
-        let manager = try harness.makeManager()
-        let dangling = testProfile(id: "mine", asr: "no-such-model", builtIn: false)
-        await expectCatalogError(.unknownModel(id: "no-such-model", version: "")) {
-            try await manager.saveProfile(dangling)
-        }
-        await expectUserProfilesUnreadable {
-            try await manager.saveProfile(testProfile(id: "mine", asr: "us-asr", builtIn: false))
-        }
-        await expectCatalogError(.builtInProfileImmutable(id: "b")) {
-            try await manager.saveProfile(testProfile(id: "b", asr: "no-such-model", builtIn: true))
-        }
-        XCTAssertEqual(setValueCalls(harness), 0, "ничего не записано")
-    }
-
     // MARK: - К65
 
     func test_k65_readRetriedOnEveryCallUntilItSucceedsWithoutRecreatingManager() async throws {

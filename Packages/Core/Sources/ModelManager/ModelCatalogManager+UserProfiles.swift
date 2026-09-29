@@ -9,8 +9,8 @@
 //  прочитанное в памяти; пока чтение не удалось, читает заново при каждом обращении.
 //
 //  Строка есть, а не читается (отказ порта, байты не разбираются, запись с `isBuiltIn == true`)
-//  — `userProfilesUnreadable(message:)` у `saveProfile`/`deleteProfile`/`resolve`/`missingModels`,
-//  ничего не пишется; `profiles()` отдаёт только встроенные.
+//  либо повтор `id` — `userProfilesUnreadable(message:)` у `saveProfile`/`deleteProfile`/`resolve`/
+//  `missingModels`/`delete` (уточнение 29.09), ничего не пишется; `profiles()` — только встроенные.
 //
 //  Запись — массив целиком ДО изменения памяти и `profilesChanged`; отказ записи уходит наружу
 //  как есть (`StorageError`), память не меняется. Записи идут по одной (`withProfileWriteLock`):

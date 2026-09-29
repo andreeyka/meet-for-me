@@ -12,8 +12,11 @@ import DomainCore
 extension ModelCatalogManager {
 
     public func delete(id: String, version: String) async throws {
-        // Чтение строки — до всех проверок: после `await` состояние перечитывается заново.
-        let user = (try? await loadUserProfiles()) ?? [:]
+        // Инв. 37 (уточнение 29.09, MEE-453 a5bc1d63): без строки пользовательских профилей
+        // неизвестно, какие версии они держат по инв. 11, — `userProfilesUnreadable`, ничего не
+        // удаляется (отказ обратим, удаление — нет). Чтение — до всех проверок: после `await`
+        // состояние перечитывается заново.
+        let user = try await loadUserProfiles()
         let key = ModelKey(id: id, version: version)
         let directory: URL
         switch locate(key) {
@@ -22,10 +25,9 @@ extension ModelCatalogManager {
         case nil:
             throw ModelCatalogError.unknownModel(id: id, version: version)
         }
-        // Инв. 11 (v7): мешает профиль, который РАЗРЕШАЕТ СЕЙЧАС именно эту версию — ту, что
-        // `resolve` положил бы в бандл по инв. 35. Старую и недокачанную версии удалять можно.
-        // Строка пользовательских профилей не читается — учитываются только встроенные, как
-        // в `profiles()` (инв. 37 `delete` среди бросающих `userProfilesUnreadable` не называет).
+        // Инв. 11 (v7): мешает профиль, который разрешает сейчас именно эту версию — новейшую
+        // готовую (инв. 35) в любой из четырёх ролей; каждая роль защищается независимо, в том
+        // числе когда `asr` не готова. Старую и недокачанную версии удалять можно.
         let referencing = effectiveProfiles(user: user)
             .filter { profile in
                 Self.modelIds(of: profile).contains { $0 == id && readyBundle(modelId: $0)?.version == version }
