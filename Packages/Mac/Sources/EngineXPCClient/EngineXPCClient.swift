@@ -8,7 +8,9 @@
 //  СОЕДИНЕНИЕ — ЛЕНИВОЕ И ПЕРЕСОЗДАВАЕМОЕ (§«Поведение»: «Соединение создаётся лениво при
 //  первом запросе»; К30). `makeConnection` — фабрика, а не хранимое значение: `interruptionHandler`
 //  метит текущее соединение мёртвым, следующий запрос вызывает фабрику заново. В проде это
-//  `NSXPCConnection(machServiceName:)` (launchd поднимает сервис по требованию); в тестах —
+//  `NSXPCConnection(serviceName:)` — встроенный сервис приложения (C-012 v10 §3:
+//  `Contents/XPCServices/TranscriptionEngine.xpc`, имя `<bundle-id>.TranscriptionEngine`;
+//  система поднимает его по требованию); в тестах —
 //  замыкание над `NSXPCListener.anonymous().endpoint`, тем же приёмом создающее новое
 //  соединение к тому же слушателю на каждый вызов.
 //
@@ -60,15 +62,20 @@ public final class EngineXPCClient: TranscriptionServicePort, @unchecked Sendabl
     /// то есть только для соединения, на котором тот реально пришёл.
     var handshakeVerifiedConnection: ObjectIdentifier?
 
-    /// Прод: соединение по имени сервиса launchd. Реальный `EngineXPCServiceProtocol`
-    /// раздаёт сервис (`Services/TranscriptionEngineXPC`), эта сторона его не знает —
-    /// только протокол. Без параметра часов — реальные часы нужны только тестам
-    /// (внутренний `init(makeConnection:modelCatalog:clock:)`), и вынесение `Date` в
-    /// публичную сигнатуру раздувало бы поверхность модуля типом, которого нет в
-    /// `allowed-types/EngineXPCClient.json`.
-    public convenience init(machServiceName: String, modelCatalog: ModelCatalogPort) {
+    /// Прод: соединение со встроенным XPC-сервисом приложения по его имени (C-012 v10 §3:
+    /// `<bundle-id>.TranscriptionEngine`, бандл в `Contents/XPCServices/`) —
+    /// `NSXPCConnection(serviceName:)`. Реальный `EngineXPCServiceProtocol` раздаёт сервис
+    /// (`Services/TranscriptionEngineXPC`), эта сторона его не знает — только протокол.
+    /// Без параметра часов — реальные часы нужны только тестам (внутренний
+    /// `init(makeConnection:modelCatalog:clock:)`), и вынесение `Date` в публичную сигнатуру
+    /// раздувало бы поверхность модуля типом, которого нет в `allowed-types/EngineXPCClient.json`.
+    ///
+    /// MEE-471: прежний вход `init(machServiceName:modelCatalog:)` (служба launchd) убран —
+    /// контракт кладёт сервис только в `XPCServices`, вызывающих у входа не было ни одного, а
+    /// второй публичный путь соединения, который никто не собирает, — непроверяемая поверхность.
+    public convenience init(serviceName: String, modelCatalog: ModelCatalogPort) {
         self.init(
-            makeConnection: { NSXPCConnection(machServiceName: machServiceName, options: []) },
+            makeConnection: { NSXPCConnection(serviceName: serviceName) },
             modelCatalog: modelCatalog,
             clock: { Date() }
         )

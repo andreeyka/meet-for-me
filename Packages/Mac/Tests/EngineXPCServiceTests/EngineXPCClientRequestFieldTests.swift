@@ -193,7 +193,9 @@ private final class SurgeryExportedHandler: NSObject, EngineXPCServiceProtocol {
         self.owner = owner
     }
 
-    func send(_ requestData: Data, reply: @escaping (Data?, Error?) -> Void) {
-        handler.handle(owner?.rewrite(requestData) ?? requestData, reply: reply)
+    func handle(_ requestData: Data, reply: @escaping (Data?, NSError?) -> Void) {
+        handler.handle(owner?.rewrite(requestData) ?? requestData) { data, error in
+            reply(data, error.map { $0 as NSError })
+        }
     }
 }

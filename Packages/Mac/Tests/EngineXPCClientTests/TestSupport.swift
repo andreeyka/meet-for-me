@@ -77,10 +77,11 @@ final class TestEngineXPCService: NSObject, EngineXPCServiceProtocol, @unchecked
     /// выпустил (тот же приём, что `PlistSurgery` для decode-тестов).
     func pushRawProgressData(_ data: Data) {
         guard let target = locked({ progressTarget }) else { return }
-        target.didReceiveProgress(data)
+        target.engineDidReportProgress(data)
     }
 
-    func send(_ requestData: Data, reply: @escaping (Data?, Error?) -> Void) {
+    func handle(_ requestData: Data, reply nsReply: @escaping (Data?, NSError?) -> Void) {
+        let reply: (Data?, Error?) -> Void = { data, error in nsReply(data, error.map { $0 as NSError }) }
         locked { sendCountValue += 1 }
         if let fault = locked({ forcedTransportFault }) {
             reply(nil, Self.transportError(code: fault.code, userInfo: fault.userInfo))
@@ -174,7 +175,7 @@ final class TestEngineXPCService: NSObject, EngineXPCServiceProtocol, @unchecked
     private func pushProgress(jobId: EngineJobId, progress: EngineProgress) {
         guard let target = locked({ progressTarget }) else { return }
         guard let data = try? EngineWire.encode(EngineProgressMessage(jobId: jobId, progress: progress)) else { return }
-        target.didReceiveProgress(data)
+        target.engineDidReportProgress(data)
     }
 
     private func respond(_ reply: EngineReply, reply replyBlock: @escaping (Data?, Error?) -> Void) {

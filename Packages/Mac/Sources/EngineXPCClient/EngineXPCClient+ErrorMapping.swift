@@ -4,7 +4,7 @@
 //  Модуль: engine-xpc · Владелец: DEV-2 · Слой: движок (клиент NSXPCConnection)
 //
 //  Три источника отказа отображаются сюда порознь:
-//  1. `EngineTransportFault.errorDomain` (§3.1) — коды `1..3` из `send`-реплая или прокси;
+//  1. `EngineTransportFault.errorDomain` (§3.1) — коды `1..3` из `handle`-реплая или прокси;
 //     код `4` (сервис новее клиента, К33) вне диапазона — общий случай «нераспознанный код».
 //  2. `NSCocoaErrorDomain` — настоящий `NSXPCConnection` (К51): `NSXPCConnectionInterrupted`/
 //     `Invalid`/`ReplyInvalid` названы контрактом по имени константы, не по числу (числа —

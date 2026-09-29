@@ -52,6 +52,7 @@ public final class FakeJobQueue: JobQueue, @unchecked Sendable {
     private var recordingDidStopCalls = 0
     private var submitFailure: JobQueueError?
     private var cancelFailure: JobQueueError?
+    private var jobsFailure: Error?
     private var continuations: [AsyncStream<JobEvent>.Continuation] = []
     /// Ключи подписок параллельно `continuations` — по ним `onTermination` снимает свою.
     private var continuationIds: [UUID] = []
@@ -98,6 +99,12 @@ public final class FakeJobQueue: JobQueue, @unchecked Sendable {
     /// Заставить `cancel(jobId:)` бросить заданную ошибку; `nil` снимает отказ (К38 MEE-401).
     public func failCancel(with error: JobQueueError?) {
         locked { cancelFailure = error }
+    }
+
+    /// Заставить `jobs(status:)` бросить заданную ошибку; `nil` снимает отказ (C-016 v13,
+    /// инв. 35 (г): отказ чтения очереди в `status()`). Вызов записывается и при отказе.
+    public func failJobs(with error: Error?) {
+        locked { jobsFailure = error }
     }
 
     /// Заставить `submit` бросить заданную ошибку; `nil` снимает отказ.
@@ -203,6 +210,9 @@ public final class FakeJobQueue: JobQueue, @unchecked Sendable {
 
     public func jobs(status: JobStatus) async throws -> [Job] {
         log.record(port: Self.portName, method: "jobs(status:)", arguments: [status.rawValue])
+        if let failure = locked({ jobsFailure }) {
+            throw failure
+        }
         return locked {
             jobOrder
                 .compactMap { jobsById[$0] }

@@ -8,8 +8,8 @@
 //
 //  Composition root (MEE-433, `CompositionRoot.swift`) строит граф домена при запуске
 //  (`AppDelegate.applicationDidFinishLaunching`) и отдаёт единственный `AppFacade`.
-//  Сами экраны (окно встреч, просмотр транскрипта, настройки, мастер прав) — предмет
-//  следующей задачи DEV-1; `StatusMenu` здесь несёт только минимум статуса (MEE-433).
+//  Меню-бар — `StatusMenu` (MEE-473); окно «Встречи» с просмотром транскрипта — AppKit-окно
+//  `MeetingsWindowPresenter` (MEE-474), не сцена. Настройки и мастер прав — следующие задачи.
 
 import SwiftUI
 
