@@ -187,6 +187,7 @@ extension CompositionRoot {
             recordings: storage.recordingRepository(fileLayout: fileLayout),
             fileLayout: fileLayout
         )
+        await registerOrCrash(TranscodeJobHandler(), into: partial.jobQueue)
         await registerOrCrash(
             TranscribeJobHandler(port: engineClient, transcripts: storage.transcriptRepository()),
             into: partial.jobQueue

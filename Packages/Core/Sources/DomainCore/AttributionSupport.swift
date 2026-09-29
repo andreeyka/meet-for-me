@@ -15,14 +15,11 @@ enum AttributionSupport {
     /// сторона порт вовсе не зовёт (то же деление, что уже было у `AttributeJobHandler`).
     enum InputBuildFailure: Error {
         case transcriptNotFound(UUID)
-        case embeddingModelVersionMissing(transcriptId: UUID)
 
         var message: String {
             switch self {
             case .transcriptNotFound(let id):
                 return "AttributionSupport: транскрипт \(id) не найден"
-            case .embeddingModelVersionMissing(let id):
-                return "AttributionSupport: транскрипт \(id) несёт спикеров без единой версии эмбеддинга"
             }
         }
     }
@@ -74,7 +71,7 @@ enum AttributionSupport {
                 return row.segment.speakerCluster != excludedCluster
             }
             .map(\.id)
-        let embeddingModelVersion = try embeddingModelVersion(transcript: transcript, transcriptId: transcriptId)
+        let embeddingModelVersion = embeddingModelVersion(transcript: transcript)
 
         let attendees = try await resolvedAttendees(meetingId: meetingId, repositories: repositories)
         let me = try await repositories.persons.me()
@@ -83,7 +80,7 @@ enum AttributionSupport {
         let nameForms = try await repositories.persons.nameForms(personIds: Array(nameFormPersonIds))
 
         let profiles: [SpeakerProfile]
-        if voiceProfilesEnabled {
+        if voiceProfilesEnabled && !embeddingModelVersion.isEmpty {
             profiles = try await repositories.speakerProfiles.profiles(
                 personIds: Array(nameFormPersonIds), modelVersion: embeddingModelVersion
             )
@@ -117,15 +114,12 @@ enum AttributionSupport {
         return resolved
     }
 
-    /// §7 «embeddingModelVersion»: первая непустая версия среди `transcript.speakers`;
-    /// пустой `speakers` — штатный вход (запись только с микрофона, IR-128), версия — "".
-    /// Спикеры есть, а версии нет ни у одного — испорченный вход, ранний отказ.
-    private static func embeddingModelVersion(transcript: Transcript, transcriptId: UUID) throws -> String {
-        guard !transcript.speakers.isEmpty else { return "" }
-        guard let version = transcript.speakers.compactMap(\.embeddingModelVersion).first else {
-            throw InputBuildFailure.embeddingModelVersionMissing(transcriptId: transcriptId)
-        }
-        return version
+    /// §7 «embeddingModelVersion» (C-015 v11, IR-150): первая непустая версия среди
+    /// `transcript.speakers`, иначе "" — при пустом `speakers`, при спикерах без версий, при
+    /// любом `voiceProfilesEnabled`. "" значит «эмбеддингов нет, сравнивать голоса не с чем»;
+    /// охраны «испорченный вход» нет, порт вызывается как на любом другом входе.
+    private static func embeddingModelVersion(transcript: Transcript) -> String {
+        transcript.speakers.compactMap(\.embeddingModelVersion).first { !$0.isEmpty } ?? ""
     }
 
     // MARK: - Применение AttributionResult (§7 «Применение»)

@@ -1,4 +1,4 @@
-//  TranscribeJobHandlerTests — К43, К44, К45, К47 перечня MEE-370 (C-012 v10 §4/§4.1,
+//  TranscribeJobHandlerTests — К43, К44, К45, К47 перечня MEE-370 (C-012 v12 §4/§4.1,
 //  инварианты 19, 20, 22), владелец: DEV-2. Найдено приёмкой #111/MEE-390, реализовано
 //  и покрыто здесь (MEE-394) — обработчик физически лежит в `domain-core`, контракт §4
 //  дословно объясняет почему (см. шапку `TranscribeJobHandler.swift`).
@@ -83,7 +83,12 @@ final class TranscribeJobHandlerTests: XCTestCase {
         let error = TranscriptionServiceError.recordingNotReady(
             recordingId: TranscriptFixtures.oneOnOne.recordingId, message: "записи нет"
         )
-        assertPermanentFailure(await run(error))
+        let outcome = await run(error)
+        assertPermanentFailure(outcome)
+        // MEE-489 C: текст несёт recordingId, как у `modelsNotReady` — «\(recordingId): \(message)».
+        XCTAssertEqual(
+            outcome, .permanentFailure(error: "\(TranscriptFixtures.oneOnOne.recordingId): записи нет")
+        )
     }
 
     // MARK: - C-012 v11 (IR-145): обработчик сохраняет транскрипт
@@ -100,6 +105,14 @@ final class TranscribeJobHandlerTests: XCTestCase {
         XCTAssertEqual(repository.callLog.count(port: InMemoryTranscriptRepository.portName, method: "save(_:)"), 1)
         let headers = try await repository.headers(recordingId: recordingId)
         XCTAssertEqual(headers.count, 1)
+        // Сохранено ровно то, что вернул порт: заголовок `latest` совпадает с результатом порта.
+        let expected = try port.forcedResult()
+        let latest = try await repository.latest(recordingId: recordingId)
+        XCTAssertEqual(latest?.recordingId, expected.recordingId)
+        XCTAssertEqual(latest?.engine, expected.engine)
+        XCTAssertEqual(latest?.modelVersion, expected.modelVersion)
+        XCTAssertEqual(latest?.language, expected.language)
+        XCTAssertEqual(latest?.id, headers.first?.id)
     }
 
     func test_saveFailureIsRetryAfter30() async {
@@ -111,15 +124,38 @@ final class TranscribeJobHandlerTests: XCTestCase {
         assertRetry(await handler.run(job(), progress: { _ in }), after: 30)
     }
 
-    func test_portFailureSavesNothing() async {
+    private struct UnrelatedError: Error {}
+
+    func test_portFailureSavesNothing() async throws {
+        let failures: [Error] = [
+            TranscriptionServiceError.serviceCrashed,
+            TranscriptionServiceError.invalidRequest(message: "x"),
+            TranscriptionServiceError.recordingNotReady(recordingId: UUID(), message: "нет"),
+            TranscriptionServiceError.engineFailure(code: "modelMissing", message: "x"),
+            UnrelatedError()
+        ]
+        for failure in failures {
+            let port = FakeTranscriptionServicePort()
+            port.forcedResult = { throw failure }
+            let repository = InMemoryTranscriptRepository()
+            let handler = TranscribeJobHandler(port: port, transcripts: repository)
+
+            let outcome = await handler.run(job(), progress: { _ in })
+
+            XCTAssertNotEqual(outcome, .success, "\(failure)")
+            XCTAssertEqual(
+                repository.callLog.count(port: InMemoryTranscriptRepository.portName, method: "save(_:)"), 0,
+                "\(failure)"
+            )
+        }
+    }
+
+    /// Ошибка не из `TranscriptionServiceError` — `.permanentFailure` (свободный `catch`).
+    func test_errorOutsideTranscriptionServiceErrorIsPermanentFailure() async {
         let port = FakeTranscriptionServicePort()
-        port.forcedError = .serviceCrashed
-        let repository = InMemoryTranscriptRepository()
-        let handler = TranscribeJobHandler(port: port, transcripts: repository)
-
-        _ = await handler.run(job(), progress: { _ in })
-
-        XCTAssertEqual(repository.callLog.count(port: InMemoryTranscriptRepository.portName, method: "save(_:)"), 0)
+        port.forcedResult = { throw UnrelatedError() }
+        let handler = TranscribeJobHandler(port: port, transcripts: InMemoryTranscriptRepository())
+        assertPermanentFailure(await handler.run(job(), progress: { _ in }))
     }
 
     // MARK: - К44 (C-012 §4, строка cancelled)
