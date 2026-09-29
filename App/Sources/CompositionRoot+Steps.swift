@@ -95,7 +95,9 @@ extension CompositionRoot {
 
     // MARK: - Шаг 6 — оркестрация сессии
 
-    static func makeSessionMachine(_ partial: PartialGraph, settings: AppSettings) -> SessionMachine {
+    static func makeSessionMachine(
+        _ partial: PartialGraph, settings: AppSettings, capture: AudioCapturePort
+    ) -> SessionMachine {
         let storage = partial.context.storage
         let recordings = storage.recordingRepository(fileLayout: partial.context.fileLayout)
         return SessionMachine(
@@ -104,7 +106,7 @@ extension CompositionRoot {
             meetings: storage.meetingRepository(),
             recordings: recordings,
             transcripts: storage.transcriptRepository(),
-            capture: AudioCaptureImpl(power: partial.adapters.power),
+            capture: capture,
             queue: partial.jobQueue,
             power: partial.adapters.power,
             settings: settings,
@@ -137,7 +139,9 @@ extension CompositionRoot {
 
     // MARK: - Шаг 7 — фасад
 
-    static func makeFacade(_ partial: PartialGraph, sessionMachine: SessionMachine) -> AppFacadeImpl {
+    static func makeFacade(
+        _ partial: PartialGraph, sessionMachine: SessionMachine, capture: AudioCapturePort
+    ) -> AppFacadeImpl {
         let storage = partial.context.storage
         return AppFacadeImpl(
             meetings: storage.meetingRepository(),
@@ -151,7 +155,8 @@ extension CompositionRoot {
             sessionCoordinator: sessionMachine,
             attribution: partial.attribution,
             settings: storage.settingsRepository(),
-            connectors: storage.connectorRepository()
+            connectors: storage.connectorRepository(),
+            capture: capture
         )
     }
 

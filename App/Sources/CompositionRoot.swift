@@ -24,6 +24,7 @@
 //  компилируется, но восстановление и подписки на входы не включаются никогда.
 
 import Attribution
+import Capture
 import DomainCore
 import Foundation
 import Storage
@@ -94,8 +95,11 @@ enum CompositionRoot {
         )
 
         let startupSettings = try await loadSettingsForStartup(from: context.storage.settingsRepository())
-        let sessionMachine = makeSessionMachine(partial, settings: startupSettings.settings)
-        let facade = makeFacade(partial, sessionMachine: sessionMachine)
+        // MEE-449 (К42): один экземпляр захвата на машину сессии и фасад — фасад читает из его
+        // потока снимки состава и уровни для `AppStatus.activeSession` (C-016 инв. 27).
+        let capture = AudioCaptureImpl(power: adapters.power)
+        let sessionMachine = makeSessionMachine(partial, settings: startupSettings.settings, capture: capture)
+        let facade = makeFacade(partial, sessionMachine: sessionMachine, capture: capture)
 
         await registerHandlers(partial, facade: facade)
 
