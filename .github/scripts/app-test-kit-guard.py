@@ -25,17 +25,24 @@
 #                           бандла. Так проверка не зависит от dead-stripping: модуль,
 #                           слинкованный, но целиком выброшенный линковщиком, символов в
 #                           Mach-O не оставит, а в списке входов останется. Каталог
-#                           выводится из пути бандла (`…/Build/Products/<конф.>/X.app` →
-#                           `…/Build/Intermediates.noindex`) или задаётся `--intermediates`;
-#                           не найден — предупреждение, не отказ: главная проверка — бандл.
+#                           задаётся `--intermediates` (так зовёт CI) или выводится из
+#                           пути бандла (`…/Build/Products/<конф.>/X.app` →
+#                           `…/Build/Intermediates.noindex`). Задан явно, а каталога нет
+#                           или в нём нет ни одного `*.LinkFileList` таргетов бандла —
+#                           отказ: проверка, заказанная явно, молча не пропускается.
+#                           Выведен сам и не найден — аннотация `::warning`, не отказ.
 #
 # ЧЕГО НЕ ЛОВИТ. `--project` не раскрывает `include:`, `targetTemplates` и прочие
 # механизмы составления спеки XcodeGen — в project.yml их нет; появятся — этот
 # разбор надо будет расширить. Эту дыру закрывает `--app`: он смотрит на результат.
+# Разбор комментариев (`strip_comment`) понимает кавычки в начале скаляра, в том числе
+# после тега `!…` и якоря `&…`; блочные скаляры (`|`, `>`) и многострочные строки в
+# кавычках построчно не отслеживаются — в project.yml их с `#` внутри нет.
 
 import argparse
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -50,6 +57,19 @@ MANGLED = f"{len(FORBIDDEN)}{FORBIDDEN}"
 # строки или после одного из этих знаков (и пробелов). Апостроф внутри значения без
 # кавычек (`name: it's # ...`) строкой в кавычках не является (MEE-497).
 SCALAR_START = ":-[{,?"
+
+
+def starts_scalar(before):
+    """Кавычка после `before` начинает скаляр: перед ней, за вычетом свойств узла —
+    тега `!…` и якоря `&…` (`key: !!str '…'`, `- &a "…"`), — начало строки или
+    один из знаков `SCALAR_START`."""
+    while True:
+        before = before.rstrip(" \t")
+        cut = max(before.rfind(" "), before.rfind("\t"))
+        if not before[cut + 1:].startswith(("!", "&")):
+            break
+        before = before[:cut + 1]
+    return not before or before[-1] in SCALAR_START
 
 
 def strip_comment(line):
@@ -70,8 +90,7 @@ def strip_comment(line):
             elif ch == '"':
                 quote = None
         elif ch in "'\"":
-            before = line[:i].rstrip(" \t")
-            if not before or before[-1] in SCALAR_START:
+            if starts_scalar(line[:i]):
                 quote = ch
         elif ch == "#" and (i == 0 or line[i - 1] in " \t"):
             return line[:i]
@@ -175,17 +194,32 @@ def default_intermediates(app):
     return candidate if os.path.isdir(candidate) else None
 
 
-def check_link_inputs(intermediates, targets):
-    """Нарушения по `*.LinkFileList` таргетов бандла: входом линковщика был `DomainTestKit.o`."""
+# Аннотация GitHub. В self-test подменяется простым префиксом: ожидаемые там
+# предупреждения не должны желтить каждый прогон CI.
+WARNING_PREFIX = "::warning title=DomainTestKit вне App (MEE-497)::"
+
+
+def warn(message):
+    print(f"{WARNING_PREFIX}{message}")
+
+
+def check_link_inputs(intermediates, targets, explicit):
+    """Нарушения по `*.LinkFileList` таргетов бандла: входом линковщика был `DomainTestKit.o`.
+    `explicit` — каталог задан `--intermediates`: тогда его отсутствие или пустота — отказ."""
     suffix = ".LinkFileList"
+    if not os.path.isdir(intermediates):
+        return [f"--intermediates {intermediates}: каталога нет — входы линковщика не проверены"]
     lists = []
     for dirpath, _, files in os.walk(intermediates):
         for name in files:
             if name.endswith(suffix) and name[: -len(suffix)] in targets:
                 lists.append(os.path.join(dirpath, name))
     if not lists:
-        print(f"предупреждение: в {intermediates} нет *{suffix} таргетов {', '.join(sorted(targets))}"
-              " — входы линковщика не проверены")
+        message = (f"в {intermediates} нет *{suffix} таргетов {', '.join(sorted(targets))}"
+                   " — входы линковщика не проверены")
+        if explicit:
+            return [f"--intermediates: {message}"]
+        warn(message)
         return []
     violations = []
     for path in sorted(lists):
@@ -223,11 +257,13 @@ def check_app(app, intermediates=None, run=subprocess.run):
         if hits:
             sample = ", ".join(hits[:3])
             violations.append(f"символы `{FORBIDDEN}` слинкованы в {rel} ({len(hits)} шт.), например: {sample}")
-    intermediates = intermediates or default_intermediates(app)
+    explicit = intermediates is not None
+    intermediates = intermediates if explicit else default_intermediates(app)
     if intermediates is None:
-        print("предупреждение: Intermediates.noindex рядом с бандлом не найден — входы линковщика не проверены")
+        warn("Intermediates.noindex рядом с бандлом не найден, --intermediates не задан"
+             " — входы линковщика не проверены")
     else:
-        violations += check_link_inputs(intermediates, bundle_targets(app))
+        violations += check_link_inputs(intermediates, bundle_targets(app), explicit)
     return violations
 
 
@@ -243,6 +279,7 @@ targets:
       properties:
         CFBundleName: it's # DomainTestKit — апостроф в значении без кавычек
         CFBundleDisplayName: 'it''s' # DomainTestKit — экранированный апостроф
+        CFBundleSpokenName: !!str it's # DomainTestKit — тег и апостроф без кавычек
   Engine:
     dependencies:
       - package: Core
@@ -258,6 +295,13 @@ SELF_TEST_BAD_INLINE = SELF_TEST_OK.replace(
     "- package: Core\n        product: DomainCore", "- {package: Core, product: DomainTestKit}"
 )
 SELF_TEST_BAD_VIA_TARGET = SELF_TEST_OK.replace("product: EngineKit", "product: DomainTestKit")
+# `#` внутри строки в кавычках после тега/якоря — не комментарий: имя за ним видно.
+SELF_TEST_BAD_TAGGED = SELF_TEST_OK.replace(
+    "product: DomainCore", "product: !!str 'Core #1 DomainTestKit'"
+)
+SELF_TEST_BAD_ANCHORED = SELF_TEST_OK.replace(
+    "product: DomainCore", "product: &core \"Core #1 DomainTestKit\""
+)
 
 
 class FakeCompleted:
@@ -295,11 +339,15 @@ def make_fake_build(tmp, link_inputs):
 
 
 def self_test():
+    global WARNING_PREFIX
+    WARNING_PREFIX = "self-test, ожидаемое предупреждение: "
     cases = [
         ("чисто (DomainTestKit только в комментарии и у несвязанного таргета)", SELF_TEST_OK, 0),
         ("прямая зависимость", SELF_TEST_BAD_DIRECT, 1),
         ("строчная запись словаря", SELF_TEST_BAD_INLINE, 1),
         ("через зависимый таргет", SELF_TEST_BAD_VIA_TARGET, 1),
+        ("строка в кавычках после тега !!str", SELF_TEST_BAD_TAGGED, 1),
+        ("строка в кавычках после якоря &core", SELF_TEST_BAD_ANCHORED, 1),
         ("нет таргета MeetForMe", SELF_TEST_OK.replace("MeetForMe:", "App:"), 1),
     ]
     failed = 0
@@ -328,6 +376,28 @@ def self_test():
         with tempfile.TemporaryDirectory() as tmp:
             app = make_fake_build(tmp, inputs)
             got = len(check_app(app, run=fake_nm(symbols)))
+        ok = got == expected
+        failed += 0 if ok else 1
+        print(f"self-test {'ok' if ok else 'FAIL'}: {title} — нарушений {got}, ожидалось {expected}")
+
+    # Каталог входов линковщика: явный — обязан быть и содержать списки; выведенный — нет.
+    intermediates_cases = [
+        ("--app: явный --intermediates, которого нет — отказ", "missing", 1),
+        ("--app: явный --intermediates без LinkFileList таргетов бандла — отказ", "empty", 1),
+        ("--app: явный --intermediates со списками — чисто", "build", 0),
+        ("--app: выведенного Intermediates.noindex нет — ::warning, не отказ", None, 0),
+    ]
+    for title, mode, expected in intermediates_cases:
+        with tempfile.TemporaryDirectory() as tmp:
+            app = make_fake_build(tmp, clean_inputs)
+            build_dir = os.path.join(tmp, "Build", "Intermediates.noindex")
+            empty_dir = os.path.join(tmp, "Empty")
+            os.makedirs(empty_dir)
+            explicit = {"missing": os.path.join(tmp, "Nope"), "empty": empty_dir,
+                        "build": build_dir, None: None}[mode]
+            if mode is None:
+                shutil.rmtree(build_dir)
+            got = len(check_app(app, intermediates=explicit, run=fake_nm(clean_symbols)))
         ok = got == expected
         failed += 0 if ok else 1
         print(f"self-test {'ok' if ok else 'FAIL'}: {title} — нарушений {got}, ожидалось {expected}")
