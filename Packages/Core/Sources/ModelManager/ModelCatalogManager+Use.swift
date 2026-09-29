@@ -1,5 +1,5 @@
-//  ModelCatalogManager — удаление и расписки `beginUse`/`endUse` (C-014 v6 §4.1; инв. 6, 11,
-//  21–23, 33).
+//  ModelCatalogManager — удаление и расписки `beginUse`/`endUse` (C-014 v7 §4.1; инв. 6, 11,
+//  21–23, 33, 35).
 //
 //  Модуль: model-manager · Владелец: DEV-2 · Слой: домен + адаптер сети
 //
@@ -12,6 +12,11 @@ import DomainCore
 extension ModelCatalogManager {
 
     public func delete(id: String, version: String) async throws {
+        // Инв. 37 (уточнение 29.09, MEE-453 a5bc1d63): без строки пользовательских профилей
+        // неизвестно, какие версии они держат по инв. 11, — `userProfilesUnreadable`, ничего не
+        // удаляется (отказ обратим, удаление — нет). Чтение — до всех проверок: после `await`
+        // состояние перечитывается заново.
+        let user = try await loadUserProfiles()
         let key = ModelKey(id: id, version: version)
         let directory: URL
         switch locate(key) {
@@ -20,16 +25,22 @@ extension ModelCatalogManager {
         case nil:
             throw ModelCatalogError.unknownModel(id: id, version: version)
         }
-        let referencing = effectiveProfiles()
-            .filter { profile in Self.modelIds(of: profile).contains(id) }
+        // Инв. 11 (v7): мешает профиль, который разрешает сейчас именно эту версию — новейшую
+        // готовую (инв. 35) в любой из четырёх ролей; каждая роль защищается независимо, в том
+        // числе когда `asr` не готова. Старую и недокачанную версии удалять можно.
+        let referencing = effectiveProfiles(user: user)
+            .filter { profile in
+                Self.modelIds(of: profile).contains { $0 == id && readyBundle(modelId: $0)?.version == version }
+            }
             .map(\.id)
+            .sorted()
         guard referencing.isEmpty else {
             throw ModelCatalogError.modelInUseByProfile(modelId: id, profileIds: referencing)
         }
-        // Инв. 6: из `loaded` переход только в `downloaded`. Модель под непогашенной распиской
-        // не удаляется; код ошибки контракт не называет — отказ тем же случаем, без профилей.
+        // Инв. 6, 11 (v7): из `loaded` переход только в `downloaded` — модель под непогашенной
+        // распиской, которую ни один профиль сейчас не разрешает, даёт `modelInUse`.
         guard useCounts[key, default: 0] == 0 else {
-            throw ModelCatalogError.modelInUseByProfile(modelId: id, profileIds: [])
+            throw ModelCatalogError.modelInUse(modelId: id, version: version)
         }
         if let session = sessions[key] {
             session.deleted = true

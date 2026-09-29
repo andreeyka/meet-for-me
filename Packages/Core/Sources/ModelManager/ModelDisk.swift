@@ -1,4 +1,4 @@
-//  ModelDisk — раскладка каталога модели и замеры по диску (C-014 v6 §4.2, §5).
+//  ModelDisk — раскладка каталога модели и замеры по диску (C-014 v7 §4.2, §5).
 //
 //  Модуль: model-manager · Владелец: DEV-2 · Слой: домен + адаптер сети
 //
@@ -51,27 +51,7 @@ enum ModelDisk {
         }
     }
 
-    /// Отбрасывает первые `count` байт файла на месте (ответ `200` на запрос с `Range`, §6 п. 4:
-    /// тело — ресурс целиком, а записано оно было после прежних `count` байт `.part`).
-    /// Порциями по 1 МиБ: файл в память целиком не читается (§6 п. 7).
-    static func dropPrefix(of url: URL, count: Int64) throws {
-        let handle = try FileHandle(forUpdating: url)
-        defer { try? handle.close() }
-        let total = try handle.seekToEnd()
-        let keep = Int64(total) - count
-        var moved: Int64 = 0
-        while moved < keep {
-            try handle.seek(toOffset: UInt64(count + moved))
-            let chunk = try handle.read(upToCount: 1 << 20) ?? Data()
-            if chunk.isEmpty { break }
-            try handle.seek(toOffset: UInt64(moved))
-            try handle.write(contentsOf: chunk)
-            moved += Int64(chunk.count)
-        }
-        try handle.truncate(atOffset: UInt64(max(keep, 0)))
-    }
-
-    /// Усекает файл до `length` байт (снимает хвост ответа-отказа).
+    /// Усекает файл до `length` байт (ответ `200` на запрос с `Range`, §6 п. 4 — до нуля).
     static func truncate(_ url: URL, to length: Int64) throws {
         guard let current = size(of: url), current > length else { return }
         let handle = try FileHandle(forWritingTo: url)

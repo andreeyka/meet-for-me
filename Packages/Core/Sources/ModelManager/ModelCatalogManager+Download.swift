@@ -1,5 +1,5 @@
-//  ModelCatalogManager — загрузка с докачкой по HTTP-диапазону (C-014 v6 §6; инв. 4, 5, 16,
-//  17, 26, 27, 29).
+//  ModelCatalogManager — загрузка с докачкой по HTTP-диапазону (C-014 v7 §6; инв. 4, 5, 16,
+//  17, 26, 27, 29, 36).
 //
 //  Модуль: model-manager · Владелец: DEV-2 · Слой: домен + адаптер сети
 //
@@ -8,10 +8,11 @@
 //  `sha256`; совпало — переименование, нет — удаление всех файлов модели и
 //  `error(checksumMismatch)` (п. 6, инв. 4). `.manifest.json` — только после сверки всех файлов.
 //
-//  Шов отдаёт `HTTPRangeResponse` после тела, поэтому тело всегда дописывается в конец
-//  `.part`, а решение принимается по ответу: `206` с первым байтом `L` — готово; `200` —
-//  тело есть ресурс целиком, первые `L` байт отбрасываются на месте (п. 4); `206` с иным
-//  первым байтом либо `416` — `.part` удаляется, файл качается с нуля ОДИН раз (п. 5).
+//  Шов отдаёт `HTTPRangeResponse` в `head` ДО тела (v7, IR-141 п. 5), и решение по пп. 3–5
+//  принимается до первого байта: `206` с первым байтом `L` — тело дописывается в конец
+//  `.part`; `200` — `.part` усекается до нуля и пишется с начала (п. 4), поэтому его длина
+//  не превосходит `files[].sizeBytes` ни на одном ответе; `206` с иным первым байтом либо
+//  `416` — `.part` удаляется, бросок из `head`, файл качается с нуля ОДИН раз (п. 5).
 //
 //  Обрыв связи и отмена оставляют `.part` для докачки: `paused(bytesOnDisk:)`, либо
 //  `available`, если на диске нет ни байта (инв. 26). Отказ сервера (код ответа, повторный
@@ -126,37 +127,39 @@ extension ModelCatalogManager {
                 break                              // `.part` уже полон — сразу к сверке
             }
             session.partURL = partURL
-            let response = try await runFetch(file.url, firstByte: start, key: key, session: session)
-            session.closeHandle()
-            try checkStopped(session)
-            if try accept(response, start: start, partURL: partURL, restarted: &restarted) {
+            do {
+                try await runFetch(file.url, firstByte: start, partURL: partURL, key: key, session: session)
+                session.closeHandle()
+                try checkStopped(session)
                 break
+            } catch DownloadFailure.rangeMismatch(let status) {
+                session.closeHandle()
+                try checkStopped(session)
+                guard !restarted else {
+                    throw DownloadFailure.http("диапазон не сошёлся повторно (HTTP \(status))")
+                }
+                restarted = true
             }
         }
         try checkFile(partURL, file)
         try FileManager.default.moveItem(at: partURL, to: finalURL)
     }
 
-    /// Решение по ответу (§6 п. 3–5). `true` — файл докачан; `false` — повторить с нуля.
-    private func accept(_ response: HTTPRangeResponse, start: Int64, partURL: URL,
-                        restarted: inout Bool) throws -> Bool {
+    /// Решение по статусу (§6 пп. 3–5), до первого байта тела. Бросок прерывает запрос.
+    private func acceptHead(_ response: HTTPRangeResponse, start: Int64, partURL: URL,
+                            key: ModelKey, session: DownloadSession) throws {
+        guard sessions[key] === session, !session.isStopped else {
+            throw CancellationError()
+        }
         switch response.statusCode {
         case 206 where (response.firstByte ?? start) == start:
-            return true
+            return                                 // п. 3: дописывать в конец `.part`
         case 200:
-            if start > 0, ModelDisk.exists(partURL) {
-                try ModelDisk.dropPrefix(of: partURL, count: start)
-            }
-            return true
+            try ModelDisk.truncate(partURL, to: 0) // п. 4: ресурс целиком — `.part` с нуля
         case 206, 416:
-            try ModelDisk.remove(partURL)
-            guard !restarted else {
-                throw DownloadFailure.http("диапазон не сошёлся повторно (HTTP \(response.statusCode))")
-            }
-            restarted = true
-            return false
+            try ModelDisk.remove(partURL)          // п. 5: с нуля, один повтор
+            throw DownloadFailure.rangeMismatch(status: response.statusCode)
         default:
-            try ModelDisk.truncate(partURL, to: start)
             throw DownloadFailure.http("HTTP \(response.statusCode)")
         }
     }
@@ -175,18 +178,21 @@ extension ModelCatalogManager {
     }
 
     /// Запрос идёт отдельной задачей: `cancelDownload` обязана прервать и ожидание первого байта.
-    private func runFetch(_ url: URL, firstByte: Int64, key: ModelKey,
-                          session: DownloadSession) async throws -> HTTPRangeResponse {
+    private func runFetch(_ url: URL, firstByte: Int64, partURL: URL, key: ModelKey,
+                          session: DownloadSession) async throws {
         try checkStopped(session)
         let transport = self.transport
-        let task = Task { () throws -> HTTPRangeResponse in
-            try await transport.fetch(url: url, firstByte: firstByte) { [weak self] chunk in
+        let task = Task { () throws in
+            try await transport.fetch(url: url, firstByte: firstByte, head: { [weak self] response in
+                guard let self else { throw CancellationError() }
+                try await self.acceptHead(response, start: firstByte, partURL: partURL, key: key, session: session)
+            }, receive: { [weak self] chunk in
                 guard let self else { throw CancellationError() }
                 try await self.append(chunk, key: key, session: session)
-            }
+            })
         }
         session.fetchTask = task
-        return try await withTaskCancellationHandler {
+        try await withTaskCancellationHandler {
             try await task.value
         } onCancel: {
             task.cancel()

@@ -1,7 +1,6 @@
-//  К18, К19, К21–К23 перечня MEE-429 (группа Д): докачка по `Range`, ответ `200` вместо `206`,
-//  рассинхрон диапазона, продолжение из `paused`/`error(downloadFailed)`, запись по мере
-//  поступления. Три теста §6 C-014 («Продолжение с байта L», «Сервер не поддержал диапазон»,
-//  «Форма заголовка» — К20 в `DownloadTests.swift`).
+//  К18, К22, К23 перечня MEE-429 (группа Д): докачка по `Range`, продолжение из
+//  `paused`/`error(downloadFailed)`, запись по мере поступления. К19 и К21 в редакции v7
+//  (шов `head:`) — в `TransportHeadTests.swift`; «Форма заголовка» — К20 в `DownloadTests.swift`.
 
 import XCTest
 import DomainCore
@@ -46,46 +45,6 @@ extension DownloadTests {
             }
         }
         XCTAssertTrue(sources.contains { $0.text.contains("bytes=\\(firstByte)-") }, "механизм — Range")
-    }
-
-    func test_k19_serverIgnoresRangeRestartsFromZero() async throws {
-        let fixture = try await interruptedHarness()
-        let url = fixture.model.url("r.bin")
-        fixture.harness.transport.script(url, [.ignoreRange])
-        try await fixture.manager.download(id: "resume-asr", version: "1.0.0")
-        XCTAssertEqual(fixture.harness.transport.requests(for: url).map(\.firstByte), [0, 100])
-        let final = fixture.harness.directory(fixture.model).appendingPathComponent("r.bin")
-        XCTAssertEqual(try Data(contentsOf: final), fixture.model.contents["r.bin"], "файл переписан с нуля")
-        let state = await fixture.manager.state(id: "resume-asr", version: "1.0.0")
-        XCTAssertEqual(state, .downloaded, "не ошибка — итог валидная модель")
-    }
-
-    func test_k21_rangeMismatchRestartsOnceThenFailsPermanently() async throws {
-        // Рассинхрон один раз — перезапуск файла с нуля, итог валиден.
-        let once = try await interruptedHarness()
-        let url = once.model.url("r.bin")
-        once.harness.transport.script(url, [.respond(status: 206, firstByte: 50, body: TestModel.bytes(150, seed: 1))])
-        try await once.manager.download(id: "resume-asr", version: "1.0.0")
-        XCTAssertEqual(once.harness.transport.requests(for: url).map(\.firstByte), [0, 100, 0])
-        let onceState = await once.manager.state(id: "resume-asr", version: "1.0.0")
-        XCTAssertEqual(onceState, .downloaded)
-
-        // Рассинхрон повторно — downloadFailed, без бесконечного цикла.
-        let twice = try await interruptedHarness()
-        twice.harness.transport.script(url, [
-            .respond(status: 206, firstByte: 50, body: Data([1, 2, 3])),
-            .respond(status: 416, firstByte: nil, body: Data())
-        ])
-        do {
-            try await twice.manager.download(id: "resume-asr", version: "1.0.0")
-            XCTFail("ожидался downloadFailed")
-        } catch ModelCatalogError.downloadFailed {
-        }
-        XCTAssertEqual(twice.harness.transport.requests(for: url).map(\.firstByte), [0, 100, 0], "ровно один рестарт")
-        let state = await twice.manager.state(id: "resume-asr", version: "1.0.0")
-        guard case .error(.downloadFailed) = state else {
-            return XCTFail("ожидалось error(downloadFailed), получено \(state)")
-        }
     }
 
     func test_k22_pausedOrFailedDownloadResumesFromExistingPart() async throws {

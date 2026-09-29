@@ -1,6 +1,6 @@
-//  К41–К43, К51 перечня MEE-429 (план MEE-436, группа К): встроенные профили неизменяемы,
-//  `saveProfile` с неизвестной моделью, запрет удаления модели, на которую ссылается профиль,
-//  переопределение встроенного профиля пользовательским по `id`.
+//  К41–К43, К51 перечня MEE-429 (группа К; К42 и К43 — в редакции поправки `d999d708`,
+//  C-014 v7): встроенные профили неизменяемы, `saveProfile` с неизвестной моделью, запрет
+//  удаления версии, которую профиль разрешает, переопределение встроенного пользовательским.
 
 import XCTest
 import DomainCore
@@ -44,6 +44,8 @@ final class ProfilesTests: XCTestCase {
         XCTAssertEqual(after, before, "встроенный профиль не изменён и не удалён")
     }
 
+    /// К42 (поправка `d999d708`, инв. 13 v7): А — модели нет нигде; Б — есть только не скачанная;
+    /// В — есть только на диске по инв. 33.
     func test_k42_saveProfileWithUnknownAsrModelIdThrows() async throws {
         let harness = makeHarness()
         let manager = try harness.makeManager()
@@ -51,36 +53,59 @@ final class ProfilesTests: XCTestCase {
         await expect(.unknownModel(id: "no-such-model", version: "")) { try await manager.saveProfile(profile) }
         let ids = await manager.profiles().map(\.id)
         XCTAssertFalse(ids.contains("mine"), "профиль не сохранён")
+        let row = try await harness.settings.value(forKey: ModelCatalogManager.userProfilesKey)
+        XCTAssertNil(row, "и в modelCatalog.userProfiles его нет")
+
+        let state = await manager.state(id: "p-free", version: "1.0.0")
+        XCTAssertEqual(state, .available, "вектор Б: p-free не скачана")
         try await manager.saveProfile(testProfile(id: "mine", asr: "p-free", builtIn: false))
         let saved = await manager.profiles().map(\.id)
-        XCTAssertTrue(saved.contains("mine"), "вектор непустоты: с известной моделью — сохраняется")
+        XCTAssertTrue(saved.contains("mine"), "Б: инв. 13 спрашивает «есть ли», а не «готова ли»")
+
+        // В: запись p-emb исчезает из каталога, файлы с `.manifest.json` остаются (инв. 33).
+        try await manager.download(id: "p-emb", version: "1.0.0")
+        harness.models.removeAll { $0.descriptor.id == "p-emb" }
+        harness.transport.setContent(try harness.catalogBytes(), at: ModelHarness.catalogURL)
+        try await manager.refreshCatalog()
+        let inCatalog = await manager.models().map(\.id)
+        XCTAssertFalse(inCatalog.contains("p-emb"), "вектор В: записи в каталоге нет")
+        try await manager.saveProfile(testProfile(id: "disk", asr: "p-emb", builtIn: false))
+        let withDisk = await manager.profiles().map(\.id)
+        XCTAssertTrue(withDisk.contains("disk"), "В: модель инв. 33 известна")
     }
 
+    /// К43 (поправка `d999d708`, инв. 11 v7): каждая роль и каждое происхождение профиля —
+    /// отдельный прогон; два профиля «p2» и «p1» разрешают `m@1.0.0` — список по возрастанию `id`.
     func test_k43_deleteModelInUseByAnyRoleOrUserProfileThrowsListsProfilesLeavesFiles() async throws {
-        let harness = makeHarness()
-        let manager = try harness.makeManager()
-        for model in harness.models {
-            try await manager.download(id: model.descriptor.id, version: "1.0.0")
-        }
-        try await manager.saveProfile(testProfile(id: "u-diar", asr: "p-free", diarization: "p-diar", builtIn: false))
-        try await manager.saveProfile(testProfile(id: "u-emb", asr: "p-free", embedding: "p-emb", builtIn: false))
-        try await manager.saveProfile(testProfile(id: "u-vad", asr: "p-free", vad: "p-vad", builtIn: false))
-        let cases: [(String, [String])] = [
-            ("p-asr", ["p1"]),                 // asr встроенного профиля
-            ("p-vad", ["p1", "u-vad"]),        // vad встроенного и пользовательского
-            ("p-diar", ["u-diar"]),            // diarization пользовательского
-            ("p-emb", ["u-emb"]),              // embedding пользовательского
-            ("p-free", ["u-diar", "u-emb", "u-vad"])
-        ]
-        for (modelId, profileIds) in cases {
-            await expect(.modelInUseByProfile(modelId: modelId, profileIds: profileIds)) {
-                try await manager.delete(id: modelId, version: "1.0.0")
+        let roles: [ModelRole] = [.asr, .vad, .diarization, .embedding]
+        for role in roles {
+            for builtIn in [true, false] {
+                let run = "\(role.rawValue), \(builtIn ? "встроенный" : "пользовательский")"
+                let target = TestModel.make(id: "m", role: role, files: [("m.bin", TestModel.bytes(16, seed: 70))])
+                let base = TestModel.make(id: "base", files: [("b.bin", TestModel.bytes(16, seed: 71))])
+                let referencing = ["p2", "p1"].map { id in
+                    role == .asr
+                        ? testProfile(id: id, asr: "m", builtIn: builtIn)
+                        : testProfile(id: id, asr: "base", vad: role == .vad ? "m" : nil,
+                                      diarization: role == .diarization ? "m" : nil,
+                                      embedding: role == .embedding ? "m" : nil, builtIn: builtIn)
+                }
+                let harness = ModelHarness(models: [target, base], profiles: builtIn ? referencing : [])
+                if !builtIn {
+                    try harness.seedUserProfiles(referencing)
+                }
+                let manager = try harness.makeManager()
+                try await manager.download(id: "m", version: "1.0.0")
+                if role != .asr {
+                    try await manager.download(id: "base", version: "1.0.0")   // профиль готов целиком
+                }
+                await expect(.modelInUseByProfile(modelId: "m", profileIds: ["p1", "p2"])) {
+                    try await manager.delete(id: "m", version: "1.0.0")
+                }
+                XCTAssertTrue(harness.exists(harness.directory(target).appendingPathComponent("m.bin")), run)
+                let state = await manager.state(id: "m", version: "1.0.0")
+                XCTAssertEqual(state, .downloaded, run)
             }
-            let model = try XCTUnwrap(harness.models.first { $0.descriptor.id == modelId })
-            XCTAssertTrue(harness.exists(harness.directory(model).appendingPathComponent("\(modelId).bin")),
-                          "\(modelId): файлы не тронуты")
-            let state = await manager.state(id: modelId, version: "1.0.0")
-            XCTAssertEqual(state, .downloaded)
         }
     }
 

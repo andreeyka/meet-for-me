@@ -1,4 +1,4 @@
-//  ModelManager — реализация каталога моделей, `ModelCatalogPort` (C-014 v6, MEE-22; MEE-442).
+//  ModelManager — реализация каталога моделей, `ModelCatalogPort` (C-014 v7, MEE-22; MEE-442, MEE-459).
 //
 //  Модуль: model-manager · Владелец: DEV-2 · Слой: домен + адаптер сети
 //
@@ -7,16 +7,16 @@
 //  только через interface-request (П2, П6). Границы и запреты — docs/module-map.md.
 //
 //  Публичная поверхность (инв. 32, `.github/scripts/allowed-types/ModelManager.json`) —
-//  один собственный тип `ModelCatalogManager` (допуск (в)) и типы C-014 в его сигнатурах.
-//  Шов сети (`ModelFileTransport`), шов машины (`MachineEnvironment`) и встроенный каталог
-//  — `internal`: тесты берут их через `@testable import`, composition root — не видит.
+//  один собственный тип `ModelCatalogManager` (допуск (в)), типы C-014 в его сигнатурах и
+//  `SettingsRepository` в `init` (допуск (г), v7). Шов сети (`ModelFileTransport`), шов
+//  машины (`MachineEnvironment`) и встроенный каталог — `internal`: тесты берут их через
+//  `@testable import`, composition root — не видит.
 //
 //  Чего модуль не делает (инв. 7, module-map): не загружает модели в память и не исполняет
 //  инференс — ведёт учёт и отдаёт пути.
 //
-//  Пользовательские профили (C-014 «Поведение») держатся в памяти процесса: хранилище
-//  `app_settings` (C-016 §2.1) — порт `SettingsRepository`, которого нет среди типов,
-//  допустимых на публичной границе таргета (инв. 32, допуск (а)). Раскрыто в PR MEE-442.
+//  Пользовательские профили (инв. 37, v7) — одной строкой `app_settings` под ключом
+//  `modelCatalog.userProfiles` через `SettingsRepository`; см. `+Profiles`/`+UserProfiles`.
 
 import Foundation
 import DomainCore
@@ -28,10 +28,16 @@ public actor ModelCatalogManager: ModelCatalogPort {
     let catalogURL: URL
     let transport: ModelFileTransport
     let environment: MachineEnvironment
+    let settings: SettingsRepository
+    let log: @Sendable (String) -> Void
     let hub = ModelEventHub()
 
     var catalog: ModelCatalogFile
-    var userProfiles: [String: TranscriptionProfile] = [:]
+    /// Прочитанные пользовательские профили (инв. 37); `nil` — строка ещё не прочитана
+    /// либо не читается: тогда её читают заново при следующем обращении.
+    var userProfiles: [String: TranscriptionProfile]?
+    var profileWriteHeld = false
+    var profileWriteWaiters: [CheckedContinuation<Void, Never>] = []
     var sessions: [ModelKey: DownloadSession] = [:]
     var runningDownloads: [ModelKey: Task<Void, Error>] = [:]
     var failures: [ModelKey: ModelCatalogError] = [:]
@@ -41,10 +47,12 @@ public actor ModelCatalogManager: ModelCatalogPort {
     var published: [ModelKey: ModelState] = [:]
 
     /// `rootDirectory` — корень `FileLayout` (C-010 §1); модели лежат в `models/` под ним.
-    /// `catalogURL` — адрес актуального `catalog.json` на CDN.
-    public init(rootDirectory: URL, catalogURL: URL) {
+    /// `catalogURL` — адрес актуального `catalog.json` на CDN. `settings` — тот же
+    /// `SettingsRepository`, что у фасада C-016: в нём строка пользовательских профилей (инв. 37).
+    public init(rootDirectory: URL, catalogURL: URL, settings: SettingsRepository) {
         self.init(root: rootDirectory,
                   catalogURL: catalogURL,
+                  settings: settings,
                   transport: URLSessionModelFileTransport(),
                   environment: SystemMachineEnvironment(),
                   builtInCatalog: Self.builtInCatalogData())
@@ -52,28 +60,36 @@ public actor ModelCatalogManager: ModelCatalogPort {
 
     init(root: URL,
          catalogURL: URL,
+         settings: SettingsRepository,
          transport: ModelFileTransport,
          environment: MachineEnvironment,
-         builtInCatalog: Data?) {
+         builtInCatalog: Data?,
+         log: @escaping @Sendable (String) -> Void = ModelCatalogManager.standardErrorLog) {
         layout = FileLayout(root: root)
         self.catalogURL = catalogURL
+        self.settings = settings
         self.transport = transport
         self.environment = environment
-        catalog = Self.initialCatalog(cacheURL: Self.cachedCatalogURL(root: root), builtIn: builtInCatalog)
+        self.log = log
+        catalog = Self.initialCatalog(cacheURL: Self.cachedCatalogURL(root: root), builtIn: builtInCatalog, log: log)
     }
 
     // MARK: - Каталог
 
     public func refreshCatalog() async throws {
         let buffer = ByteAccumulator()
-        let response: HTTPRangeResponse
         do {
-            response = try await transport.fetch(url: catalogURL, firstByte: 0) { buffer.append($0) }
+            try await transport.fetch(url: catalogURL, firstByte: 0, head: { response in
+                // §6 (v7): статус до тела — отказ сервера не читает тело вовсе.
+                guard response.statusCode == 200 || (response.statusCode == 206 && (response.firstByte ?? 0) == 0)
+                else {
+                    throw ModelCatalogError.manifestUnreachable(message: "catalog.json: HTTP \(response.statusCode)")
+                }
+            }, receive: { buffer.append($0) })
+        } catch let error as ModelCatalogError {
+            throw error
         } catch {
             throw ModelCatalogError.manifestUnreachable(message: "catalog.json: \(error)")
-        }
-        guard response.statusCode == 200 || (response.statusCode == 206 && (response.firstByte ?? 0) == 0) else {
-            throw ModelCatalogError.manifestUnreachable(message: "catalog.json: HTTP \(response.statusCode)")
         }
         let bytes = buffer.data
         // Инв. 31: отвергнутый каталог действующий не заменяет — бросок до присваивания.
@@ -108,20 +124,47 @@ public actor ModelCatalogManager: ModelCatalogPort {
         root.appendingPathComponent("models").appendingPathComponent("catalog.json")
     }
 
-    /// Действующий каталог при старте: скачанный ранее, иначе встроенный, иначе пустой.
-    static func initialCatalog(cacheURL: URL, builtIn: Data?) -> ModelCatalogFile {
-        if let cached = try? Data(contentsOf: cacheURL), let file = try? CatalogReader.catalog(from: cached) {
-            return file
+    /// Действующий каталог при старте (инв. 28, v7): из сохранённой копии и встроенного тот,
+    /// чей `generatedAt` позже; при равенстве — копия. Копия, которая не читается или не
+    /// проходит инварианты чтения (2, 3, 15, 30, 34), не выбирается — и это пишется в лог.
+    /// Ни одного годного — пустой каталог.
+    static func initialCatalog(cacheURL: URL, builtIn: Data?,
+                               log: @Sendable (String) -> Void) -> ModelCatalogFile {
+        let cached = readStartupCatalog(try? Data(contentsOf: cacheURL), name: "сохранённая копия", log: log)
+        let bundled = readStartupCatalog(builtIn, name: "встроенный каталог", log: log)
+        switch (cached, bundled) {
+        case let (cached?, bundled?):
+            return cached.generatedAt >= bundled.generatedAt ? cached : bundled
+        case let (cached?, nil):
+            return cached
+        case let (nil, bundled?):
+            return bundled
+        case (nil, nil):
+            return ModelCatalogFile(schemaVersion: ModelCatalogFile.supportedSchemaVersion,
+                                    generatedAt: Date(timeIntervalSince1970: 0), models: [], profiles: [])
         }
-        if let builtIn, let file = try? CatalogReader.catalog(from: builtIn) {
-            return file
-        }
-        return ModelCatalogFile(schemaVersion: ModelCatalogFile.supportedSchemaVersion,
-                                generatedAt: Date(timeIntervalSince1970: 0), models: [], profiles: [])
     }
 
-    /// Байты принятого каталога сохраняются как пришли — `catalog.json` приложение не пишет
-    /// кодировщиком, только хранит полученную копию (инв. 14: «скачанный ранее»).
+    private static func readStartupCatalog(_ data: Data?, name: String,
+                                           log: @Sendable (String) -> Void) -> ModelCatalogFile? {
+        guard let data else { return nil }
+        do {
+            return try CatalogReader.catalog(from: data)
+        } catch {
+            log("model-manager: \(name) catalog.json отвергнут при старте: \(asCatalogError(error))")
+            return nil
+        }
+    }
+
+    /// Лог по умолчанию — stderr: у `Packages/Core` общего журнала нет, а `os.Logger` в
+    /// `ModelManager` запрещён инв. 20 (сборка на Linux).
+    static let standardErrorLog: @Sendable (String) -> Void = { message in
+        FileHandle.standardError.write(Data((message + "\n").utf8))
+    }
+
+    /// Байты принятого каталога сохраняются дословно, как пришли, и только после приёма —
+    /// в `models/catalog.json` атомарной заменой (инв. 28, v7): перекодирование `DomainJSON`
+    /// потеряло бы неизвестные ключи (§2.2).
     private func storeCachedCatalog(_ bytes: Data) {
         let url = Self.cachedCatalogURL(root: layout.root)
         try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(),

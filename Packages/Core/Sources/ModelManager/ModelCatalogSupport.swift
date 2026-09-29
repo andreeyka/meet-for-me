@@ -45,7 +45,7 @@ final class ModelEventHub: @unchecked Sendable {
 final class DownloadSession: @unchecked Sendable {
     var cancelRequested = false
     var deleted = false
-    var fetchTask: Task<HTTPRangeResponse, Error>?
+    var fetchTask: Task<Void, Error>?
     var partURL: URL?
     var handle: FileHandle?
     var publishedPercent = -1
@@ -84,6 +84,8 @@ final class ByteAccumulator: @unchecked Sendable {
 /// Отказы загрузки, различаемые внутри `download` до перевода в `ModelCatalogError`.
 enum DownloadFailure: Error {
     case http(String)
+    /// `206` с первым байтом не `L` либо `416` (§6 п. 5): `.part` удалён, файл — с нуля один раз.
+    case rangeMismatch(status: Int)
     case checksum(fileName: String, expected: String, actual: String)
 }
 
