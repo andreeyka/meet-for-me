@@ -55,13 +55,13 @@ extension EngineXPCClient {
     final class ProgressReceiver: NSObject, EngineXPCClientProtocol {
         private let onProgress: @Sendable (Data) -> Void
         init(onProgress: @escaping @Sendable (Data) -> Void) { self.onProgress = onProgress }
-        func didReceiveProgress(_ progressData: Data) { onProgress(progressData) }
+        func engineDidReportProgress(_ progressData: Data) { onProgress(progressData) }
     }
 
     // MARK: - Соединение (ленивое, пересоздаваемое — см. заголовок EngineXPCClient.swift)
 
     /// Прокси сервиса с собственным обработчиком отказа для ЭТОГО конкретного вызова —
-    /// отказ на уровне самого прокси (до реплай-блока `send`, например обрыв соединения)
+    /// отказ на уровне самого прокси (до реплай-блока `handle`, например обрыв соединения)
     /// приходит сюда же, не в реплай-блок.
     private func serviceProxy(errorHandler: @escaping @Sendable (Error) -> Void) -> EngineXPCServiceProtocol? {
         currentConnection().remoteObjectProxyWithErrorHandler(errorHandler) as? EngineXPCServiceProtocol
@@ -179,7 +179,7 @@ extension EngineXPCClient {
                 // выше по этому же файлу, handshakeVerified). Если Task отменяется РОВНО между
                 // проверкой `:167` (уже прошла, `Task.isCancelled == false`) и настоящей отправкой
                 // в `dispatch(requestData, jobId:)` чуть ниже, `onCancel` вправе выполниться и
-                // отправить `.cancel(jobId)` РАНЬШЕ, чем сам `dispatch` успеет вызвать `proxy.send`
+                // отправить `.cancel(jobId)` РАНЬШЕ, чем сам `dispatch` успеет вызвать `proxy.handle`
                 // для исходного рабочего кадра — на сервисе `.cancel` для ещё не увиденного jobId
                 // придёт первым (no-op по К26: неизвестный jobId), а рабочий кадр следом уйдёт как
                 // обычно и выполнится ДО КОНЦА без настоящей отмены на стороне сервиса, хотя клиент
@@ -221,7 +221,7 @@ extension EngineXPCClient {
             ))
             return
         }
-        proxy.send(requestData) { [weak self] replyData, error in
+        proxy.handle(requestData) { [weak self] replyData, error in
             self?.complete(jobId: jobId, replyData: replyData, error: error)
         }
     }
@@ -292,7 +292,7 @@ extension EngineXPCClient {
         guard let proxy = existing.remoteObjectProxyWithErrorHandler({ _ in }) as? EngineXPCServiceProtocol else {
             return
         }
-        proxy.send(data) { _, _ in }
+        proxy.handle(data) { _, _ in }
     }
 
     private func startWatchdog(jobId: EngineJobId, job: PendingJob, timeoutSeconds: Int) {

@@ -43,7 +43,7 @@ final class ServiceConnectionDelegate: NSObject, NSXPCListenerDelegate {
             pushProgress: { [weak newConnection] data in
                 guard let proxy = newConnection?.remoteObjectProxyWithErrorHandler({ _ in }) as? EngineXPCClientProtocol
                 else { return }
-                proxy.didReceiveProgress(data)
+                proxy.engineDidReportProgress(data)
             }
         )
         let exportedObject = ExportedRequestHandler(handler: handler)
@@ -57,7 +57,7 @@ final class ServiceConnectionDelegate: NSObject, NSXPCListenerDelegate {
     }
 }
 
-/// Единственная обязанность — переадресовать `send(_:reply:)` протокола настоящему
+/// Единственная обязанность — переадресовать `handle(_:reply:)` протокола настоящему
 /// `EngineXPCRequestHandler`; сам класс существует только потому, что `NSXPCConnection`
 /// требует у `exportedObject` быть настоящим `NSObject`, совместимым с Objective-C рантаймом.
 final class ExportedRequestHandler: NSObject, EngineXPCServiceProtocol {
@@ -67,7 +67,11 @@ final class ExportedRequestHandler: NSObject, EngineXPCServiceProtocol {
         self.handler = handler
     }
 
-    func send(_ requestData: Data, reply: @escaping (Data?, Error?) -> Void) {
-        handler.handle(requestData, reply: reply)
+    /// `EngineXPCRequestHandler.handle` отдаёт `Error?` (публичный `NSError` в `EngineXPCService`
+    /// не проходит барьер символьного графа — заголовок `EngineXPCRequestHandler.swift`), а
+    /// протокол C-012 v10 §3 — `NSError?`: мост здесь, в обвязке. Все отказы, которые строит
+    /// обработчик, уже `NSError` (`transportFault`), так что приведение ничего не теряет.
+    func handle(_ requestData: Data, reply: @escaping (Data?, NSError?) -> Void) {
+        handler.handle(requestData) { data, error in reply(data, error.map { $0 as NSError }) }
     }
 }

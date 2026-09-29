@@ -32,7 +32,7 @@ import EngineKit
 @testable import EngineXPCClient
 import EngineXPCService
 
-/// Единственная обязанность — переадресовать `send(_:reply:)` протокола настоящему
+/// Единственная обязанность — переадресовать `handle(_:reply:)` протокола настоящему
 /// `EngineXPCRequestHandler` (тот же код, что несёт продакшн `ExportedRequestHandler`,
 /// `Services/TranscriptionEngineXPC/Sources/ServiceConnectionDelegate.swift`).
 final class TestExportedRequestHandler: NSObject, EngineXPCServiceProtocol {
@@ -42,8 +42,12 @@ final class TestExportedRequestHandler: NSObject, EngineXPCServiceProtocol {
         self.handler = handler
     }
 
-    func send(_ requestData: Data, reply: @escaping (Data?, Error?) -> Void) {
-        handler.handle(requestData, reply: reply)
+    /// `EngineXPCRequestHandler.handle` отдаёт `Error?` (публичный `NSError` в `EngineXPCService`
+    /// не проходит барьер символьного графа — заголовок `EngineXPCRequestHandler.swift`), а
+    /// протокол C-012 v10 §3 — `NSError?`: мост здесь, в обвязке. Все отказы, которые строит
+    /// обработчик, уже `NSError` (`transportFault`), так что приведение ничего не теряет.
+    func handle(_ requestData: Data, reply: @escaping (Data?, NSError?) -> Void) {
+        handler.handle(requestData) { data, error in reply(data, error.map { $0 as NSError }) }
     }
 }
 
@@ -64,7 +68,7 @@ final class TestServiceConnectionDelegate: NSObject, NSXPCListenerDelegate {
             pushProgress: { [weak newConnection] data in
                 guard let proxy = newConnection?.remoteObjectProxyWithErrorHandler({ _ in }) as? EngineXPCClientProtocol
                 else { return }
-                proxy.didReceiveProgress(data)
+                proxy.engineDidReportProgress(data)
             }
         )
         let exportedObject = TestExportedRequestHandler(handler: handler)
@@ -112,7 +116,7 @@ final class RealServiceFixture: NSObject {
     /// по завершении теста — тот же приём, что `defer` у прочих сырых соединений этого плана).
     /// Возврат РП по MEE-438 (11:50 UTC): раньше это соединение НЕ экспортировало
     /// `EngineXPCClientProtocol` вовсе — сервис (`pushProgress` в делегате) пытался толкнуть
-    /// прогресс в несуществующий приёмник; сам круговой обмен `send(_:reply:)` от этого не
+    /// прогресс в несуществующий приёмник; сам круговой обмен `handle(_:reply:)` от этого не
     /// виснет (прогресс и реплай — разные вызовы), но соединение было несимметричным
     /// продакшену без явной причины. Теперь экспортирует заглушку-приёмник (`onProgress`
     /// по умолчанию отбрасывает) — тот же приём, что настоящий `EngineXPCClient`
@@ -138,7 +142,7 @@ final class RealServiceFixture: NSObject {
 final class TestRawProgressReceiver: NSObject, EngineXPCClientProtocol {
     private let onProgress: @Sendable (Data) -> Void
     init(onProgress: @escaping @Sendable (Data) -> Void) { self.onProgress = onProgress }
-    func didReceiveProgress(_ progressData: Data) { onProgress(progressData) }
+    func engineDidReportProgress(_ progressData: Data) { onProgress(progressData) }
 }
 
 /// Резюмирует continuation ровно один раз — второй вызов молча игнорируется (тот же приём,
@@ -231,7 +235,7 @@ private final class RaceOnce<Value>: @unchecked Sendable {
     }
 }
 
-/// `proxy.send(_:reply:)` как `async` — единственный способ ждать реплай-замыкание без
+/// `proxy.handle(_:reply:)` как `async` — единственный способ ждать реплай-замыкание без
 /// вложенных `XCTestExpectation` на каждый вызов.
 ///
 /// Возврат РП по MEE-438 (12:15 UTC): ограничен `timeoutSeconds` (по умолчанию 5с) — тот же
@@ -248,8 +252,8 @@ func send(
 ) async -> (Data?, NSError?) {
     let replyTask = Task<(Data?, NSError?), Never> {
         await withCheckedContinuation { continuation in
-            proxy.send(data) { replyData, error in
-                continuation.resume(returning: (replyData, error as NSError?))
+            proxy.handle(data) { replyData, error in
+                continuation.resume(returning: (replyData, error))
             }
         }
     }
