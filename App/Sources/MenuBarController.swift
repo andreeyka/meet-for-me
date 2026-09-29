@@ -6,12 +6,11 @@
 //  меню (шапка `StatusMenu.swift`), подписка и таймер переживают это только на объекте,
 //  которым владеет делегат.
 //
-//  Пока идёт запись — тик раз в секунду (MEE-478 п. 5). Время записи тикает локально (`now`),
-//  без похода в фасад. Уровни (`ActiveSessionView.micLevel`/`systemLevel`) фасад отдельным
-//  `AppEvent.statusChanged` не публикует — только в следующем `status()`
-//  (`AppFacadeImpl+ActiveSession`, `.levels` не публикует; вопрос IR-147 п. 3, MEE-476), поэтому
-//  `status()` опрашивается тем же тиком, но только пока меню открыто: закрытому меню уровни не
-//  нужны. Без записи тика нет: хватает `events()` и обновления на открытии.
+//  Тик раз в секунду — только пока идёт запись **и** меню открыто (MEE-478 п. 5, MEE-487 п. 5):
+//  он двигает время записи (`now`) и опрашивает `status()` ради уровней — их фасад событием не
+//  публикует, законный путь к ним — опрос (C-016 v13 инв. 36). Закрытому меню не нужно ни то,
+//  ни другое: `now` не тикает впустую и не пересобирает вид, а на открытии `refresh()` сразу
+//  ставит свежие `now` и снимок. Без записи тика нет: хватает `events()` и обновления на открытии.
 //
 //  П7: только `AppFacade`, ни `Storage`, ни движка, ни адаптеров.
 //
@@ -76,6 +75,7 @@ final class MenuBarController: ObservableObject {
 
     func menuClosed() {
         isMenuOpen = false
+        updateTicker()
     }
 
     func dismissError() {
@@ -110,25 +110,21 @@ final class MenuBarController: ObservableObject {
             }
             return .succeeded
         } catch {
-            return .failed(MenuBarState.errorView(for: error))
+            return MenuBarState.result(for: error)
         }
     }
 
     private func updateTicker() {
-        let recording = state.status?.activeSession != nil
-        if recording, tickTask == nil {
+        let needsTick = isMenuOpen && state.status?.activeSession != nil
+        if needsTick, tickTask == nil {
             tickTask = Task { [weak self] in
                 while !Task.isCancelled {
                     try? await Task.sleep(nanoseconds: 1_000_000_000)
                     guard let self, !Task.isCancelled else { return }
-                    if self.isMenuOpen {
-                        await self.refresh()
-                    } else {
-                        self.now = Date()
-                    }
+                    await self.refresh()
                 }
             }
-        } else if !recording, let task = tickTask {
+        } else if !needsTick, let task = tickTask {
             task.cancel()
             tickTask = nil
         }

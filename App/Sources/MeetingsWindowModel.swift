@@ -1,13 +1,18 @@
-//  MeetingsWindowModel — чистая логика окна «Встречи» (MEE-474): неделя, список, выбор встречи,
+//  MeetingsWindowModel — чистая логика окна «Встречи» (MEE-474): неделя, список, выбор строки,
 //  записи и транскрипта, реакция на `AppEvent`. Без SwiftUI и без `AppFacade`-вызовов — только
 //  значения (тот же приём, что `MenuBarModel.swift`: тестового таргета у App нет, логику
-//  проверяют чтением).
+//  проверяют чтением). Типы значений — `MeetingsWindowTypes.swift`.
 //
 //  Как устроено. Каждый вход (`select…`, `apply(event:)`, `finish…`) меняет состояние и
 //  возвращает список чтений `MeetingsLoad`, которые контроллер (`MeetingsController.swift`)
 //  исполняет против фасада и отдаёт обратно в `finish…`. У каждого вида чтения свой счётчик
 //  поколения: ответ на устаревший запрос (неделю уже переключили, встречу уже сменили)
 //  отбрасывается, а не перетирает свежий.
+//
+//  Список недели — два чтения фасада (C-016 v12 инв. 33, решение IR-146 в MEE-470): встречи
+//  `meetings(from:to:)` и записи без встречи `adHocRecordings(from:to:)`; окно склеивает их в одну
+//  таблицу (`MeetingRow.Kind`). Оба перечитываются по `meetingsChanged` (инв. 34). Выбранная
+//  ad-hoc запись — карточка из одной записи; транскрипт — `latestTranscript(recordingId:)`.
 //
 //  Окно не держит копий дольше своей жизни: состояние живёт в контроллере, контроллер — пока
 //  открыто окно (`MeetingsWindowPresenter`). Источник истины — фасад и его события.
@@ -17,96 +22,13 @@
 import DomainCore
 import Foundation
 
-// MARK: - Неделя
-
-struct MeetingsWeek: Equatable, Sendable {
-    let start: Date
-    let end: Date
-
-    /// Григорианский календарь с понедельником первым днём, в поясе пользователя.
-    static var calendar: Calendar {
-        var calendar = Calendar(identifier: .gregorian)
-        calendar.locale = Locale(identifier: "ru_RU")
-        calendar.firstWeekday = 2
-        calendar.timeZone = .current
-        return calendar
-    }
-
-    static func containing(_ date: Date, calendar: Calendar = MeetingsWeek.calendar) -> MeetingsWeek {
-        guard let interval = calendar.dateInterval(of: .weekOfYear, for: date) else {
-            let start = calendar.startOfDay(for: date)
-            return MeetingsWeek(start: start, end: start.addingTimeInterval(7 * 24 * 3600))
-        }
-        return MeetingsWeek(start: interval.start, end: interval.end)
-    }
-
-    func shifted(by weeks: Int, calendar: Calendar = MeetingsWeek.calendar) -> MeetingsWeek {
-        let moved = calendar.date(byAdding: .weekOfYear, value: weeks, to: start) ?? start
-        return MeetingsWeek.containing(moved, calendar: calendar)
-    }
-}
-
-// MARK: - Чтения, которые модель просит у фасада
-
-enum MeetingsLoad: Equatable, Sendable {
-    /// `meetings(from:to:)`.
-    case list(week: MeetingsWeek, generation: Int)
-    /// `meeting(id:)`.
-    case detail(meetingId: UUID, generation: Int)
-    /// `latestTranscript(recordingId:)` при `.latest`, иначе `transcript(id:)`.
-    case transcript(recordingId: UUID, selection: TranscriptSelection, generation: Int)
-    /// `jobs(status:)` для `.running`, `.pending`, `.failed` и `status()`.
-    case processing(generation: Int)
-}
-
-enum TranscriptSelection: Hashable, Sendable {
-    /// Последняя версия — `latestTranscript(recordingId:)`; новая версия подхватывается сама.
-    case latest
-    /// Выбранная пользователем версия по `TranscriptHeader.id` — `transcript(id:)`.
-    case version(UUID)
-}
-
-// MARK: - Содержимое областей окна
-
-enum MeetingsListContent: Equatable, Sendable {
-    case loading
-    case loaded([MeetingListItem])
-    /// Чтение бросило (`AppFacadeError`): ошибка на месте списка, окно не падает.
-    case failed(AppErrorView)
-}
-
-enum MeetingDetailContent: Equatable, Sendable {
-    case none
-    case loading
-    case loaded(MeetingDetail)
-    case notFound
-    case failed(AppErrorView)
-}
-
-enum TranscriptContent: Equatable, Sendable {
-    case none
-    case loading
-    case loaded(TranscriptView)
-    /// Фасад ответил `nil`: транскрипта (или выбранной версии) нет.
-    case missing
-    case failed(AppErrorView)
-}
-
-/// Снимок очереди для блока «Состояние обработки». `jobs(status:)` — по записи через
-/// `JobPayload`, `status().runningJobs` — доля и этап.
-struct ProcessingSnapshot: Equatable, Sendable {
-    var running: [Job] = []
-    var pending: [Job] = []
-    var failed: [Job] = []
-}
-
-// MARK: - Состояние
-
 struct MeetingsWindowState: Equatable, Sendable {
 
     private(set) var week: MeetingsWeek
     private(set) var list: MeetingsListContent = .loading
-    private(set) var selectedMeetingId: UUID?
+    private(set) var adHocList: AdHocListContent = .loading
+    /// Выбранная строка таблицы: встреча или запись без встречи.
+    private(set) var selectedRow: MeetingRow.Kind?
     private(set) var detail: MeetingDetailContent = .none
     private(set) var selectedRecordingId: UUID?
     private(set) var transcriptSelection: TranscriptSelection = .latest
@@ -128,6 +50,7 @@ struct MeetingsWindowState: Equatable, Sendable {
     private(set) var actionError: AppErrorView?
 
     private(set) var listGeneration = 0
+    private(set) var adHocGeneration = 0
     private(set) var detailGeneration = 0
     private(set) var transcriptGeneration = 0
     private(set) var processingGeneration = 0
@@ -136,35 +59,74 @@ struct MeetingsWindowState: Equatable, Sendable {
         week = MeetingsWeek.containing(now)
     }
 
+    // MARK: Выбор
+
+    var selectedMeetingId: UUID? {
+        guard case .meeting(let meetingId) = selectedRow else { return nil }
+        return meetingId
+    }
+
+    /// Выбранная запись без встречи из последнего ответа `adHocRecordings`. `nil` — выбрана
+    /// не она или список ещё не пришёл.
+    var selectedAdHoc: RecordingSummary? {
+        guard case .adHoc(let recordingId) = selectedRow, case .loaded(let recordings) = adHocList else { return nil }
+        return recordings.first { $0.recordingId == recordingId }
+    }
+
+    /// Записи карточки: у встречи — `MeetingDetail.recordings`, у ad-hoc строки — она одна.
+    var selectedRecordings: [RecordingSummary] {
+        switch selectedRow {
+        case .meeting:
+            guard case .loaded(let loaded) = detail else { return [] }
+            return loaded.recordings
+        case .adHoc:
+            return selectedAdHoc.map { [$0] } ?? []
+        case nil:
+            return []
+        }
+    }
+
     // MARK: Входы пользователя
 
     /// Первые чтения при открытии окна.
     mutating func start() -> [MeetingsLoad] {
-        [reloadList(), reloadProcessing()]
+        [reloadList(), reloadAdHoc(), reloadProcessing()]
     }
 
+    /// Ad-hoc строки живут в своей неделе, отдельного чтения записи по id у фасада нет —
+    /// выбор ad-hoc строки при смене недели снимается. Выбор встречи остаётся (`meeting(id:)`).
     mutating func show(week newWeek: MeetingsWeek) -> [MeetingsLoad] {
         week = newWeek
         list = .loading
-        return [reloadList()]
+        adHocList = .loading
+        var loads = [reloadList(), reloadAdHoc()]
+        if case .adHoc = selectedRow { loads += select(row: nil) }
+        return loads
     }
 
     /// Выбор строки списка. `nil` — снять выбор.
-    mutating func select(meetingId: UUID?) -> [MeetingsLoad] {
-        guard meetingId != selectedMeetingId else { return [] }
-        selectedMeetingId = meetingId
+    mutating func select(row: MeetingRow.Kind?) -> [MeetingsLoad] {
+        guard row != selectedRow else { return [] }
+        selectedRow = row
         selectedRecordingId = nil
         transcriptSelection = .latest
         transcript = .none
         transcriptGeneration += 1
         actionError = nil
-        guard meetingId != nil else {
+        switch row {
+        case .meeting:
+            detail = .loading
+            return reloadDetail()
+        case .adHoc(let recordingId):
+            detail = .none
+            detailGeneration += 1
+            selectedRecordingId = recordingId
+            return reloadTranscript(resetting: true)
+        case nil:
             detail = .none
             detailGeneration += 1
             return []
         }
-        detail = .loading
-        return reloadDetail()
     }
 
     mutating func select(recordingId: UUID) -> [MeetingsLoad] {
@@ -180,15 +142,32 @@ struct MeetingsWindowState: Equatable, Sendable {
         return reloadTranscript(resetting: true)
     }
 
-    /// Повтор чтения после отказа (кнопка «Повторить загрузку»).
+    /// Кнопка «Повторить загрузку»: перечитывается только то, что отказало (MEE-487 п. 8) —
+    /// отказ карточки не сбрасывает загруженный список, и наоборот.
     mutating func retryReads() -> [MeetingsLoad] {
-        list = .loading
-        var loads = [reloadList(), reloadProcessing()]
-        if selectedMeetingId != nil {
+        var loads: [MeetingsLoad] = []
+        if case .failed = list {
+            list = .loading
+            loads.append(reloadList())
+        }
+        if case .failed = adHocList {
+            adHocList = .loading
+            loads.append(reloadAdHoc())
+        }
+        if case .failed = detail {
             detail = .loading
             loads += reloadDetail()
         }
+        if processingError != nil {
+            loads.append(reloadProcessing())
+        }
         return loads
+    }
+
+    /// «Повторить загрузку» у отказа чтения транскрипта (MEE-487 п. 6).
+    mutating func retryTranscript() -> [MeetingsLoad] {
+        guard case .failed = transcript else { return [] }
+        return reloadTranscript(resetting: true)
     }
 
     // MARK: Генерации
@@ -196,6 +175,11 @@ struct MeetingsWindowState: Equatable, Sendable {
     mutating func reloadList() -> MeetingsLoad {
         listGeneration += 1
         return .list(week: week, generation: listGeneration)
+    }
+
+    mutating func reloadAdHoc() -> MeetingsLoad {
+        adHocGeneration += 1
+        return .adHocList(week: week, generation: adHocGeneration)
     }
 
     mutating func reloadDetail() -> [MeetingsLoad] {
@@ -222,8 +206,7 @@ struct MeetingsWindowState: Equatable, Sendable {
     }
 
     func recordingHasTranscripts(_ recordingId: UUID) -> Bool {
-        guard case .loaded(let detail) = detail else { return false }
-        return detail.recordings.first { $0.recordingId == recordingId }?.transcripts.isEmpty == false
+        selectedRecordings.first { $0.recordingId == recordingId }?.transcripts.isEmpty == false
     }
 
     // MARK: Ответы фасада
@@ -231,6 +214,17 @@ struct MeetingsWindowState: Equatable, Sendable {
     mutating func finishList(generation: Int, _ content: MeetingsListContent) {
         guard generation == listGeneration else { return }
         list = content
+    }
+
+    /// Выбранная ad-hoc запись пропала из ответа (удалена) — выбор снимается. Иначе, как у
+    /// карточки встречи, перечитывается показанный транскрипт: так ad-hoc строка подхватывает
+    /// транскрипт, готовность которого фасад сообщает только `meetingsChanged` (инв. 34 (в)).
+    mutating func finishAdHoc(generation: Int, _ content: AdHocListContent) -> [MeetingsLoad] {
+        guard generation == adHocGeneration else { return [] }
+        adHocList = content
+        guard case .adHoc(let recordingId) = selectedRow, case .loaded(let recordings) = content else { return [] }
+        guard recordings.contains(where: { $0.recordingId == recordingId }) else { return select(row: nil) }
+        return reloadTranscript(resetting: false)
     }
 
     mutating func finishDetail(generation: Int, _ content: MeetingDetailContent) -> [MeetingsLoad] {
@@ -273,8 +267,9 @@ extension MeetingsWindowState {
     mutating func apply(event: AppEvent) -> [MeetingsLoad] {
         switch event {
         case .meetingsChanged:
-            // Список недели и карточка (признаки, записи, заголовки транскриптов).
-            return [reloadList()] + reloadDetail()
+            // Оба списка недели (инв. 34) и карточка встречи (признаки, записи, заголовки
+            // транскриптов). Карточку ad-hoc записи обновляет ответ `adHocRecordings`.
+            return [reloadList(), reloadAdHoc()] + reloadDetail()
         case .transcriptChanged(let transcriptId):
             return applyTranscriptChanged(transcriptId)
         case .statusChanged(let newStatus):
@@ -290,28 +285,33 @@ extension MeetingsWindowState {
         }
     }
 
-    /// Новая или изменённая версия транскрипта. Какой записи она принадлежит, событие не
-    /// говорит — перечитываем карточку (заголовки версий); `finishDetail` сам перечитает
-    /// показанный текст. Показанная выбранная версия перечитывается сразу.
+    /// `transcriptChanged` — изменение **уже показанного** транскрипта (атрибуция, правка текста;
+    /// C-016 инв. 15, 34): новая версия приходит `meetingsChanged`, не этим событием. Поэтому
+    /// перечитывается только показанный текст, если это он, — без карточки (MEE-487 п. 7).
     private mutating func applyTranscriptChanged(_ transcriptId: UUID) -> [MeetingsLoad] {
-        var loads = reloadDetail()
-        if loads.isEmpty, case .loaded(let shown) = transcript, shown.header.id == transcriptId {
-            loads += reloadTranscript(resetting: false)
+        let isShown: Bool
+        if case .loaded(let shown) = transcript {
+            isShown = shown.header.id == transcriptId
+        } else {
+            // Текста ещё нет (загрузка, отказ) — показанной считается выбранная версия.
+            isShown = transcriptSelection == .version(transcriptId)
         }
-        return loads
+        return isShown ? reloadTranscript(resetting: false) : []
     }
 
-    /// Очередь в снимке поменялась — перечитать задачи для блока «Состояние обработки».
+    /// Очереди `pending`/`failed` перечитываются, когда в снимке сменились их счётчики (C-016 v13
+    /// инв. 35 (б), (в)). Идущие задачи с долей блок берёт прямо из `runningJobs` снимка — ради
+    /// них перечитывать нечего. `statusChanged` приходит на каждое событие очереди отдельно
+    /// (инв. 35 (е)), поэтому переход `pending → running` виден по `pendingJobCount`, а
+    /// `running → failed` — по `failedJobCount`.
     private mutating func applyStatusChanged(_ newStatus: AppStatus) -> [MeetingsLoad] {
         let previous = status
         apply(status: newStatus)
         guard status == newStatus else { return [] }
-        let queueChanged = previous.map {
-            $0.runningJobs.map(\.jobId) != newStatus.runningJobs.map(\.jobId)
-                || $0.pendingJobCount != newStatus.pendingJobCount
-                || $0.failedJobCount != newStatus.failedJobCount
+        let countersChanged = previous.map {
+            $0.pendingJobCount != newStatus.pendingJobCount || $0.failedJobCount != newStatus.failedJobCount
         } ?? true
-        return queueChanged ? [reloadProcessing()] : []
+        return countersChanged ? [reloadProcessing()] : []
     }
 
     /// Снимок старше текущего по `updatedAt` отбрасывается — тот же приём, что у меню-бара
@@ -333,14 +333,15 @@ extension MeetingsWindowState {
         return true
     }
 
-    /// `error == nil` — фасад поставил новую задачу.
-    mutating func finishRetry(jobId: UUID, error: AppErrorView?) -> [MeetingsLoad] {
+    /// `succeeded` — фасад поставил новую задачу. Иначе `error` — что показать; `nil` — отказ
+    /// не `AppFacadeError` и не показывается (инв. 37), кнопка остаётся.
+    mutating func finishRetry(jobId: UUID, succeeded: Bool, error: AppErrorView?) -> [MeetingsLoad] {
         guard retryInFlight == jobId else { return [] }
         retryInFlight = nil
-        if let error {
-            actionError = error
-        } else {
+        if succeeded {
             retriedJobIds.insert(jobId)
+        } else {
+            actionError = error
         }
         return [reloadProcessing()]
     }

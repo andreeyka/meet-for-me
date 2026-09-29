@@ -37,11 +37,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
                 let menu = MenuBarController(facade: graph.facade)
                 self.menu = menu
                 menu.start()
+                #if DEBUG
                 // Проверка запуска без клика по меню-бару (MEE-474, «Готовность»: окно
-                // открывается на пустой базе): `-MeetForMeOpenMeetingsOnLaunch YES`.
+                // открывается на пустой базе): `-MeetForMeOpenMeetingsOnLaunch YES`. Только в
+                // отладочной сборке (MEE-487 п. 12): в релизе ключ ничего не делает.
                 if UserDefaults.standard.bool(forKey: "MeetForMeOpenMeetingsOnLaunch") {
                     showMeetings()
                 }
+                #endif
             } catch {
                 Self.presentStartupFailureAndTerminate(error)
             }

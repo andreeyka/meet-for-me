@@ -1,5 +1,6 @@
 //  MeetingsWindowView — окно «Встречи» (MEE-474): слева список недели, справа карточка
-//  встречи, записи, состояние обработки и транскрипт. Только чтение, кроме «Повторить».
+//  встречи, записи, состояние обработки и транскрипт. Только чтение, кроме «Повторить». В
+//  списке — встречи и записи без встречи («Созвон без события», MEE-487) одной таблицей.
 //
 //  Вид ничего не решает сам: что показать — `MeetingsListPresentation`,
 //  `MeetingCardPresentation`, `TranscriptPresentation` (чистые модели); состояние и подписка —
@@ -54,6 +55,15 @@ private struct MeetingsListPane: View {
             } else {
                 table
             }
+            if let adHocError = list.adHocError {
+                Divider()
+                HStack {
+                    Text(adHocError).foregroundStyle(.red)
+                    Spacer()
+                    Button("Повторить загрузку") { controller.retryReads() }
+                }
+                .padding(10)
+            }
         }
     }
 
@@ -71,12 +81,7 @@ private struct MeetingsListPane: View {
     private var selection: Binding<String?> {
         Binding(
             get: { list.selectedRowId },
-            set: { rowId in
-                switch list.kind(forRowId: rowId) {
-                case .meeting(let meetingId): controller.select(meetingId: meetingId)
-                case nil: controller.select(meetingId: nil)
-                }
-            }
+            set: { controller.select(row: list.kind(forRowId: $0)) }
         )
     }
 }
@@ -136,7 +141,7 @@ private struct MeetingCardPane: View {
             Text("Записей нет").foregroundStyle(.secondary)
         } else {
             Picker("Запись", selection: recordingSelection) {
-                ForEach(card.recordings) { Text($0.title).tag($0.id) }
+                ForEach(card.recordings) { Text($0.title).tag(Optional($0.id)) }
             }
             if let processing = card.recordings.first(where: { $0.id == card.selectedRecordingId })?.processing {
                 HStack {
@@ -150,10 +155,15 @@ private struct MeetingCardPane: View {
         }
     }
 
-    private var recordingSelection: Binding<UUID> {
+    /// `UUID?` (MEE-487 п. 10): пока запись не выбрана, `Picker` показывает пустой выбор, а не
+    /// выдуманный `UUID()`, которого нет среди тегов.
+    private var recordingSelection: Binding<UUID?> {
         Binding(
-            get: { card.selectedRecordingId ?? card.recordings.last?.id ?? UUID() },
-            set: { controller.select(recordingId: $0) }
+            get: { card.selectedRecordingId },
+            set: { recordingId in
+                guard let recordingId else { return }
+                controller.select(recordingId: recordingId)
+            }
         )
     }
 }
@@ -172,7 +182,7 @@ private struct TranscriptPane: View {
                 ForEach(transcript.versions) { Text($0.title).tag(TranscriptSelection.version($0.id)) }
             }
             if let placeholder = transcript.placeholder {
-                PlaceholderView(text: placeholder, isError: transcript.isError, retry: nil)
+                PlaceholderView(text: placeholder, isError: transcript.isError) { controller.retryTranscript() }
             } else {
                 List(transcript.segments) { SegmentRowView(row: $0) }
             }
