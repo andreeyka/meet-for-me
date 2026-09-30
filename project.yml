@@ -154,3 +154,7 @@ targets:
       # объявлены в этом продукте (MEE-431), не дублирует их здесь заново.
       - package: Mac
         product: EngineXPCClient
+      # IR-152 (MEE-486, п. 1), MEE-503: адаптер GigaAM поверх sherpa-onnx — только в этом
+      # процессе (C-012). Подключение в `main.swift` — задача Z6, не эта.
+      - package: Mac
+        product: GigaAMSherpa
