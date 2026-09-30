@@ -88,6 +88,31 @@ public enum AudioTrackReader {
         try read(slice, readBlock: BlockSource.fileReader)
     }
 
+    /// Длительность файла дорожки, мс: `length · 1000 / sampleRate` с отбросом дробной части —
+    /// последний неполный миллисекундный отрезок не входит (MEE-504). Время в файле, без
+    /// `offsetMs`. Отказы — те же, что у `read` (инв. 17): нет файла, не разбирается —
+    /// `audioUnreadable`; заголовок не совпал с `AudioRef` — `unsupportedRequest`.
+    public static func durationMs(of ref: AudioRef) throws -> Int {
+        let file = try open(ref)
+        return Int(file.length * 1_000 / AVAudioFramePosition(ref.sampleRate))
+    }
+
+    /// Диапазон `[fromMs; toMs)` ВРЕМЕНИ В ФАЙЛЕ (кадр 0 = 0 мс), а не шкалы записи: вход порта
+    /// `GigaAMAudioSource` (MEE-504). Сводится к вырезке `AudioSlice` со сдвигом на `offsetMs`
+    /// (инв. 16) — та же формула кадров, та же обрезка конца по концу файла. Диапазон, который
+    /// `AudioSlice` не принимает (`fromMs < 0`, `toMs <= fromMs`), — `unsupportedRequest`.
+    public static func read(_ ref: AudioRef, fromMs: Int, toMs: Int) throws -> [Float] {
+        let slice: AudioSlice
+        do {
+            slice = try AudioSlice(source: ref, startMs: fromMs + ref.offsetMs, endMs: toMs + ref.offsetMs)
+        } catch {
+            throw EngineError.unsupportedRequest(
+                message: "диапазон \(fromMs)..<\(toMs) мс файла не является вырезкой: \(error)"
+            )
+        }
+        return try read(slice)
+    }
+
     static func read(_ slice: AudioSlice, readBlock: @escaping BlockSource.BlockReader) throws -> [Float] {
         let ref = slice.source
         let file = try open(ref)

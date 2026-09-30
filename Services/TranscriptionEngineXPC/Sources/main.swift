@@ -19,14 +19,18 @@
 //  `allowed-types/EngineXPCService.json`, не разрешённого этой задачей, не может публично
 //  нести `NSObject`/`NSXPCConnection`).
 //
-//  Движки — честные заглушки `Unavailable*Engine` (GigaAM/спайк R12 ещё не реализован,
-//  README модуля).
+//  Движки (MEE-504, Z6 решения IR-152): транскрипция — `GigaAMEngine` (модуль gigaam) с
+//  распознавателем sherpa-onnx (`SherpaGigaAMRecognizerFactory`, таргет `GigaAMSherpa`) и чтением
+//  дорожек `TrackAudioSource` (этот каталог, поверх `AudioTrackReader`). Остальные три — честные
+//  заглушки `Unavailable*`: диаризации, эмбеддингов и постобработки в Срезе 1 нет.
 
 import EngineXPCService
 import Foundation
+import GigaAM
+import GigaAMSherpa
 
 let engines = EngineBundle(
-    transcription: UnavailableTranscriptionEngine(),
+    transcription: GigaAMEngine(audioSource: TrackAudioSource(), recognizerFactory: SherpaGigaAMRecognizerFactory()),
     diarization: UnavailableDiarizationEngine(),
     embedding: UnavailableEmbeddingEngine(),
     postProcessor: UnavailablePostProcessor()

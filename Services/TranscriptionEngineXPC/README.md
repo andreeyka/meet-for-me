@@ -9,5 +9,6 @@
 Таргет Xcode-проекта — `TranscriptionEngine` (имя таргета = имя продукта `.xpc`, не имя
 каталога), заведён архитектором каркасом в `project.yml` (MEE-430; сам этот файл — не зона
 DEV-2, только исходники в `Sources/` ниже). `Sources/main.swift` — точка входа,
-`NSXPCListener.service()`, пока отклоняет любое соединение: экспорт объекта и делегирование
-в протоколы `EngineKit` — предмет MEE-431.
+`NSXPCListener.service()`; транскрипция — `GigaAMEngine` с распознавателем sherpa-onnx
+(MEE-504), остальные движки — заглушки `Unavailable*`. `Sources/TrackAudioSource.swift` —
+чтение дорожек для GigaAM и лог швов (категория `seams`, как смотреть — в заголовке файла).
