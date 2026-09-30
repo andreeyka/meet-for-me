@@ -65,7 +65,7 @@ public struct AttributeJobHandler: JobHandler {
         progress: @Sendable @escaping (Double) -> Void
     ) async -> JobOutcome {
         guard case .attribute(let transcriptId, let meetingId) = job.payload else {
-            return .permanentFailure(error: "AttributeJobHandler получил job.payload не .attribute")
+            return .permanentFailure(error: UnderlyingErrorText.wrongPayloadText)
         }
         do {
             let input = try await buildInput(transcriptId: transcriptId, meetingId: meetingId)
@@ -82,11 +82,12 @@ public struct AttributeJobHandler: JobHandler {
         } catch let error as AttributionError {
             // §7 дословно: все шесть случаев — данные или согласованность, не сеть и не
             // диск, повтор с тем же входом дал бы тот же результат. `.retry` не заведён.
-            return .permanentFailure(error: "\(error)")
+            // MEE-498: в очередь — код §3.1 C-016, не описание значения с идентификаторами.
+            return .permanentFailure(error: UnderlyingErrorText.jobErrorCode("attribution", error))
         } catch let error as StorageError {
             return Self.outcome(for: error)
         } catch {
-            return .permanentFailure(error: "\(error)")
+            return .permanentFailure(error: UnderlyingErrorText.internalErrorCode)
         }
     }
 
@@ -97,9 +98,9 @@ public struct AttributeJobHandler: JobHandler {
     private static func outcome(for error: StorageError) -> JobOutcome {
         switch error {
         case .io:
-            return .retry(after: 30, error: "\(error)")
+            return .retry(after: 30, error: UnderlyingErrorText.jobErrorCode("storage", error))
         case .notFound, .constraintViolation, .migrationFailed, .fileMissing, .dataCorrupted:
-            return .permanentFailure(error: "\(error)")
+            return .permanentFailure(error: UnderlyingErrorText.jobErrorCode("storage", error))
         }
     }
 
@@ -112,11 +113,13 @@ public struct AttributeJobHandler: JobHandler {
     private static func outcome(for error: AppFacadeError) -> JobOutcome {
         switch error {
         case .settingsUnreadable:
-            return .permanentFailure(error: "\(error)")
+            return .permanentFailure(error: error.view.code)
         case .underlying(let view) where view.code == "storage.io":
             return .retry(after: 30, error: view.code)
         default:
-            return .permanentFailure(error: "\(error)")
+            // MEE-498: код §3.1 (`facade.<case>`; у `underlying` — код вложенного значения, инв. 37),
+            // а не описание значения Swift.
+            return .permanentFailure(error: error.view.code)
         }
     }
 

@@ -31,6 +31,14 @@ enum StorageMigrations {
             try db.execute(sql: "ALTER TABLE meeting_sources ADD COLUMN raw_payload_json TEXT")
             try db.execute(sql: "UPDATE connectors SET cursor = NULL")
         }
+        // IR-153 (MEE-490), C-010 v28 §3.2, инвариант 38, MEE-505: `Transcript.speakers`
+        // целиком — массив JSON в порядке значения. У строк, записанных до этой миграции,
+        // колонка `NULL`, и `speakers` для них строятся по сегментам (инвариант 38,
+        // единственное исключение). Других данных миграция не трогает. НОВАЯ миграция —
+        // `v1-slice1` и `v1-slice2` выше не тронуты ни строкой.
+        migrator.registerMigration("v1-slice3") { db in
+            try db.execute(sql: "ALTER TABLE transcripts ADD COLUMN speakers_json TEXT")
+        }
         return migrator
     }
 

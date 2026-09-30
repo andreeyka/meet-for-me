@@ -69,6 +69,7 @@ enum UnderlyingErrorText {
     private static let restartApp = "Перезапустите приложение."
 
     private static let prefixTexts: [String: String] = [
+        "app": "Внутренняя ошибка приложения",
         "storage": "Ошибка хранилища данных",
         "calendar": "Ошибка календаря",
         "engine": "Ошибка службы распознавания речи",
@@ -156,16 +157,18 @@ enum UnderlyingErrorText {
         "attribution.voiceProfilesDisabled": Text("Голосовые профили выключены", "Включите их в настройках.")
     ]
 
-    /// У `capture.*` совета нет: он только у `PromptTimedOut` и у отказа права (MEE-492,
-    /// `wrap(_:CaptureError)`).
+    /// У `PromptTimedOut` и у отказа права совет задаёт `wrap(_:CaptureError)` (MEE-492); здесь —
+    /// советы тех случаев, где пользователю есть что сделать самому (MEE-498).
     private static let captureAndRest: [String: Text] = [
         "capture.alreadyRunning": Text("Запись звука уже идёт"),
         "capture.notRunning": Text("Запись звука не идёт"),
         "capture.nothingToCapture": Text("Нечего записывать: не выбран ни один источник звука"),
         "capture.systemAudioPromptTimedOut": Text("Не дождались ответа на запрос доступа к системному звуку"),
         "capture.microphonePromptTimedOut": Text("Не дождались ответа на запрос доступа к микрофону"),
-        "capture.inputDeviceUnavailable": Text("Микрофон недоступен"),
-        "capture.directoryUnusable": Text("Не удалось сохранить запись в папку приложения"),
+        "capture.inputDeviceUnavailable": Text(
+            "Микрофон недоступен", "Проверьте, что микрофон подключён, или выберите другой в настройках."
+        ),
+        "capture.directoryUnusable": Text("Не удалось сохранить запись в папку приложения", checkDisk),
         "capture.systemUnavailable": Text("Системный звук сейчас недоступен"),
         "capture.recoveryFailed": Text("Не удалось восстановить прерванную запись"),
         "permissions.loginItemRegistrationFailed": Text("Не удалось включить запуск при входе в систему"),
@@ -178,35 +181,68 @@ enum UnderlyingErrorText {
     ]
 }
 
-// MARK: - Подробность `facade.jobFailed`
+// MARK: - Строка отказа задачи и подробность `facade.jobFailed`
 
 extension UnderlyingErrorText {
 
+    /// Строка отказа задачи (`JobOutcome.error`) для ошибки источника §3.1 — код
+    /// `<префикс>.<имя case>` без значений (MEE-498): ни описания значения Swift, ни
+    /// идентификаторов в очередь не пишется. Имя случая — срезом до первой `(`, тот же приём,
+    /// что `wrap(_: CaptureError)`.
+    static func jobErrorCode(_ prefix: String, _ error: Error) -> String {
+        let description = String(describing: error)
+        let name = description.split(separator: "(", maxSplits: 1).first.map(String.init) ?? description
+        return "\(prefix).\(name)"
+    }
+
+    /// Строка отказа задачи для ошибки вне словаря §3.1 — «всё прочее», `app.internalError`.
+    static let internalErrorCode = "app.internalError"
+
+    /// Нагрузка задачи не того вида, что обработчик: обработчик зарегистрирован не на свой
+    /// тип. Ошибка сборки приложения, а не данных пользователя.
+    static let wrongPayloadText = "Внутренняя ошибка приложения: задача передана не своему обработчику"
+
     /// Подробность отказа задачи для `AppErrorView.message` (`nil` — показывать нечего). Строку
-    /// `error` события очереди (C-013) пишет обработчик, и часто это `"\(error)"` — описание
-    /// значения Swift (`io(message: "…")`, `serviceCrashed`, `timedOut(30)`) либо код §3.1
-    /// (`storage.io`). Сама строка в `AppFacadeError.jobFailed` остаётся дословной (инв. 31) —
-    /// переводится только текст показа:
-    ///  • значение Swift, возможно с меткой впереди (`save: io(…)`), и код §3.1 — текст по коду
-    ///    источника (хранилище, атрибуция, движок, фасад); незнакомое имя — без подробности;
+    /// `error` события очереди (C-013) пишет обработчик: код §3.1 (`storage.io`,
+    /// `app.internalError`), текст для человека либо свободный текст движка (`"oom"`); строки
+    /// прежних изданий и `"interrupted"` очереди — описание значения Swift (`io(message: "…")`,
+    /// `serviceCrashed`, `timedOut(30)`). Сама строка в `AppFacadeError.jobFailed` остаётся
+    /// дословной (инв. 31) — переводится только текст показа:
+    ///  • код §3.1 — текст по коду; код незнакомого источника — строка как есть (свободный
+    ///    текст движка с точкой, `"cuda.oom"`);
+    ///  • значение Swift, возможно с меткой впереди (`save: io(…)`), — текст по коду источника
+    ///    (хранилище, атрибуция, движок, фасад); незнакомое имя случая (`lowerCamelCase` или со
+    ///    скобками) — без подробности; незнакомое слово строчными (`"oom"`) — как есть (MEE-498);
     ///  • строка с описанием значения Swift внутри (`метка(поле: …)`) — без подробности;
     ///  • прочее — текст обработчика или движка как есть.
     static func jobFailureDetail(_ raw: String) -> String? {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
-        if trimmed.range(of: #"^[a-z]+(\.[a-zA-Z]+)+$"#, options: .regularExpression) != nil {
-            return texts[trimmed].map { lowercasedFirst($0.message) }
+        if trimmed.range(of: #"^[a-z]+(\.[A-Za-z0-9_]+)+$"#, options: .regularExpression) != nil {
+            return codeText(trimmed).map(lowercasedFirst) ?? trimmed
         }
         let value = trimmed.replacingOccurrences(
             of: #"^[a-z]+: (?=[a-z][A-Za-z0-9]*(\(|$))"#, with: "", options: .regularExpression
         )
-        if let name = value.range(of: #"^[a-z][A-Za-z0-9]*(?=(\(.*\))?$)"#, options: .regularExpression) {
-            return caseNameText(String(value[name])).map(lowercasedFirst)
+        if let range = value.range(of: #"^[a-z][A-Za-z0-9]*(?=(\(.*\))?$)"#, options: .regularExpression) {
+            let name = String(value[range])
+            if let known = caseNameText(name) { return lowercasedFirst(known) }
+            let isBareWord = name == value && name.range(of: "[A-Z]", options: .regularExpression) == nil
+            return isBareWord ? value : nil
         }
         if trimmed.range(of: #"[A-Za-z]\([a-zA-Z]+: "#, options: .regularExpression) != nil {
             return nil
         }
         return trimmed
+    }
+
+    /// Текст кода §3.1; `nil` — источник кода не из словаря (строка не код, а свободный текст).
+    private static func codeText(_ code: String) -> String? {
+        if let known = texts[code] { return known.message }
+        let parts = code.split(separator: ".", maxSplits: 1).map(String.init)
+        if parts[0] == "facade", parts.count == 2, let facadeText = facadeCaseTexts[parts[1]] { return facadeText }
+        guard prefixTexts[parts[0]] != nil else { return nil }
+        return text(code).message
     }
 
     /// Имя случая из строки очереди — к коду §3.1 по источникам, которые пишут обработчики
@@ -220,7 +256,8 @@ extension UnderlyingErrorText {
         return nil
     }
 
-    /// Случаи `AppFacadeError`, которые `AttributeJobHandler` кладёт в очередь описанием значения.
+    /// Случаи `AppFacadeError`, которые `AttributeJobHandler` кладёт в очередь: кодом
+    /// `facade.<case>` (MEE-498) либо, в строках прежних изданий, описанием значения.
     private static let facadeCaseTexts: [String: String] = [
         "settingsUnreadable": "Не удалось прочитать настройку",
         "profileNotReady": "Модели профиля распознавания не загружены",

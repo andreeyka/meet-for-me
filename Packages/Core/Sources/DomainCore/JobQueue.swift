@@ -38,9 +38,9 @@ import Foundation
 // MARK: - §1. Задача
 
 public enum JobType: String, Codable, Sendable, CaseIterable {
-    case transcode    // Срез 1: обработчик-пустышка (C-013 v16); PCM CAF → AAC m4a — позже
+    case transcode    // PCM CAF → AAC m4a; в Срезе 1 обработчик-пустышка, ничего не перекодирует («Поведение»)
     case transcribe
-    case diarize      // Срез 1: обработчик-пустышка (C-012, «Поведение»)
+    case diarize      // в Срезе 1 обработчик-пустышка (C-012, «Поведение»)
     case attribute
     case summarize    // вне Среза 1: обработчик не регистрируется, задача не ставится
 }

@@ -11,7 +11,8 @@ extension GRDBTranscriptRepository {
 
     /// Инвариант 12 (К16): `fileIndex` — `max(file_index) + 1` для записи, с 1.
     /// Одна транзакция на весь транскрипт вместе с сегментами и FTS (триггеры
-    /// схемы синхронизируют `segments_fts` сами на каждой вставке).
+    /// схемы синхронизируют `segments_fts` сами на каждой вставке) — и с
+    /// `speakers_json` (C-010 v28, инвариант 38).
     func save(_ transcript: Transcript) async throws -> TranscriptHeader {
         let id = UUID()
         let now = EpochTime.seconds(Date())
@@ -41,17 +42,22 @@ extension GRDBTranscriptRepository {
         return (maxIndex ?? 0) + 1
     }
 
+    /// Инвариант 38 (C-010 v28, IR-153): `speakers_json` — `DomainJSON.encode` массива
+    /// `Transcript.speakers` в порядке значения, без сортировки; пустой массив — `"[]"`,
+    /// `NULL` эта запись не пишет никогда (`NULL` значит «строка до `v1-slice3`»).
     private static func insertTranscriptRow(
         id: UUID, transcript: Transcript, fileIndex: Int, now: Int64, db: Database
     ) throws {
+        let speakersJSON = try StorageJSON.encodeToText(transcript.speakers)
         try db.execute(
             sql: """
-            INSERT INTO transcripts (id, recording_id, file_index, engine, model_version, language, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO transcripts
+                (id, recording_id, file_index, engine, model_version, language, created_at, speakers_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
             arguments: [
                 id.uuidString, transcript.recordingId.uuidString, fileIndex,
-                transcript.engine, transcript.modelVersion, transcript.language, now
+                transcript.engine, transcript.modelVersion, transcript.language, now, speakersJSON
             ]
         )
     }

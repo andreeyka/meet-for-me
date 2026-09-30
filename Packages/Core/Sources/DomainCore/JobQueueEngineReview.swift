@@ -67,6 +67,13 @@ extension JobQueueEngine {
     /// заменяет его собственной работы. Пока мьютекс занят восстановлением, ни один заход
     /// не берёт `claimNext` — триггеры в это время лишь оставляют `revisitPassRequested`,
     /// и его исполнит ближайший заход (у `start()` он идёт сразу за восстановлением).
+    ///
+    /// Справедливости нет (MEE-497): ждущему здесь приоритет перед `performRevisitSweep()` не
+    /// даётся — разбуженный `releaseRevisitLoop()` лишь проверяет мьютекс заново, и заход,
+    /// успевший взять его раньше, уходит первым. Теоретически поток триггеров, каждый раз
+    /// опережающий разбуженного, морит его голодом; на деле триггеров мало (таймер, `submit`,
+    /// завершение задачи), а заход, заставший мьютекс занятым, своего не берёт — оставляет
+    /// заявку, так что окно для обгона узкое.
     func acquireRevisitLoop() async {
         while isRevisitLoopRunning {
             await withCheckedContinuation { continuation in
@@ -186,7 +193,17 @@ extension JobQueueEngine {
 
     /// Второй предохранитель лизинга (инвариант 11): решение по истёкшему лизингу
     /// принимает очередь — репозиторий отдал строки как есть (C-013 v7, IR-111, К89).
+    ///
+    /// MEE-497 (та же гонка, что MEE-496 закрыл в `recoverInterruptedJobs`): «своё»
+    /// определяется ДО `await` чтения, синхронно на акторе, — задачи в `runningTasks` на этот
+    /// миг. Прежний фильтр `where runningTasks[job.id] == nil` проверялся ПОСЛЕ `await`: если
+    /// у своей задачи истёк лизинг (часы скакнули после сна ноутбука) и она за время чтения
+    /// досчиталась (`applyOutcome` записал исход, `runningTasks` снят), её строка из
+    /// устаревшего снимка переписывалась на `attempts + 1`/`"interrupted"` поверх настоящего
+    /// исхода. Новой своей задачи за время `await` появиться не может: заход держит мьютекс
+    /// (`isRevisitLoopRunning`), и `claimNext` в это время никто другой не зовёт.
     private func reclaimExpiredLeases() async {
+        let ownedBeforeSnapshot = Set(runningTasks.keys)
         let stale: [Job]
         do {
             stale = try await performWithRepair {
@@ -196,7 +213,7 @@ extension JobQueueEngine {
             return
         }
         let now = clock()
-        for job in stale where runningTasks[job.id] == nil {
+        for job in stale where !ownedBeforeSnapshot.contains(job.id) {
             let restored: Job
             if job.attemptStartedAt != nil {
                 restored = job.afterConsumedAttempt(
