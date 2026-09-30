@@ -26,11 +26,6 @@ let package = Package(
     ],
     dependencies: [
         .package(path: "../Core"),
-        // IR-152 (MEE-486, п. 1), MEE-503: рантайм распознавания модуля gigaam. Нужен только
-        // таргету `GigaAMSherpa`; версия точная — onnxruntime-libs 1.28.2 приходит транзитивно.
-        // ~168 МиБ бинарных XCFramework резолвятся при каждой сборке этого пакета; в CI —
-        // кэш `~/Library/Caches/org.swift.swiftpm` (ci.yml). В `Packages/Core` не попадает.
-        .package(url: "https://github.com/k2-fsa/sherpa-onnx", exact: "1.13.8"),
     ],
     targets: [
         .target(name: "Capture", dependencies: [.product(name: "DomainCore", package: "Core")]),
@@ -92,13 +87,36 @@ let package = Package(
             dependencies: [.product(name: "CalendarHub", package: "Core")]
         ),
         // IR-152 (MEE-486), MEE-503: адаптер модуля gigaam — `GigaAMRecognizer` поверх sherpa-onnx.
-        // Единственный таргет репозитория, которому разрешён `import SherpaOnnx` (docs/module-map.md).
+        // Единственный таргет репозитория, которому разрешён `import SherpaOnnxC` (docs/module-map.md).
+        // `c++` — рантайм C++ обоих статических архивов (так же линковала обёртка пакета sherpa-onnx).
         .target(
             name: "GigaAMSherpa",
             dependencies: [
                 .product(name: "GigaAM", package: "Core"),
-                .product(name: "sherpa-onnx", package: "sherpa-onnx"),
-            ]
+                "SherpaOnnxMacOSStatic",
+                "OnnxRuntimeMacOSStatic",
+            ],
+            linkerSettings: [.linkedLibrary("c++")]
+        ),
+        // IR-156 (MEE-507, MEE-512): рантайм распознавания модуля gigaam — два собственных
+        // статических XCFramework вместо пакета `k2-fsa/sherpa-onnx`. Пакет нёс под macOS
+        // статический и разделяемый `SherpaOnnxC.framework` под одним именем, и SwiftPM 5.10
+        // копировал в `.build/debug` случайный из двух (гонка `Set`, обход
+        // `SWIFT_DETERMINISTIC_HASHING` в CI). Здесь фреймворк с этим именем один — гонки нет.
+        // URL и `checksum` — дословно из манифестов sherpa-onnx 1.13.8 (`SherpaOnnxMacOS`) и
+        // onnxruntime-libs 1.28.2 (`OnnxruntimeMacOS`); смена версии — решение архитектора.
+        // Swift-обёртка пакета (`SherpaOnnx.swift`) не нужна: адаптер строит конфигурацию C API.
+        .binaryTarget(
+            name: "SherpaOnnxMacOSStatic",
+            // swiftlint:disable:next line_length
+            url: "https://github.com/k2-fsa/sherpa-onnx/releases/download/xcframework/sherpa-onnx-v1.13.8-macos-static.xcframework.zip",
+            checksum: "93f7a064abe99e0d6185a88c5b36ce18c4bff35cd0d5e4e81f81151de8e3e7e5"
+        ),
+        .binaryTarget(
+            name: "OnnxRuntimeMacOSStatic",
+            // swiftlint:disable:next line_length
+            url: "https://github.com/csukuangfj/onnxruntime-libs/releases/download/v1.28.2/onnxruntime-macos-static-xcframework-1.28.2.xcframework.zip",
+            checksum: "cb0b0bec912c77229517c463e28a3fac9674c521f9599919efff1ef2b42f3da0"
         ),
 
         .testTarget(

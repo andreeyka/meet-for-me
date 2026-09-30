@@ -3,19 +3,21 @@
 //  Модуль: gigaam · Владелец: DEV-2 · Слой: движок (адаптер, macOS)
 //
 //  IR-152 (MEE-486, п. 1 и Z5), MEE-503. Единственное место репозитория, где разрешён
-//  `import SherpaOnnx` (docs/module-map.md, модуль gigaam). Mel, CTC-декодирование и токенизация —
-//  внутри sherpa-onnx; здесь только конфигурация и перевод результата в `RecognizedChunk`.
+//  `import SherpaOnnxC` (docs/module-map.md v1.23, модуль gigaam). Mel, CTC-декодирование и
+//  токенизация — внутри sherpa-onnx; здесь только конфигурация и перевод результата в `RecognizedChunk`.
 //
 //  Конфигурация — как у стенда R12 (`spikes/GigaAMSpike`, MEE-426): `nemo_ctc`, `featureDim` 64,
 //  16 кГц, CPU, 4 потока, жадный CTC (`greedy_search`). Метки токенов — `tokens_arr`/`timestamps`
 //  результата, тот же путь, что `--timestamps` стенда.
 //
-//  Рекогнайзер создаётся через C API, а не через обёртку `SherpaOnnxOfflineRecognizer`: обёртка
-//  на неудачной загрузке зовёт `fatalError`, а адаптер обязан вернуть ошибку.
+//  Только C API (IR-156, MEE-512): Swift-обёртки пакета sherpa-onnx в сборке нет — `Package.swift`
+//  подключает статический XCFramework `SherpaOnnxC` напрямую. Конфигурацию собирает
+//  `withRecognizerConfig` C-структурами; значения полей те же, что ставила обёртка
+//  (`sherpaOnnxOfflineRecognizerConfig` и соседи sherpa-onnx 1.13.8), остальные — нули, которые
+//  C API сам заменяет своими умолчаниями.
 
 import Foundation
 import GigaAM
-import SherpaOnnx
 import SherpaOnnxC
 
 /// Фабрика распознавателя GigaAM v3 `e2e_ctc` по каталогу модели.
@@ -101,23 +103,44 @@ public final class SherpaGigaAMRecognizer: GigaAMRecognizer, @unchecked Sendable
         return FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory) && !isDirectory.boolValue
     }
 
-    /// Строки конфигурации живут до конца вызова: `SherpaOnnxCreateOfflineRecognizer` копирует их.
     private static func createRecognizer(model: String, tokens: String) -> OpaquePointer? {
-        autoreleasepool {
-            let modelConfig = sherpaOnnxOfflineModelConfig(
-                tokens: tokens,
-                nemoCtc: sherpaOnnxOfflineNemoEncDecCtcModelConfig(model: model),
-                numThreads: threadCount,
-                provider: "cpu",
-                modelType: "nemo_ctc"
-            )
-            var config = sherpaOnnxOfflineRecognizerConfig(
-                featConfig: sherpaOnnxFeatureConfig(sampleRate: sampleRate, featureDim: featureDim),
-                modelConfig: modelConfig,
-                decodingMethod: "greedy_search"
-            )
-            return SherpaOnnxCreateOfflineRecognizer(&config)
+        withRecognizerConfig(model: model, tokens: tokens) { SherpaOnnxCreateOfflineRecognizer($0) }
+    }
+
+    /// Собирает конфигурацию распознавателя и отдаёт её `body`. Строки конфигурации — копии
+    /// в памяти C (`strdup`), живут ровно до выхода из `body` и освобождаются здесь же:
+    /// `SherpaOnnxCreateOfflineRecognizer` копирует их к себе, указатели за `body` не уходят.
+    /// Числа, отличные от нуля, — умолчания обёртки sherpa-onnx 1.13.8 (`modeling_unit`,
+    /// `max_active_paths`, `hotwords_score`, `lm_config.scale`), чтобы поведение не менялось.
+    static func withRecognizerConfig<Result>(
+        model: String,
+        tokens: String,
+        _ body: (UnsafePointer<SherpaOnnxOfflineRecognizerConfig>) throws -> Result
+    ) rethrows -> Result {
+        var owned: [UnsafeMutablePointer<CChar>] = []
+        defer { owned.forEach { free($0) } }
+        func cString(_ value: String) -> UnsafePointer<CChar> {
+            guard let copy = strdup(value) else { fatalError("strdup: нет памяти под строку конфигурации") }
+            owned.append(copy)
+            return UnsafePointer(copy)
         }
+
+        var config = SherpaOnnxOfflineRecognizerConfig()
+        config.feat_config.sample_rate = Int32(sampleRate)
+        config.feat_config.feature_dim = Int32(featureDim)
+        config.model_config.nemo_ctc.model = cString(model)
+        config.model_config.tokens = cString(tokens)
+        config.model_config.num_threads = Int32(threadCount)
+        config.model_config.debug = 0
+        config.model_config.provider = cString("cpu")
+        config.model_config.model_type = cString("nemo_ctc")
+        config.model_config.modeling_unit = cString("cjkchar")
+        config.lm_config.scale = 1.0
+        config.decoding_method = cString("greedy_search")
+        config.max_active_paths = 4
+        config.hotwords_score = 1.5
+        config.blank_penalty = 0
+        return try withUnsafePointer(to: &config) { try body($0) }
     }
 
     private static func chunk(from raw: SherpaOnnxOfflineRecognizerResult) throws -> RecognizedChunk {
