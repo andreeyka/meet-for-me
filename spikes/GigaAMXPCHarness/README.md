@@ -23,7 +23,8 @@ onnxruntime-libs), собирает стенд и кладёт `TranscriptionEng
 
 ```sh
 APP=spikes/GigaAMXPCHarness/.build/GigaAMXPCHarness.app/Contents/MacOS/GigaAMXPCHarness
-# каталог модели: model.int8.onnx, tokens.txt (и, если есть, .manifest.json model-manager)
+# каталог модели: model.int8.onnx, tokens.txt и обязательный .manifest.json (пишет model-manager
+# или `download`); без него, с чужим schemaVersion или с манифестом другой модели — modelMissing
 $APP transcribe --model <каталог> --system sys613.caf --mic mic17.caf --out r613.json
 $APP transcribe --model <каталог> --system sys3607.caf --mic mic17.caf --cancel-at 0.5 --out cancel.json
 $APP transcribe --model <пустой каталог> --system sys613.caf --out missing.json

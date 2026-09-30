@@ -1,5 +1,6 @@
 //  GigaAMEngineSpeechOnsetTests — MEE-513 (IR-157), критерий 3: начало энергии действует для каждого
 //  куска дорожки, включая первый. Фейковый распознаватель, как sherpa-onnx, ставит первый токен на кадр 0.
+//  MEE-514: кусок без токенов-слов — начало энергии не считается.
 
 import DomainCore
 import DomainTestKit
@@ -56,5 +57,17 @@ final class GigaAMEngineSpeechOnsetTests: GigaAMEngineTestCase {
         // шов приходится на самую тихую точку — все куски, кроме первого, начались в тишине;
         // первый тоже: дорожка источника начинается с 400 мс тишины
         XCTAssertEqual(startedInSilence, positions.count)
+    }
+
+    /// Кусок без токенов или из одних знаков препинания: подменять нечего, энергия не считается — `nil`
+    /// даже при громком сигнале с первого отсчёта. Для сравнения — тот же сигнал с одним словом даёт 0.
+    func testChunkWithoutWordTokensHasNoOnset() {
+        let loud = [Float](repeating: 0.5, count: 16_000)
+        let empty = RecognizedChunk(text: "", tokens: [], timestamps: [])
+        let punctuation = RecognizedChunk(text: ".", tokens: [".", "▁,"], timestamps: [0, 0.2])
+        XCTAssertNil(GigaAMEngine.chunkOnsetMs(samples: loud, chunk: empty))
+        XCTAssertNil(GigaAMEngine.chunkOnsetMs(samples: loud, chunk: punctuation))
+        let word = RecognizedChunk(text: "да", tokens: ["▁да"], timestamps: [0])
+        XCTAssertEqual(GigaAMEngine.chunkOnsetMs(samples: loud, chunk: word), 0)
     }
 }

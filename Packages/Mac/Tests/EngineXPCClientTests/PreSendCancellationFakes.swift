@@ -57,12 +57,20 @@ final class ArrivalFlag: @unchecked Sendable {
 /// `ModelCatalogPort` поверх `FakeModelCatalogPort`: `resolve`/`beginUse` бросают заданную
 /// ошибку до обращения к базе. `suspendResolveUntilCancelled` — `resolve` встаёт в
 /// `Task.sleep` и бросает его `CancellationError`, когда вызывающий `Task` отменён: так
-/// наблюдаемо ведёт себя реальный порт, отменённый во время ожидания.
+/// наблюдаемо ведёт себя реальный порт, отменённый во время ожидания. `beginUseCalls` — все
+/// вызовы `beginUse`, включая брошенные (у базы считаются только успешные, MEE-514).
 final class ThrowingModelCatalog: ModelCatalogPort, @unchecked Sendable {
     private let base: FakeModelCatalogPort
     private let resolveError: Error?
     private let beginUseError: Error?
     private let resolveArrival: ArrivalFlag?
+    private let lock = NSLock()
+    private var beginUseCallsValue = 0
+
+    var beginUseCalls: Int {
+        lock.lock(); defer { lock.unlock() }
+        return beginUseCallsValue
+    }
 
     init(
         base: FakeModelCatalogPort, resolveError: Error? = nil, beginUseError: Error? = nil,
@@ -84,6 +92,7 @@ final class ThrowingModelCatalog: ModelCatalogPort, @unchecked Sendable {
     }
 
     func beginUse(_ bundles: [ModelBundle]) async throws -> ModelUseToken {
+        lock.lock(); beginUseCallsValue += 1; lock.unlock()
         if let beginUseError { throw beginUseError }
         return try await base.beginUse(bundles)
     }

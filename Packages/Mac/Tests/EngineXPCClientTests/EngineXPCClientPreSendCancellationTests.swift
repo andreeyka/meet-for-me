@@ -2,7 +2,7 @@
 //  брошенный `RecordingRepository.recording(id:)`, `resolve(profileId:)` или `beginUse(_:)` до
 //  отправки запроса»), инв. 12, векторы v13 инв. 24; IR-154 п. 2 (MEE-493). Настоящий
 //  `EngineXPCClient` поверх настоящего `NSXPCConnection` к `TestEngineXPCService` — он же
-//  счётчик отправок транспорта.
+//  счётчик отправок транспорта. MEE-514: счётчик вызовов `beginUse` у обёртки каталога.
 
 import Foundation
 import XCTest
@@ -57,6 +57,20 @@ final class EngineXPCClientPreSendCancellationTests: XCTestCase {
         }
     }
 
+    /// `XPCFixture` с каталогом-обёрткой `ThrowingModelCatalog` и сама обёртка — для счётчика
+    /// вызовов `beginUse` (MEE-514): у отказа `resolve` он 0, у отказа `beginUse` — 1 (путь дошёл).
+    private func throwingFixture(
+        resolveError: Error? = nil, beginUseError: Error? = nil
+    ) -> (XPCFixture, ThrowingModelCatalog) {
+        var wrapper: ThrowingModelCatalog?
+        let fixture = XPCFixture.transportOnly(wrapCatalog: { base in
+            let catalog = ThrowingModelCatalog(base: base, resolveError: resolveError, beginUseError: beginUseError)
+            wrapper = catalog
+            return catalog
+        })
+        return (fixture, wrapper!)
+    }
+
     // MARK: - Критерии 1, 2: `CancellationError` из порта до отправки → `cancelled`
 
     func test_v13_recordingCancellationGivesCancelled() async throws {
@@ -81,70 +95,64 @@ final class EngineXPCClientPreSendCancellationTests: XCTestCase {
     }
 
     func test_v13_resolveCancellationGivesCancelled() async throws {
-        let fixture = XPCFixture.transportOnly(wrapCatalog: {
-            ThrowingModelCatalog(base: $0, resolveError: CancellationError())
-        })
+        let (fixture, catalog) = throwingFixture(resolveError: CancellationError())
         configureReadyProfile(fixture.modelCatalog)
 
         await assertCancelled { _ = try await fixture.client.transcribe(self.makeSpec()) { _ in } }
         try await assertNothingSent(fixture)
+        XCTAssertEqual(catalog.beginUseCalls, 0, "после отказа resolve beginUse не зовётся")
     }
 
     func test_v13_embedResolveCancellationGivesCancelled() async throws {
-        let fixture = XPCFixture.transportOnly(wrapCatalog: {
-            ThrowingModelCatalog(base: $0, resolveError: CancellationError())
-        })
+        let (fixture, catalog) = throwingFixture(resolveError: CancellationError())
         configureReadyProfile(fixture.modelCatalog, embeddingModelId: "emb-1")
 
         await assertCancelled {
             _ = try await fixture.client.embed(recordingId: UUID(), startMs: 0, endMs: 1000, profileId: "p1")
         }
         try await assertNothingSent(fixture)
+        XCTAssertEqual(catalog.beginUseCalls, 0, "после отказа resolve beginUse не зовётся")
     }
 
     func test_v13_beginUseCancellationGivesCancelledWithoutEndUse() async throws {
-        let fixture = XPCFixture.transportOnly(wrapCatalog: {
-            ThrowingModelCatalog(base: $0, beginUseError: CancellationError())
-        })
+        let (fixture, catalog) = throwingFixture(beginUseError: CancellationError())
         configureReadyProfile(fixture.modelCatalog)
 
         await assertCancelled { _ = try await fixture.client.transcribe(self.makeSpec()) { _ in } }
         try await assertNothingSent(fixture)
+        XCTAssertEqual(catalog.beginUseCalls, 1, "отказ пришёл именно из beginUse")
     }
 
     func test_v13_embedBeginUseCancellationGivesCancelledWithoutEndUse() async throws {
-        let fixture = XPCFixture.transportOnly(wrapCatalog: {
-            ThrowingModelCatalog(base: $0, beginUseError: CancellationError())
-        })
+        let (fixture, catalog) = throwingFixture(beginUseError: CancellationError())
         configureReadyProfile(fixture.modelCatalog, embeddingModelId: "emb-1")
 
         await assertCancelled {
             _ = try await fixture.client.embed(recordingId: UUID(), startMs: 0, endMs: 1000, profileId: "p1")
         }
         try await assertNothingSent(fixture)
+        XCTAssertEqual(catalog.beginUseCalls, 1, "отказ пришёл именно из beginUse")
     }
 
     // MARK: - Критерий 3: регрессионные векторы — прочие ошибки прежние
 
     /// `ModelCatalogError.cancelled` (C-014) — отмена загрузки моделей, не вызывающей стороны.
     func test_v13_modelCatalogCancelledFromResolveStaysModelsNotReady() async throws {
-        let fixture = XPCFixture.transportOnly(wrapCatalog: {
-            ThrowingModelCatalog(base: $0, resolveError: ModelCatalogError.cancelled)
-        })
+        let (fixture, catalog) = throwingFixture(resolveError: ModelCatalogError.cancelled)
         configureReadyProfile(fixture.modelCatalog)
 
         await assertModelsNotReady { _ = try await fixture.client.transcribe(self.makeSpec()) { _ in } }
         try await assertNothingSent(fixture)
+        XCTAssertEqual(catalog.beginUseCalls, 0)
     }
 
     func test_v13_modelCatalogCancelledFromBeginUseStaysModelsNotReady() async throws {
-        let fixture = XPCFixture.transportOnly(wrapCatalog: {
-            ThrowingModelCatalog(base: $0, beginUseError: ModelCatalogError.cancelled)
-        })
+        let (fixture, catalog) = throwingFixture(beginUseError: ModelCatalogError.cancelled)
         configureReadyProfile(fixture.modelCatalog)
 
         await assertModelsNotReady { _ = try await fixture.client.transcribe(self.makeSpec()) { _ in } }
         try await assertNothingSent(fixture)
+        XCTAssertEqual(catalog.beginUseCalls, 1)
     }
 
     /// Правило — по типу ошибки: не-`CancellationError` из репозитория в отменённом `Task`
