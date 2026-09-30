@@ -1,4 +1,5 @@
 //  Фейки и основа тестов GigaAMEngine — MEE-502 (Z3б): источник, распознаватель, фабрика, журнал прогресса.
+//  MEE-513: каталог модели основы пишет и `.manifest.json` — без него движок отвечает `modelMissing`.
 
 import DomainCore
 import DomainTestKit
@@ -9,7 +10,8 @@ import XCTest
 
 // MARK: - Фейки
 
-/// Источник: синтетика вместо файла. Амплитуда — по каналу, тишина каждые 4,7 с на 400 мс.
+/// Источник: синтетика вместо файла. Амплитуда — по каналу, тишина каждые 4,7 с на 400 мс (с 0 мс).
+/// `leadingSilenceMs` задан — вместо этого тишина только в первые `leadingSilenceMs` мс дорожки.
 final class FakeAudioSource: GigaAMAudioSource, @unchecked Sendable {
     private let lock = NSLock()
     private var requests: [(fromMs: Int, toMs: Int)] = []
@@ -18,6 +20,13 @@ final class FakeAudioSource: GigaAMAudioSource, @unchecked Sendable {
     /// Длительность канала поверх `durations` — дорожка без кадров (0 мс) у одного канала (MEE-509).
     var channelDurations: [RecordingManifest.Channel: Int] = [:]
     var failure: Error?
+    var leadingSilenceMs: Int?
+
+    /// Тишина на миллисекунде `ms` файла.
+    func isSilent(atMs ms: Int) -> Bool {
+        if let leadingSilenceMs { return ms < leadingSilenceMs }
+        return ms % 4_700 < 400
+    }
 
     func durationMs(of audio: AudioRef) throws -> Int {
         if let failure { throw failure }
@@ -33,7 +42,7 @@ final class FakeAudioSource: GigaAMAudioSource, @unchecked Sendable {
         var samples: [Float] = []
         samples.reserveCapacity((toMs - fromMs) * 16)
         for ms in fromMs..<toMs {
-            let value: Float = ms % 4_700 < 400 ? 0 : amplitude
+            let value: Float = isSilent(atMs: ms) ? 0 : amplitude
             samples.append(contentsOf: [Float](repeating: value, count: 16))
         }
         return samples
@@ -73,7 +82,7 @@ final class FakeRecognizer: GigaAMRecognizer, @unchecked Sendable {
         }
         if let failure { throw failure }
         if call == cancelOnCall { withUnsafeCurrentTask { $0?.cancel() } }
-        let word = samples.first == 0.5 ? "система" : "микрофон"
+        let word = samples.contains(0.5) ? "система" : "микрофон"
         return RecognizedChunk(text: word, tokens: ["\u{2581}\(word)", "."], timestamps: [0, 0.12])
     }
 
@@ -91,6 +100,23 @@ struct FakeFactory: GigaAMRecognizerFactory {
     func makeRecognizer(modelDirectory: URL) throws -> any GigaAMRecognizer {
         if let failure { throw failure }
         return recognizer
+    }
+}
+
+/// Журнал движка (замыкание `log`): строки в порядке записи.
+final class EngineLog: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stored: [String] = []
+    func append(_ line: String) {
+        lock.lock()
+        stored.append(line)
+        lock.unlock()
+    }
+
+    var lines: [String] {
+        lock.lock()
+        defer { lock.unlock() }
+        return stored
     }
 }
 
@@ -119,6 +145,7 @@ class GigaAMEngineTestCase: XCTestCase {
     let recognizer = FakeRecognizer()
     var modelDirectory = URL(fileURLWithPath: "/nonexistent")
     let fixedDate = Date(timeIntervalSince1970: 1_789_000_000)
+    let engineLog = EngineLog()
 
     override func setUpWithError() throws {
         modelDirectory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -130,17 +157,45 @@ class GigaAMEngineTestCase: XCTestCase {
         try? FileManager.default.removeItem(at: modelDirectory)
     }
 
+    /// Файлы модели по одному байту и манифест с теми же длинами.
     func writeModelFiles() throws {
         for name in [GigaAMEngine.modelFileName, GigaAMEngine.tokensFileName] {
             try Data([0]).write(to: modelDirectory.appendingPathComponent(name))
         }
+        try writeManifest(modelBytes: 1, tokensBytes: 1)
+    }
+
+    var manifestURL: URL { modelDirectory.appendingPathComponent(GigaAMEngine.manifestFileName) }
+
+    func writeManifest(modelBytes: Int64, tokensBytes: Int64, names: [String]? = nil) throws {
+        let url = URL(string: "https://example.invalid/model")!
+        let hash = String(repeating: "0", count: 64)
+        let names = names ?? [GigaAMEngine.modelFileName, GigaAMEngine.tokensFileName]
+        let files = zip(names, [modelBytes, tokensBytes]).map {
+            ModelFile(name: $0, url: url, sha256: hash, sizeBytes: $1)
+        }
+        let descriptor = ModelDescriptor(
+            id: "gigaam-v3-e2e-ctc-int8", version: "3.0.0", role: .asr, engine: "sherpaonnx", runtime: .onnx,
+            displayName: "GigaAM", description: "", sizeBytes: modelBytes + tokensBytes, languages: ["ru"],
+            files: files, quantization: "int8", minChip: .m2, minRAMGB: 8, recommendedFor: []
+        )
+        let manifest = ModelManifestFile(
+            schemaVersion: ModelManifestFile.supportedSchemaVersion, descriptor: descriptor
+        )
+        try DomainJSON.encode(manifest).write(to: manifestURL)
+        // Сам манифест обязан разбираться — иначе тест проверял бы ветку «манифест не читается».
+        _ = try DomainJSON.decode(ModelManifestFile.self, from: Data(contentsOf: manifestURL))
     }
 
     func makeEngine(factoryFailure: Error? = nil) -> GigaAMEngine {
+        makeEngine(factory: FakeFactory(recognizer: recognizer, failure: factoryFailure))
+    }
+
+    func makeEngine(factory: any GigaAMRecognizerFactory) -> GigaAMEngine {
         let fixed = fixedDate
+        let log = engineLog
         return GigaAMEngine(
-            audioSource: source, recognizerFactory: FakeFactory(recognizer: recognizer, failure: factoryFailure),
-            clock: { fixed }
+            audioSource: source, recognizerFactory: factory, clock: { fixed }, log: { log.append($0) }
         )
     }
 

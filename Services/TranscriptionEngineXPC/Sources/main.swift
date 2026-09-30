@@ -23,14 +23,24 @@
 //  распознавателем sherpa-onnx (`SherpaGigaAMRecognizerFactory`, таргет `GigaAMSherpa`) и чтением
 //  дорожек `TrackAudioSource` (этот каталог, поверх `AudioTrackReader`). Остальные три — честные
 //  заглушки `Unavailable*`: диаризации, эмбеддингов и постобработки в Срезе 1 нет.
+//
+//  Журнал движка (MEE-513, IR-157): причина `modelMissing` при проверке каталога модели — файл,
+//  ожидаемая и найденная длина, нет или не читается `.manifest.json` — идёт в unified log уровнем
+//  `error`, подсистема `com.andreeyka.meetforme.TranscriptionEngine`, категория `model`. `GigaAM`
+//  (Packages/Core) `os` не импортирует: строку он отдаёт замыканием `log`.
 
 import EngineXPCService
 import Foundation
 import GigaAM
 import GigaAMSherpa
+import os
 
+let modelLog = Logger(subsystem: "com.andreeyka.meetforme.TranscriptionEngine", category: "model")
 let engines = EngineBundle(
-    transcription: GigaAMEngine(audioSource: TrackAudioSource(), recognizerFactory: SherpaGigaAMRecognizerFactory()),
+    transcription: GigaAMEngine(
+        audioSource: TrackAudioSource(), recognizerFactory: SherpaGigaAMRecognizerFactory(),
+        log: { message in modelLog.error("\(message, privacy: .public)") }
+    ),
     diarization: UnavailableDiarizationEngine(),
     embedding: UnavailableEmbeddingEngine(),
     postProcessor: UnavailablePostProcessor()

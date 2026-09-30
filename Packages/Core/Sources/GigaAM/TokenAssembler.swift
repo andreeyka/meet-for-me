@@ -2,7 +2,8 @@
 //
 //  Модуль: gigaam · Владелец: DEV-2 · Слой: движок
 //
-//  Чистая функция. Слово — токены между границами `▁`; `startMs` — метка первого токена,
+//  Чистая функция. Слово — токены между границами `▁`; `startMs` — метка первого токена (у первого слова
+//  куска — начало энергии `SpeechOnset`, если оно найдено: module-map «Метка первого слова куска», IR-157),
 //  `endMs` — метка последнего токена слова плюс шаг кадра (40 мс). Знак препинания дописывается
 //  к слову и `endMs` не двигает (CTC выдаёт его с опозданием, уже в паузе). Сегмент кончается на
 //  слове со знаком `.`, `?`, `!`, `…` в конце, перед паузой ≥ 2000 мс между словами и на границе куска.
@@ -68,16 +69,31 @@ enum TokenAssembler {
     ///   - shiftMs: позиция куска в файле + `AudioRef.offsetMs` (инварианты 4 и 16 C-011).
     ///   - chunkDurationMs: длина куска, мс; `endMs` слова не выходит за конец куска, чтобы сегменты
     ///     соседних кусков не пересекались.
+    ///   - speechOnsetMs: начало энергии в куске, мс от начала куска (`SpeechOnset.speechOnsetMs`, посчитанное
+    ///     до `secondTokenMs(in:)`); заменяет метку первого токена, не являющегося знаком препинания. `nil` —
+    ///     метка модели остаётся.
     static func assemble(
-        _ chunk: RecognizedChunk, shiftMs: Int, chunkDurationMs: Int, channel: RecordingManifest.Channel
+        _ chunk: RecognizedChunk, shiftMs: Int, chunkDurationMs: Int, channel: RecordingManifest.Channel,
+        speechOnsetMs: Int?
     ) throws -> [SegmentDraft] {
         guard chunk.tokens.count == chunk.timestamps.count else {
             throw Failure.lengthMismatch(tokens: chunk.tokens.count, timestamps: chunk.timestamps.count)
         }
         guard chunkDurationMs > 0 else { throw Failure.nonPositiveDuration(chunkDurationMs) }
         let chunkEnd = shiftMs + chunkDurationMs
-        let words = buildWords(chunk, shiftMs: shiftMs, chunkEndMs: chunkEnd)
+        let words = buildWords(chunk, shiftMs: shiftMs, chunkEndMs: chunkEnd, onsetMs: speechOnsetMs)
         return split(words, channel: channel)
+    }
+
+    /// Метка второго токена куска, не являющегося знаком препинания, мс от начала куска — граница окон
+    /// `SpeechOnset`; `nil` — такой токен один или его нет (рассматривается весь кусок).
+    static func secondTokenMs(in chunk: RecognizedChunk) -> Int? {
+        var seen = 0
+        for (token, seconds) in zip(chunk.tokens, chunk.timestamps) where isWordToken(token) {
+            seen += 1
+            if seen == 2 { return label(seconds) }
+        }
+        return nil
     }
 
     /// Метка в мс: `round(сек · 1000)`.
@@ -92,12 +108,15 @@ enum TokenAssembler {
         var lastMs: Int
     }
 
-    private static func buildWords(_ chunk: RecognizedChunk, shiftMs: Int, chunkEndMs: Int) -> [WordDraft] {
+    private static func buildWords(
+        _ chunk: RecognizedChunk, shiftMs: Int, chunkEndMs: Int, onsetMs: Int?
+    ) -> [WordDraft] {
         var words: [WordDraft] = []
         var open: OpenWord?
         var leadingPunctuation = ""
         var boundary = true
         var previousMs = Int.min / 2
+        var isFirst = true
 
         func close() {
             guard let word = open else { return }
@@ -117,8 +136,12 @@ enum TokenAssembler {
                 if open != nil { open?.text += body } else { leadingPunctuation += body }
                 continue
             }
+            // первый токен куска: начало энергии вместо кадра 0 модели (IR-157); оно строго меньше метки
+            // второго токена, поэтому метки остаются строго возрастающими
+            let raw = (isFirst ? onsetMs : nil) ?? label(seconds)
+            isFirst = false
             // строго возрастающие метки в пределах куска: на равных метках слово не схлопнется в 0 мс
-            let stamp = min(max(label(seconds) + shiftMs, previousMs + 1), chunkEndMs - 1)
+            let stamp = min(max(raw + shiftMs, previousMs + 1), chunkEndMs - 1)
             let exhausted = stamp <= previousMs
             previousMs = stamp
             if exhausted, open != nil {
@@ -151,6 +174,12 @@ enum TokenAssembler {
             )
         }
         return result
+    }
+
+    /// Токен несёт метку слова: после снятия `▁` не пуст и не знак препинания.
+    private static func isWordToken(_ token: String) -> Bool {
+        let body = String(token.drop { $0 == wordMarker })
+        return !body.isEmpty && !isPunctuation(body)
     }
 
     private static func isPunctuation(_ body: String) -> Bool {
