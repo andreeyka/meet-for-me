@@ -18,6 +18,10 @@
 //
 //  Задержка `modelsNotReady` (§4.1): 300с на `attempts == 0`, 900с на любом другом значении —
 //  тотально по значению поля, дословно.
+//
+//  ЖУРНАЛ (MEE-511, IR-155; module-map, domain-core, «Журнал»): причина `app.internalError`
+//  пишется в замыкание `log` из `init` (умолчание — без вывода), ровно один раз на ветку; в
+//  очередь уходит только код. `os.Logger` подставляет корень композиции в `App/`.
 
 import Foundation
 
@@ -26,10 +30,16 @@ public struct TranscribeJobHandler: JobHandler {
 
     private let port: TranscriptionServicePort
     private let transcripts: TranscriptRepository
+    private let log: @Sendable (String) -> Void
 
-    public init(port: TranscriptionServicePort, transcripts: TranscriptRepository) {
+    public init(
+        port: TranscriptionServicePort,
+        transcripts: TranscriptRepository,
+        log: @escaping @Sendable (String) -> Void = { _ in }
+    ) {
         self.port = port
         self.transcripts = transcripts
+        self.log = log
     }
 
     public func run(
@@ -52,23 +62,31 @@ public struct TranscribeJobHandler: JobHandler {
             return Self.outcome(for: error, attempts: job.attempts)
         } catch {
             // MEE-498: в очередь — код §3.1 («всё прочее»), не описание значения Swift.
+            logInternalError(step: "transcribe", jobId: job.id, error: error)
             return .permanentFailure(error: UnderlyingErrorText.internalErrorCode)
         }
-        return await save(transcript)
+        return await save(transcript, jobId: job.id)
     }
 
     /// C-012 v11 (IR-145): `transcribe` возвращает значение и не сохраняет, очередь результат
     /// не интерпретирует (C-013) — сохраняет обработчик, один раз, и только затем `.success`.
     /// Отказ `save` — состояние системы (диск, база), а не свойство запроса: `.retry(after: 30)`.
-    private func save(_ transcript: Transcript) async -> JobOutcome {
+    private func save(_ transcript: Transcript, jobId: UUID) async -> JobOutcome {
         do {
             _ = try await transcripts.save(transcript)
             return .success
         } catch let error as StorageError {
             return .retry(after: 30, error: UnderlyingErrorText.jobErrorCode("storage", error))
         } catch {
+            logInternalError(step: "save", jobId: jobId, error: error)
             return .retry(after: 30, error: UnderlyingErrorText.internalErrorCode)
         }
+    }
+
+    private func logInternalError(step: String, jobId: UUID, error: Error) {
+        log(UnderlyingErrorText.internalErrorLogLine(
+            handler: "TranscribeJobHandler", step: step, jobId: jobId, error: error
+        ))
     }
 
     /// C-012 §4 дословно: `TranscriptionServiceError` → `JobOutcome`, одна строка — один исход.
