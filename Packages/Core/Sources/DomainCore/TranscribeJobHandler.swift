@@ -37,7 +37,7 @@ public struct TranscribeJobHandler: JobHandler {
         progress: @Sendable @escaping (Double) -> Void
     ) async -> JobOutcome {
         guard case .transcribe(let recordingId, let profileId, let language) = job.payload else {
-            return .permanentFailure(error: "TranscribeJobHandler получил job.payload не .transcribe")
+            return .permanentFailure(error: UnderlyingErrorText.wrongPayloadText)
         }
         let spec = TranscriptionJobSpec(
             recordingId: recordingId, profileId: profileId, language: language,
@@ -51,7 +51,8 @@ public struct TranscribeJobHandler: JobHandler {
         } catch let error as TranscriptionServiceError {
             return Self.outcome(for: error, attempts: job.attempts)
         } catch {
-            return .permanentFailure(error: "\(error)")
+            // MEE-498: в очередь — код §3.1 («всё прочее»), не описание значения Swift.
+            return .permanentFailure(error: UnderlyingErrorText.internalErrorCode)
         }
         return await save(transcript)
     }
@@ -63,8 +64,10 @@ public struct TranscribeJobHandler: JobHandler {
         do {
             _ = try await transcripts.save(transcript)
             return .success
+        } catch let error as StorageError {
+            return .retry(after: 30, error: UnderlyingErrorText.jobErrorCode("storage", error))
         } catch {
-            return .retry(after: 30, error: "save: \(error)")
+            return .retry(after: 30, error: UnderlyingErrorText.internalErrorCode)
         }
     }
 
@@ -90,7 +93,7 @@ public struct TranscribeJobHandler: JobHandler {
         case .engineFailure(let code, let message):
             return outcomeForEngineFailure(code: code, message: message)
         case .cancelled:
-            return outcomeForCancellation(message: "cancelled")
+            return outcomeForCancellation()
         }
     }
 
@@ -111,16 +114,20 @@ public struct TranscribeJobHandler: JobHandler {
         case "runtimeFailure":
             return .retry(after: 30, error: message)
         case "cancelled":
-            return outcomeForCancellation(message: message)
+            return outcomeForCancellation()
         default:
-            return .retry(after: 30, error: "неизвестный код engineFailure: \(code) (\(message))")
+            // C-016 §3.1, строка 1: код вне перечня `EngineError` проходит тем же правилом.
+            return .retry(after: 30, error: "engine.engineFailure.\(code)")
         }
     }
 
     /// §4, строка `cancelled`: `.success`, только если ОЧЕРЕДЬ сама инициировала отмену этой
     /// задачи — наблюдается отменой Task, в котором `JobQueueEngine` зовёт `run(_:progress:)`
     /// (`JobQueueEngineExecution.swift`); без отмены `cancelled` — нарушение контракта движка.
-    private static func outcomeForCancellation(message: String) -> JobOutcome {
-        Task.isCancelled ? .success : .permanentFailure(error: "\(message) без отмены очередью")
+    private static func outcomeForCancellation() -> JobOutcome {
+        Task.isCancelled ? .success : .permanentFailure(error: cancelledWithoutRequestText)
     }
+
+    /// MEE-498: текст для человека вместо технической строки «… без отмены очередью».
+    static let cancelledWithoutRequestText = "Распознавание прервалось, хотя его никто не отменял"
 }

@@ -37,22 +37,23 @@ final class SpeakerAssignmentTests: XCTestCase {
     }
 
     /// Три сегмента: два в кластере 0 (К51 требует минимум два в кластере вызова), один в
-    /// кластере 1.
-    func makeFixture() async throws -> Fixture {
+    /// кластере 1. `embeddingModelVersion` — версия эмбеддингов обоих спикеров; `nil` — спикеры
+    /// без эмбеддингов (C-015 v11 §7: версия входа тогда "", MEE-498).
+    func makeFixture(embeddingModelVersion: String? = "v1") async throws -> Fixture {
         let repositories = InMemoryRepositories()
         let recordingId = RecordingManifestFixtures.hourlyTwoChannels.recordingId
         let segmentA1 = try makeSegment(startMs: 0, endMs: 800, cluster: 0, text: "слова кластера А1")
         let segmentA2 = try makeSegment(startMs: 800, endMs: 1600, cluster: 0, text: "слова кластера А2")
         let segmentB1 = try makeSegment(startMs: 1600, endMs: 2400, cluster: 1, text: "слова кластера Б1")
-        // Инв. 9: каждый speakerCluster сегмента обязан присутствовать среди speakers.
-        // embeddingModelVersion непуст хотя бы у одного — иначе AttributionSupport.buildInput
-        // считает вход испорченным (§7 «embeddingModelVersion»); инв. 10 требует embedding
-        // и embeddingModelVersion только парой, поэтому оба заданы вместе.
+        // Инв. 9: каждый speakerCluster сегмента обязан присутствовать среди speakers. Инв. 10
+        // требует embedding и embeddingModelVersion только парой, поэтому оба заданы вместе.
         let speakerA = try Transcript.Speaker(
-            cluster: 0, embedding: [0.1, 0.2], embeddingModelVersion: "v1", totalMs: 1_600
+            cluster: 0, embedding: embeddingModelVersion.map { _ in [0.1, 0.2] },
+            embeddingModelVersion: embeddingModelVersion, totalMs: 1_600
         )
         let speakerB = try Transcript.Speaker(
-            cluster: 1, embedding: [0.3, 0.4], embeddingModelVersion: "v1", totalMs: 800
+            cluster: 1, embedding: embeddingModelVersion.map { _ in [0.3, 0.4] },
+            embeddingModelVersion: embeddingModelVersion, totalMs: 800
         )
         let transcript = try Transcript(
             recordingId: recordingId, language: "ru", engine: "engine", modelVersion: "1.0",

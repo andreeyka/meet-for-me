@@ -88,8 +88,10 @@ extension AdHocRecordingsEventsTests {
     // MARK: - Б1: поздний ответ `startRecording`
 
     /// Снимок `processing` или терминальный пришёл раньше ответа `startRecording` — ответ даёт
-    /// только `statusChanged`. Кэши не пополнены: следующий `stopRecording` той же записи тоже без
-    /// `meetingsChanged` (с утёкшей связью «запись — встреча» он опубликовал бы `stopping`).
+    /// только `statusChanged`. Следующий `stopRecording` той же записи тоже без `meetingsChanged`:
+    /// опубликованный снимком статус записи (`finalized`/`failed`) фасад помнит и после
+    /// терминального снимка, и ни `recording`, ни `stopping` его не продвигают. Забудь фасад этот
+    /// статус вместе с сессией — оба поздних ответа дали бы по `meetingsChanged` (MEE-494, Б1).
     func test_lateCommands_startRecordingAfterLaterSnapshotPublishesNoMeetingsChanged() async throws {
         for lateState in [MeetingStatus.processing, .ready, .failed] {
             let coordinator = ObservedTestSessionCoordinator()
@@ -157,5 +159,23 @@ extension AdHocRecordingsEventsTests {
             XCTAssertEqual(meetingsChangedCount(events), 0, "\(state): \(events)")
             XCTAssertEqual(statusChangedCount(events), 1, "\(state): \(events)")
         }
+    }
+
+    /// MEE-498: чтение встречи после `skip` отказало — ошибка не глотается молча. Команда исполнена,
+    /// бросать нечего; изменила ли она строку, неизвестно, и `meetingsChanged` публикуется без
+    /// условия (инв. 15), затем `statusChanged`.
+    func test_lateCommands_skipMeetingPublishesMeetingsChangedWhenStorageReadFails() async throws {
+        let coordinator = ObservedTestSessionCoordinator()
+        let repositories = InMemoryRepositories()
+        let facade = makeFacade(coordinator: coordinator, repositories: repositories)
+        repositories.meetings.fail(with: .io(message: "disk I/O error"), on: .meetingById)
+        let stream = facade.events()
+
+        try await facade.skipMeeting(meetingId: UUID())
+        let events = await collectEvents(stream, count: 3, timeoutSeconds: 1)
+
+        XCTAssertEqual(events.first, .meetingsChanged, "\(events)")
+        XCTAssertEqual(meetingsChangedCount(events), 1, "\(events)")
+        XCTAssertEqual(statusChangedCount(events), 1, "\(events)")
     }
 }

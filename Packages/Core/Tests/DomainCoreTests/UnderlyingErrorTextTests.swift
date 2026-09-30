@@ -135,36 +135,92 @@ final class UnderlyingErrorTextTests: XCTestCase {
 
     // MARK: - facade.jobFailed
 
+    private struct JobFailureRow {
+        let raw: String
+        /// Имя случая или код, которых в показе быть не должно.
+        let name: String
+        /// Кусок подробности (строчными); `nil` — подробности нет, в показе только заголовок.
+        let detail: String?
+    }
+
+    /// Строки прежних изданий обработчиков (описания значений Swift) и «interrupted» очереди.
+    private static let swiftDescriptionRows: [JobFailureRow] = [
+        JobFailureRow(raw: "serviceCrashed", name: "serviceCrashed", detail: "аварийно завершилась"),
+        JobFailureRow(raw: "timedOut(30)", name: "timedOut", detail: "не ответила вовремя"),
+        JobFailureRow(
+            raw: "protocolVersionMismatch(client: 1, service: 2)", name: "protocolVersionMismatch",
+            detail: "версии приложения и службы"
+        ),
+        JobFailureRow(raw: "messageTooLarge(1000)", name: "messageTooLarge", detail: "слишком велик"),
+        JobFailureRow(raw: "save: io(message: \"disk full\")", name: "io", detail: "записать данные на диск"),
+        JobFailureRow(raw: "io(message: \"disk full\")", name: "io", detail: "записать данные на диск"),
+        JobFailureRow(raw: "notFound(entity: \"Recording\", id: \"x\")", name: "notFound", detail: "данные не найдены"),
+        JobFailureRow(raw: "voiceProfilesDisabled", name: "voiceProfilesDisabled", detail: "профили выключены"),
+        JobFailureRow(
+            raw: "segmentIdsMismatch(expected: 3, actual: 4)", name: "segmentIdsMismatch",
+            detail: "транскрипт изменился"
+        ),
+        JobFailureRow(raw: "settingsUnreadable(key: \"k\")", name: "settingsUnreadable", detail: "прочитать настройку"),
+        JobFailureRow(
+            raw: "underlying(DomainCore.AppErrorView(code: \"storage.io\", message: \"m\"))", name: "underlying",
+            detail: nil
+        ),
+        JobFailureRow(raw: "interrupted", name: "interrupted", detail: "приложение закрылось"),
+        JobFailureRow(raw: "somethingNew(x: 1)", name: "somethingNew", detail: nil),
+        JobFailureRow(raw: "brandNewCase", name: "brandNewCase", detail: nil),
+        JobFailureRow(
+            raw: "Failed: DecodingError.keyNotFound(CodingKeys(stringValue: \"a\"))", name: "DecodingError", detail: nil
+        )
+    ]
+
+    /// Коды §3.1, которые пишут обработчики с MEE-498.
+    private static let codeRows: [JobFailureRow] = [
+        JobFailureRow(raw: "storage.io", name: "storage", detail: "записать данные на диск"),
+        JobFailureRow(raw: "storage.dataCorrupted", name: "storage", detail: "повреждены"),
+        JobFailureRow(raw: "app.internalError", name: "internalError", detail: "внутренняя ошибка приложения"),
+        JobFailureRow(
+            raw: "engine.engineFailure.codeFromNewerService", name: "codeFromNewerService", detail: "сбой движка"
+        ),
+        JobFailureRow(raw: "attribution.unknownPerson", name: "unknownPerson", detail: "человек не найден"),
+        JobFailureRow(raw: "facade.settingsUnreadable", name: "settingsUnreadable", detail: "прочитать настройку"),
+        JobFailureRow(raw: "facade.notAllowed", name: "notAllowed", detail: "не удалось выполнить действие")
+    ]
+
     /// Строки, которые обработчики задач кладут в `JobEvent.failed(error:)`: описания значений
-    /// Swift, код §3.1, «interrupted» очереди. В `message` показа — ни имени случая, ни скобок.
+    /// Swift, код §3.1, «interrupted» очереди. В `message` показа — ни имени случая, ни скобок, и
+    /// подробность та, что ждётся (MEE-498: проверка не только отрицательная).
     func test_jobFailedMessageHasNoSwiftDescription() {
-        let rawErrors: [(String, String)] = [
-            ("serviceCrashed", "serviceCrashed"),
-            ("timedOut(30)", "timedOut"),
-            ("protocolVersionMismatch(client: 1, service: 2)", "protocolVersionMismatch"),
-            ("messageTooLarge(1000)", "messageTooLarge"),
-            ("save: io(message: \"disk full\")", "io"),
-            ("io(message: \"disk full\")", "io"),
-            ("storage.io", "storage"),
-            ("notFound(entity: \"Recording\", id: \"x\")", "notFound"),
-            ("voiceProfilesDisabled", "voiceProfilesDisabled"),
-            ("segmentIdsMismatch(expected: 3, actual: 4)", "segmentIdsMismatch"),
-            ("settingsUnreadable(key: \"k\")", "settingsUnreadable"),
-            ("underlying(DomainCore.AppErrorView(code: \"storage.io\", message: \"m\"))", "underlying"),
-            ("interrupted", "interrupted"),
-            ("somethingNew(x: 1)", "somethingNew"),
-            ("Failed: DecodingError.keyNotFound(CodingKeys(stringValue: \"a\"))", "DecodingError")
-        ]
-        for (raw, name) in rawErrors {
-            let event = JobEvent.failed(jobId: UUID(), type: .transcribe, error: raw, willRetry: false)
-            guard let error = AppFacadeImpl.jobFailedError(for: event) else { return XCTFail(raw) }
-            guard case .jobFailed(_, _, let message) = error else { return XCTFail(raw) }
-            XCTAssertEqual(message, raw, "значение случая — строка очереди дословно (инв. 31)")
+        for row in Self.swiftDescriptionRows + Self.codeRows {
+            let event = JobEvent.failed(jobId: UUID(), type: .transcribe, error: row.raw, willRetry: false)
+            guard let error = AppFacadeImpl.jobFailedError(for: event) else { return XCTFail(row.raw) }
+            guard case .jobFailed(_, _, let message) = error else { return XCTFail(row.raw) }
+            XCTAssertEqual(message, row.raw, "значение случая — строка очереди дословно (инв. 31)")
             let view = error.view
             XCTAssertEqual(view.code, "facade.jobFailed")
-            XCTAssertFalse(view.message.contains(name), "\(raw): «\(view.message)»")
-            XCTAssertFalse(view.message.contains("("), "\(raw): «\(view.message)»")
-            XCTAssertFalse(view.message.contains(")"), "\(raw): «\(view.message)»")
+            XCTAssertFalse(view.message.contains(row.name), "\(row.raw): «\(view.message)»")
+            XCTAssertFalse(view.message.contains("("), "\(row.raw): «\(view.message)»")
+            XCTAssertFalse(view.message.contains(")"), "\(row.raw): «\(view.message)»")
+            let head = "Транскрибация не выполнена"
+            if let detail = row.detail {
+                XCTAssertTrue(view.message.hasPrefix(head + ": "), "\(row.raw): «\(view.message)»")
+                XCTAssertTrue(view.message.contains(detail), "\(row.raw): «\(view.message)»")
+            } else {
+                XCTAssertEqual(view.message, head, "\(row.raw): подробности нет")
+            }
+        }
+    }
+
+    /// Свободный текст движка — однословный (`"oom"`) и с точкой (`"cuda.oom"`) — и тексты для
+    /// человека из обработчиков показываются как есть (MEE-498).
+    func test_jobFailedKeepsFreeEngineTextAndHandlerTexts() {
+        let texts = [
+            "oom", "cuda.oom", "save: oom", UnderlyingErrorText.wrongPayloadText,
+            TranscribeJobHandler.cancelledWithoutRequestText, "Транскрипт не найден — возможно, он уже удалён"
+        ]
+        for raw in texts {
+            let view = AppFacadeError.jobFailed(jobId: UUID(), type: .transcribe, message: raw).view
+            let shown = raw == "save: oom" ? "oom" : raw
+            XCTAssertTrue(view.message.hasSuffix(": \(shown)"), "\(raw): «\(view.message)»")
         }
     }
 
