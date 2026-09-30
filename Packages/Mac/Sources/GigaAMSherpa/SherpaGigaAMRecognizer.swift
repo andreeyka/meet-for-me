@@ -66,11 +66,7 @@ public final class SherpaGigaAMRecognizer: GigaAMRecognizer, @unchecked Sendable
     }
 
     public func recognize(samples: [Float]) throws -> RecognizedChunk {
-        guard samples.count <= Self.maxSamples else {
-            throw GigaAMRecognizerError.runtimeFailure(
-                message: "кусок \(samples.count) отсчётов длиннее \(Self.maxSamples) (30 с)"
-            )
-        }
+        try Self.checkChunkLength(samples.count)
         lock.lock()
         defer { lock.unlock() }
         guard let stream = SherpaOnnxCreateOfflineStream(recognizer) else {
@@ -89,6 +85,16 @@ public final class SherpaGigaAMRecognizer: GigaAMRecognizer, @unchecked Sendable
     }
 
     // MARK: - Внутреннее
+
+    /// Порог длины куска: не больше `maxSamples` отсчётов (30 с), иначе `.runtimeFailure`.
+    /// Вынесен отдельно, чтобы проверяться без модели.
+    static func checkChunkLength(_ sampleCount: Int) throws {
+        guard sampleCount <= maxSamples else {
+            throw GigaAMRecognizerError.runtimeFailure(
+                message: "кусок \(sampleCount) отсчётов длиннее \(maxSamples) (30 с)"
+            )
+        }
+    }
 
     private static func isRegularFile(_ url: URL) -> Bool {
         var isDirectory: ObjCBool = false

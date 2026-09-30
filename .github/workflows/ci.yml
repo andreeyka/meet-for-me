@@ -442,13 +442,13 @@ jobs:
         shell: bash
         env:
           PYTHONIOENCODING: utf-8
-          # MEE-503 (IR-155): пакет sherpa-onnx 1.13.8 несёт статический и разделяемый
+          # MEE-503 (IR-156, MEE-507): пакет sherpa-onnx 1.13.8 несёт статический и разделяемый
           # `SherpaOnnxC.framework` под одним именем. SwiftPM 5.10 копирует бинарники ВСЕХ
           # таргетов графа в `.build/debug` через `Set` (`addBinaryDependencyCommands`), и при
           # случайном порядке хеширования иногда побеждает разделяемый — тестовый бандл
           # `Packages/Mac` тогда не грузится (`@rpath/libonnxruntime.dylib` не найден, `swift test`
           # выходит с 1 без вывода; 4 из 8 прогонов PR). Детерминированное хеширование делает
-          # выбор постоянным; это обход, не исправление — вопрос вынесен в IR-155.
+          # выбор постоянным; это обход, не исправление — вопрос вынесен в IR-156 (MEE-507).
           SWIFT_DETERMINISTIC_HASHING: "1"
         run: |
           set -o pipefail

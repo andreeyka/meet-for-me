@@ -67,6 +67,16 @@ final class SherpaGigaAMRecognizerTests: XCTestCase {
         XCTAssertEqual(SherpaGigaAMRecognizer.portToken(""), "")
     }
 
+    // Порог куска (инвариант 19 C-011: движок подаёт ≤ 30 с) — без модели, идёт в CI.
+    func testChunkLengthThresholdIsThirtySeconds() throws {
+        XCTAssertEqual(SherpaGigaAMRecognizer.maxSamples, 480_000)
+        XCTAssertNoThrow(try SherpaGigaAMRecognizer.checkChunkLength(0))
+        XCTAssertNoThrow(try SherpaGigaAMRecognizer.checkChunkLength(480_000))
+        XCTAssertThrowsError(try SherpaGigaAMRecognizer.checkChunkLength(480_001)) {
+            guard case .runtimeFailure = $0 as? GigaAMRecognizerError else { return XCTFail("\($0)") }
+        }
+    }
+
     private func file(_ name: String) -> URL {
         directory.appendingPathComponent(name)
     }
