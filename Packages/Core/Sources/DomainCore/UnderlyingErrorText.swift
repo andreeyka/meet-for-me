@@ -198,6 +198,15 @@ extension UnderlyingErrorText {
     /// Строка отказа задачи для ошибки вне словаря §3.1 — «всё прочее», `app.internalError`.
     static let internalErrorCode = "app.internalError"
 
+    /// Строка журнала обработчика задачи для ветки `app.internalError` (MEE-511, IR-155; module-map,
+    /// domain-core, «Журнал»). В очередь не уходит — там только `internalErrorCode`. Несёт вид
+    /// обработчика, шаг, тип и описание ошибки; текста транскрипта и названий встреч не несёт —
+    /// обработчик их сюда не передаёт.
+    static func internalErrorLogLine(handler: String, step: String, jobId: UUID, error: Error) -> String {
+        "\(handler) [\(step)] job=\(jobId.uuidString): \(internalErrorCode); "
+            + "тип: \(String(reflecting: type(of: error))); \(internalErrorMessage(error))"
+    }
+
     /// Нагрузка задачи не того вида, что обработчик: обработчик зарегистрирован не на свой
     /// тип. Ошибка сборки приложения, а не данных пользователя.
     static let wrongPayloadText = "Внутренняя ошибка приложения: задача передана не своему обработчику"

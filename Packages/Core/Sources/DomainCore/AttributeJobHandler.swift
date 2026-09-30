@@ -31,6 +31,10 @@
 //  без обращения к `SpeakerProfileRepository`. Контракт описывает эффекты, не порядок
 //  вызовов, — перестановка внутри одного метода без внешне наблюдаемой разницы не решение,
 //  которое передают архитектору.
+//
+//  ЖУРНАЛ (MEE-511, IR-155; module-map, domain-core, «Журнал»): причина `app.internalError`
+//  пишется в замыкание `log` из `init` (умолчание — без вывода), ровно один раз; в очередь
+//  уходит только код. `os.Logger` подставляет корень композиции в `App/`.
 
 import Foundation
 
@@ -43,6 +47,7 @@ public struct AttributeJobHandler: JobHandler {
     private let persons: PersonRepository
     private let speakerProfiles: SpeakerProfileRepository
     private let appFacade: AppFacade
+    private let log: @Sendable (String) -> Void
 
     public init(
         port: AttributionPort,
@@ -50,7 +55,8 @@ public struct AttributeJobHandler: JobHandler {
         meetings: MeetingRepository,
         persons: PersonRepository,
         speakerProfiles: SpeakerProfileRepository,
-        appFacade: AppFacade
+        appFacade: AppFacade,
+        log: @escaping @Sendable (String) -> Void = { _ in }
     ) {
         self.port = port
         self.transcripts = transcripts
@@ -58,6 +64,7 @@ public struct AttributeJobHandler: JobHandler {
         self.persons = persons
         self.speakerProfiles = speakerProfiles
         self.appFacade = appFacade
+        self.log = log
     }
 
     public func run(
@@ -87,6 +94,9 @@ public struct AttributeJobHandler: JobHandler {
         } catch let error as StorageError {
             return Self.outcome(for: error)
         } catch {
+            log(UnderlyingErrorText.internalErrorLogLine(
+                handler: "AttributeJobHandler", step: "attribute", jobId: job.id, error: error
+            ))
             return .permanentFailure(error: UnderlyingErrorText.internalErrorCode)
         }
     }
