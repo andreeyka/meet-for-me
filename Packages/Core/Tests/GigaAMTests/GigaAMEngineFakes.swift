@@ -12,7 +12,8 @@ import XCTest
 /// Источник: синтетика вместо файла. Амплитуда — по каналу, тишина каждые 4,7 с на 400 мс.
 final class FakeAudioSource: GigaAMAudioSource, @unchecked Sendable {
     private let lock = NSLock()
-    private var requests: [(channel: RecordingManifest.Channel, fromMs: Int, toMs: Int)] = []
+    private var requests: [(fromMs: Int, toMs: Int)] = []
+    private var requestChannels: [RecordingManifest.Channel] = []
     var durations: [UUID: Int] = [:]
     /// Длительность канала поверх `durations` — дорожка без кадров (0 мс) у одного канала (MEE-509).
     var channelDurations: [RecordingManifest.Channel: Int] = [:]
@@ -25,7 +26,8 @@ final class FakeAudioSource: GigaAMAudioSource, @unchecked Sendable {
 
     func read(_ audio: AudioRef, fromMs: Int, toMs: Int) throws -> [Float] {
         lock.lock()
-        requests.append((audio.channel, fromMs, toMs))
+        requests.append((fromMs, toMs))
+        requestChannels.append(audio.channel)
         lock.unlock()
         let amplitude: Float = audio.channel == .system ? 0.5 : 0.25
         var samples: [Float] = []
@@ -45,7 +47,7 @@ final class FakeAudioSource: GigaAMAudioSource, @unchecked Sendable {
     var requestedChannels: Set<RecordingManifest.Channel> {
         lock.lock()
         defer { lock.unlock() }
-        return Set(requests.map(\.channel))
+        return Set(requestChannels)
     }
     var longestRequestMs: Int {
         lock.lock()
