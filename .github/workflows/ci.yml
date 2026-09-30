@@ -590,12 +590,15 @@ jobs:
         if: ${{ failure() }}
         shell: bash
         run: |
-          set -x
-          ls -la ~/Library/Caches/org.swift.swiftpm || true
-          du -sh ~/Library/Caches/org.swift.swiftpm/* || true
-          ls -la Packages/Mac/.build/debug/ | head -50 || true
-          swift test --package-path Packages/Mac --skip-build; echo "exit=$?"
-          xcrun xctest Packages/Mac/.build/debug/MeetMacPackageTests.xctest 2>&1 | tail -40; echo "exit=${PIPESTATUS[0]}"
+          set +e
+          ls -la Packages/Mac/.build/debug/*.xctest Packages/Mac/Package.resolved
+          swift test --package-path Packages/Mac --skip-build -v 2>&1 | tail -60
+          echo "exit=${PIPESTATUS[0]}"
+          swift test --package-path Packages/Mac --skip-build --list-tests 2>&1 | tail -5
+          echo "exit=${PIPESTATUS[0]}"
+          xcrun xctest -XCTest SherpaGigaAMRecognizerTests Packages/Mac/.build/debug/MeetMacPackageTests.xctest 2>&1 | tail -40
+          echo "exit=${PIPESTATUS[0]}"
+          exit 0
 
       # MEE-430: `project.yml` — единственный способ узнать, что каркас app-ui (App-таргет,
       # XPC-сервис `TranscriptionEngine`) на самом деле собирается, а не только существует
