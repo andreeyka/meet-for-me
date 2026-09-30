@@ -145,15 +145,17 @@ final class AudioTrackReaderTruncationTests: AudioTrackReaderTestCase {
         XCTAssertEqual(calls.value, 2)
     }
 
-    // MARK: - Файл без единого кадра (IR-154)
+    // MARK: - Файл без единого кадра (C-011 v8 инв. 17, IR-154)
 
-    /// Заголовок разобран и совпал, `data` пуст: `read(AudioRef)` — `[]` без ошибки, вырезка —
-    /// `unsupportedRequest` (инв. 16). Фиксирует поведение до ответа архитектора (IR-154).
+    /// Заголовок разобран и совпал, `data` пуст: по инв. 17 («Файл без кадров») `read(AudioRef)` —
+    /// `[]` без ошибки, длительность — 0 мс (по ней движок пропускает канал, MEE-509); вырезка —
+    /// `unsupportedRequest` (инв. 16).
     func testZeroFrameFileReadsAsEmptyTrack() throws {
         let url = try SyntheticCAF.write([], sampleRate: 48_000, channels: 1, to: directory)
         let ref = try audioRef(url, channelCount: 1, channel: .mic)
 
         XCTAssertEqual(try AudioTrackReader.read(ref), [])
+        XCTAssertEqual(try AudioTrackReader.durationMs(of: ref), 0)
         assertUnsupportedRequest { try AudioTrackReader.read(AudioSlice(source: ref, startMs: 0, endMs: 100)) }
     }
 

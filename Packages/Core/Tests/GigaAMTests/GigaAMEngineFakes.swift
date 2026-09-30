@@ -13,17 +13,21 @@ import XCTest
 final class FakeAudioSource: GigaAMAudioSource, @unchecked Sendable {
     private let lock = NSLock()
     private var requests: [(fromMs: Int, toMs: Int)] = []
+    private var requestChannels: [RecordingManifest.Channel] = []
     var durations: [UUID: Int] = [:]
+    /// Длительность канала поверх `durations` — дорожка без кадров (0 мс) у одного канала (MEE-509).
+    var channelDurations: [RecordingManifest.Channel: Int] = [:]
     var failure: Error?
 
     func durationMs(of audio: AudioRef) throws -> Int {
         if let failure { throw failure }
-        return durations[audio.recordingId] ?? 0
+        return channelDurations[audio.channel] ?? durations[audio.recordingId] ?? 0
     }
 
     func read(_ audio: AudioRef, fromMs: Int, toMs: Int) throws -> [Float] {
         lock.lock()
         requests.append((fromMs, toMs))
+        requestChannels.append(audio.channel)
         lock.unlock()
         let amplitude: Float = audio.channel == .system ? 0.5 : 0.25
         var samples: [Float] = []
@@ -39,6 +43,11 @@ final class FakeAudioSource: GigaAMAudioSource, @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         return requests.count
+    }
+    var requestedChannels: Set<RecordingManifest.Channel> {
+        lock.lock()
+        defer { lock.unlock() }
+        return Set(requestChannels)
     }
     var longestRequestMs: Int {
         lock.lock()
