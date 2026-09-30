@@ -43,7 +43,8 @@
 //  `RecordingRepository.recording(id:)`; пригодна запись, которая есть и у которой
 //  `status == .finalized` (`manifest.isFinalized` не читается — v12). Отказы по записи —
 //  `recordingNotReady`, до `resolve`/`beginUse`; бросок репозитория — `serviceUnavailable`
-//  (последняя строка §3.2), кроме `CancellationError` — `cancelled` (v13 §3.2). `AudioRef` — по одной на каждую `Track` манифеста, `offsetMs == 0`.
+//  (последняя строка §3.2), кроме `CancellationError` — `cancelled` (v13 §3.2).
+//  `AudioRef` — по одной на каждую `Track` манифеста, `offsetMs == 0`.
 //  `.diarize` адаптер не отправляет (инв. 26): `diarizeSystemChannel` в срезе 1 не читается.
 
 import Foundation
