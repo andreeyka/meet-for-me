@@ -10,7 +10,9 @@
 //  ДОРОЖКА БЕЗ КАДРОВ (C-011 v8, инвариант 17, «Файл без кадров»; MEE-509). Источник отдаёт для
 //  неё длительность 0 мс, цикл кусков канала не делает ни одного чтения, и канал даёт ноль
 //  сегментов, а не отказ. Один пустой канал — транскрипт по второму; оба — `segments == []`,
-//  `speakers == []` (инвариант 18: ни один сегмент не получил кластер).
+//  `speakers == []` (инвариант 18: ни один сегмент не получил кластер). Отмена проверяется и после
+//  всех каналов: у пустых каналов цикл кусков не выполняется, а отменённая задача не получает
+//  транскрипт и `.finished` (инварианты 10, 11).
 //
 //  ПОТОК (MEE-504, замечание ревью (б)). Распознавание синхронно и занимает поток кооперативного
 //  пула на всё время `transcribe` (час записи ≈ 70 с при RTF 0,02). Между кусками — `Task.yield()`:
@@ -73,6 +75,8 @@ public final class GigaAMEngine: TranscriptionEngine {
         let recognizer = try makeRecognizer(request.asrModel)
         progress(.started(stage: .asr))
         let drafts = try await recognizeAll(request.audio, with: recognizer, progress: progress)
+        // Каналы длины 0 не проходят цикл кусков и его проверок отмены (инв. 11, MEE-509).
+        try Self.checkCancelled()
         let transcript = try buildTranscript(drafts, request: request, recordingId: recordingId)
         progress(.finished(stage: .asr))
         return transcript
