@@ -6,9 +6,12 @@
 //  `endMs` — метка последнего токена слова плюс шаг кадра (40 мс). Знак препинания дописывается
 //  к слову и `endMs` не двигает (CTC выдаёт его с опозданием, уже в паузе). Сегмент кончается на
 //  слове со знаком `.`, `?`, `!`, `…` в конце, перед паузой ≥ 2000 мс между словами и на границе куска.
+//
+//  Метки токенов слов делаются строго возрастающими (`max(метка + сдвиг, предыдущая + 1)`) и не выходят
+//  за последнюю миллисекунду куска, поэтому у каждого слова и сегмента `endMs > startMs`, слова идут по
+//  неубыванию, не пересекаются и не выходят за конец куска (критерий 7 Z2, MEE-486).
 
 import DomainCore
-import EngineKit
 
 /// Слово до назначения кластера.
 struct WordDraft: Equatable {
@@ -54,6 +57,8 @@ enum TokenAssembler {
     enum Failure: Error, Equatable {
         /// `tokens.count != timestamps.count`.
         case lengthMismatch(tokens: Int, timestamps: Int)
+        /// `chunkDurationMs <= 0`: в куске нет ни одной миллисекунды для слова.
+        case nonPositiveDuration(Int)
     }
 
     /// Собирает сегменты одного куска.
@@ -69,6 +74,7 @@ enum TokenAssembler {
         guard chunk.tokens.count == chunk.timestamps.count else {
             throw Failure.lengthMismatch(tokens: chunk.tokens.count, timestamps: chunk.timestamps.count)
         }
+        guard chunkDurationMs > 0 else { throw Failure.nonPositiveDuration(chunkDurationMs) }
         let chunkEnd = shiftMs + chunkDurationMs
         let words = buildWords(chunk, shiftMs: shiftMs, chunkEndMs: chunkEnd)
         return split(words, channel: channel)
@@ -91,11 +97,12 @@ enum TokenAssembler {
         var open: OpenWord?
         var leadingPunctuation = ""
         var boundary = true
-        var previousMs = Int.min
+        var previousMs = Int.min / 2
 
         func close() {
             guard let word = open else { return }
-            let end = max(min(word.lastMs + frameMs, chunkEndMs), word.startMs + 1)
+            // lastMs ≤ chunkEndMs − 1, поэтому end > lastMs ≥ startMs и end ≤ chunkEndMs
+            let end = min(word.lastMs + frameMs, chunkEndMs)
             words.append(WordDraft(startMs: word.startMs, endMs: end, text: word.prefix + word.text))
             open = nil
         }
@@ -105,13 +112,21 @@ enum TokenAssembler {
             let body = String(token.drop { $0 == wordMarker })
             if startsWord { boundary = true }
             guard !body.isEmpty else { continue }
-            let stamp = max(label(seconds) + shiftMs, previousMs)
-            previousMs = stamp
             if isPunctuation(body) {
+                // знак препинания метку не несёт: endMs не двигает и следующее слово не сдвигает
                 if open != nil { open?.text += body } else { leadingPunctuation += body }
                 continue
             }
-            if boundary || open == nil {
+            // строго возрастающие метки в пределах куска: на равных метках слово не схлопнется в 0 мс
+            let stamp = min(max(label(seconds) + shiftMs, previousMs + 1), chunkEndMs - 1)
+            let exhausted = stamp <= previousMs
+            previousMs = stamp
+            if exhausted, open != nil {
+                // миллисекунды куска кончились (метки за его концом): слово дописывается к открытому,
+                // чтобы текст не потерялся, а границы остались внутри куска
+                open?.text += boundary ? " " + body : body
+                boundary = false
+            } else if boundary || open == nil {
                 close()
                 open = OpenWord(prefix: leadingPunctuation, text: body, startMs: stamp, lastMs: stamp)
                 leadingPunctuation = ""
@@ -125,7 +140,8 @@ enum TokenAssembler {
         return clampOverlaps(words)
     }
 
-    /// `endMs` слова не больше `startMs` следующего (на равных метках соседних кадров).
+    /// `endMs` слова не больше `startMs` следующего. Начала слов строго возрастают, поэтому после обрезки
+    /// `endMs > startMs` сохраняется.
     private static func clampOverlaps(_ words: [WordDraft]) -> [WordDraft] {
         var result = words
         for position in result.indices.dropLast() where result[position].endMs > result[position + 1].startMs {

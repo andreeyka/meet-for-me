@@ -85,7 +85,10 @@ final class ChunkCutterTests: XCTestCase {
         while position < record.count {
             let end = min(position + maxSamples, record.count)
             let length = ChunkCutter.cutLength(window: Array(record[position..<end]), isLast: end == record.count)
-            XCTAssertGreaterThan(length, 0)
+            guard length > 0 else {
+                XCTFail("кусок нулевой длины на позиции \(position)")
+                break
+            }
             chunks.append(position..<(position + length))
             position += length
         }

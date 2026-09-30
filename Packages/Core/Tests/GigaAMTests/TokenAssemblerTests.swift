@@ -96,6 +96,53 @@ final class TokenAssemblerTests: XCTestCase {
         }
     }
 
+    // Критерий 7, регрессия ревью #220: совпадающие метки слова и знака не дают сегмент нулевой длины
+    func testEqualLabelsAroundPunctuationGiveNonEmptySegments() throws {
+        let recognized = chunk([("\(marker)а", 0.20), (".", 0.20), ("\(marker)б", 0.20)])
+        let segments = try assemble(recognized)
+        XCTAssertEqual(segments, [
+            SegmentDraft(
+                startMs: 200, endMs: 201, channel: .mic, words: [WordDraft(startMs: 200, endMs: 201, text: "а.")]
+            ),
+            SegmentDraft(
+                startMs: 201, endMs: 241, channel: .mic, words: [WordDraft(startMs: 201, endMs: 241, text: "б")]
+            )
+        ])
+        for segment in segments {
+            let built = try segment.makeSegment(cluster: nil, wantWordTimestamps: true)
+            XCTAssertGreaterThan(built.endMs, built.startMs)
+            XCTAssertNoThrow(try segment.makeSegment(cluster: nil, wantWordTimestamps: false))
+        }
+    }
+
+    // Критерий 7: endMs слова не выходит за конец куска и при метке на его конце или за ним
+    func testWordEndNeverExceedsChunkEnd() throws {
+        let atEnd = try assemble(chunk([("\(marker)а", 0.50)]), shiftMs: 1_000, durationMs: 500)
+        XCTAssertEqual(atEnd.flatMap(\.words), [WordDraft(startMs: 1_499, endMs: 1_500, text: "а")])
+        XCTAssertEqual(atEnd.first?.endMs, 1_500)
+
+        let recognized = chunk([
+            ("\(marker)а", 0.40), ("\(marker)б", 0.48), ("\(marker)в", 0.50), ("\(marker)г", 0.60), (".", 0.64)
+        ])
+        let segments = try assemble(recognized, shiftMs: 1_000, durationMs: 500)
+        XCTAssertEqual(segments.map(\.text), ["а б в г."])
+        XCTAssertEqual(segments.flatMap(\.words), [
+            WordDraft(startMs: 1_400, endMs: 1_440, text: "а"),
+            WordDraft(startMs: 1_480, endMs: 1_499, text: "б"),
+            WordDraft(startMs: 1_499, endMs: 1_500, text: "в г.")
+        ])
+        for segment in segments {
+            XCTAssertLessThanOrEqual(segment.endMs, 1_500)
+            XCTAssertNoThrow(try segment.makeSegment(cluster: nil, wantWordTimestamps: true))
+        }
+    }
+
+    func testNonPositiveDurationThrows() {
+        XCTAssertThrowsError(try assemble(helloWorld, durationMs: 0)) {
+            XCTAssertEqual($0 as? TokenAssembler.Failure, .nonPositiveDuration(0))
+        }
+    }
+
     func testMismatchedLengthsThrow() {
         let bad = RecognizedChunk(text: "", tokens: ["a"], timestamps: [])
         XCTAssertThrowsError(try assemble(bad)) {
