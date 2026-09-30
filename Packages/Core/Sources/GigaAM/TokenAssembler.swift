@@ -96,6 +96,11 @@ enum TokenAssembler {
         return nil
     }
 
+    /// В куске есть токен, несущий метку слова (не пустой и не знак препинания).
+    static func hasWordToken(in chunk: RecognizedChunk) -> Bool {
+        chunk.tokens.contains(where: isWordToken)
+    }
+
     /// Метка в мс: `round(сек · 1000)`.
     static func label(_ seconds: Double) -> Int {
         Int((seconds * 1_000).rounded())

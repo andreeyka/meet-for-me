@@ -58,7 +58,7 @@ final class TokenAssemblerOnsetTests: XCTestCase {
     /// Первое слово из одного токена: его последний токен и есть первый, поэтому конец — подменённая
     /// метка + 40 мс (от метки модели 0 вышло бы `endMs < startMs`). У слова из нескольких токенов конец
     /// прежний (`testFirstTokenLabelReplacedOthersUntouched`).
-    func testSingleTokenFirstWordKeepsEnd() throws {
+    func testSingleTokenFirstWordEndFollowsOnset() throws {
         let recognized = chunk([("\(marker)да", 0), ("\(marker)нет", 0.60), (".", 0.64)])
         let words = try assemble(recognized, onsetMs: 500).flatMap(\.words)
         XCTAssertEqual(words, [

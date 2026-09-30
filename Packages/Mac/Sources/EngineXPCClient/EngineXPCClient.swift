@@ -1,4 +1,4 @@
-//  EngineXPCClient — реализация `TranscriptionServicePort` (C-012 v10 §1) поверх
+//  EngineXPCClient — реализация `TranscriptionServicePort` (C-012 v13 §1) поверх
 //  `NSXPCConnection` (§3). Владеет соединением (§«Данные на границе»: «Соединением
 //  NSXPCConnection владеет EngineXPCClient») и распиской каталога моделей вокруг каждого
 //  обращения к движку (§«Поведение»: «Тот же адаптер берёт и гасит расписку»).
@@ -30,13 +30,22 @@
 //
 //  МОДЕЛИ (К46, К53). `resolve(profileId:)` → `beginUse(бандлы)` → отправка запроса движку →
 //  `endUse(расписка)` — дословный порядок контракта. Отказ `resolve`/`beginUse` — `modelsNotReady`,
-//  запрос движку при этом не уходит вовсе (счётчик отправок транспорта не растёт).
+//  кроме `CancellationError` (он — `cancelled`, «Отмена до отправки» ниже); запрос движку при этом
+//  не уходит вовсе (счётчик отправок транспорта не растёт).
+//
+//  ОТМЕНА ДО ОТПРАВКИ (C-012 v13 §3.2, строка «`CancellationError`, брошенный
+//  `RecordingRepository.recording(id:)`, `resolve(profileId:)` или `beginUse(_:)` до отправки
+//  запроса»; инв. 12; IR-154 п. 2, MEE-510). `CancellationError` из любого из трёх портов —
+//  `cancelled`, а не `serviceUnavailable`/`modelsNotReady`: запрос не отправлен, `cancel(jobId)`
+//  слать нечего, `endUse` без выданной расписки не зовётся. Правило — по ТИПУ ошибки, не по
+//  `Task.isCancelled`; `ModelCatalogError.cancelled` (C-014) — по-прежнему `modelsNotReady`.
 //
 //  ЗАПИСЬ И ДОРОЖКИ (C-012 v12 §1.1, инв. 24–26; MEE-480). До каталога моделей — один вызов
 //  `RecordingRepository.recording(id:)`; пригодна запись, которая есть и у которой
 //  `status == .finalized` (`manifest.isFinalized` не читается — v12). Отказы по записи —
 //  `recordingNotReady`, до `resolve`/`beginUse`; бросок репозитория — `serviceUnavailable`
-//  (последняя строка §3.2). `AudioRef` — по одной на каждую `Track` манифеста, `offsetMs == 0`.
+//  (последняя строка §3.2), кроме `CancellationError` — `cancelled` (v13 §3.2).
+//  `AudioRef` — по одной на каждую `Track` манифеста, `offsetMs == 0`.
 //  `.diarize` адаптер не отправляет (инв. 26): `diarizeSystemChannel` в срезе 1 не читается.
 
 import Foundation
@@ -196,14 +205,18 @@ public final class EngineXPCClient: TranscriptionServicePort, @unchecked Sendabl
     private func resolveProfile(_ profileId: String) async throws -> ResolvedProfile {
         do {
             return try await modelCatalog.resolve(profileId: profileId)
+        } catch is CancellationError {
+            // C-012 v13 §3.2, строка «`CancellationError` … до отправки запроса».
+            throw TranscriptionServiceError.cancelled
         } catch {
             throw TranscriptionServiceError.modelsNotReady(profileId: profileId, message: "\(error)")
         }
     }
 
     /// `resolve`/`beginUse` до отправки запроса движку (К46: счётчик отправок транспорта
-    /// не растёт при отказе любого из двух); `endUse` в `defer`-эквиваленте — на успехе,
-    /// отказе и отмене `Task` одинаково (К53). `profileId` — отдельным параметром, а не из
+    /// не растёт при отказе любого из двух); `endUse` в `defer`-эквиваленте — только после
+    /// выданной расписки, и тогда на успехе, отказе и отмене `Task` одинаково (К53). Отказ самого
+    /// `beginUse` расписки не даёт — `endUse` не зовётся. `profileId` — отдельным параметром, а не из
     /// `bundles.first?.modelId`: это ID МОДЕЛИ (например, «asr-1»), не ID профиля («p1»),
     /// который обязан нести `modelsNotReady` — тот же профиль, что назвал вызывающий.
     private func withModelUse<Value>(
@@ -212,6 +225,9 @@ public final class EngineXPCClient: TranscriptionServicePort, @unchecked Sendabl
         let token: ModelUseToken
         do {
             token = try await modelCatalog.beginUse(bundles)
+        } catch is CancellationError {
+            // C-012 v13 §3.2: расписки нет — `endUse` гасить нечего, запрос не уходит.
+            throw TranscriptionServiceError.cancelled
         } catch {
             throw TranscriptionServiceError.modelsNotReady(profileId: profileId, message: "\(error)")
         }
@@ -249,9 +265,13 @@ public final class EngineXPCClient: TranscriptionServicePort, @unchecked Sendabl
         let record: RecordingRecord?
         do {
             record = try await recordings.recording(id: recordingId)
+        } catch is CancellationError {
+            // C-012 v13 §3.2, строка «`CancellationError`, брошенный
+            // `RecordingRepository.recording(id:)` … до отправки запроса» — `cancelled`.
+            throw TranscriptionServiceError.cancelled
         } catch {
-            // §1.1: бросок репозитория (в том числе манифест не читается) — не
-            // `recordingNotReady`, а последняя строка §3.2.
+            // C-012 v13 §1.1, строка «`recording(id:)` бросил»: не `recordingNotReady`, а
+            // последняя строка §3.2 («любая другая ошибка … кроме `CancellationError`»).
             throw TranscriptionServiceError.serviceUnavailable(message: "recording(id:): \(error)")
         }
         guard let record else {

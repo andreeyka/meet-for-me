@@ -64,6 +64,9 @@ public struct ModelCatalogFile: Codable, Equatable, Sendable {
 /// Корень служебного файла `.manifest.json` рядом с моделью (C-014 §2.1).
 public struct ModelManifestFile: Codable, Equatable, Sendable {
     public static let supportedSchemaVersion: Int = 1
+    /// Имя файла в каталоге модели (C-014 §2.1, §5). Одно на пишущего (`model-manager`) и читающих
+    /// (движок `gigaam`), MEE-514.
+    public static let fileName = ".manifest.json"
 
     public let schemaVersion: Int
     public let descriptor: ModelDescriptor
@@ -78,7 +81,7 @@ public struct ModelManifestFile: Codable, Equatable, Sendable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         let version = try container.decodeBounded(Int.self, forKey: .schemaVersion)
         try ModelCatalogFile.checkSchemaVersion(
-            version, supported: Self.supportedSchemaVersion, file: ".manifest.json")
+            version, supported: Self.supportedSchemaVersion, file: Self.fileName)
         schemaVersion = version
         descriptor = try container.decode(ModelDescriptor.self, forKey: .descriptor)
     }

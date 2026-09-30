@@ -165,9 +165,13 @@ class GigaAMEngineTestCase: XCTestCase {
         try writeManifest(modelBytes: 1, tokensBytes: 1)
     }
 
-    var manifestURL: URL { modelDirectory.appendingPathComponent(GigaAMEngine.manifestFileName) }
+    var manifestURL: URL { modelDirectory.appendingPathComponent(ModelManifestFile.fileName) }
 
-    func writeManifest(modelBytes: Int64, tokensBytes: Int64, names: [String]? = nil) throws {
+    func writeManifest(
+        modelBytes: Int64, tokensBytes: Int64, names: [String]? = nil,
+        schemaVersion: Int = ModelManifestFile.supportedSchemaVersion,
+        id: String = "gigaam-v3-e2e-ctc-int8", version: String = "3.0.0"
+    ) throws {
         let url = URL(string: "https://example.invalid/model")!
         let hash = String(repeating: "0", count: 64)
         let names = names ?? [GigaAMEngine.modelFileName, GigaAMEngine.tokensFileName]
@@ -175,16 +179,17 @@ class GigaAMEngineTestCase: XCTestCase {
             ModelFile(name: $0, url: url, sha256: hash, sizeBytes: $1)
         }
         let descriptor = ModelDescriptor(
-            id: "gigaam-v3-e2e-ctc-int8", version: "3.0.0", role: .asr, engine: "sherpaonnx", runtime: .onnx,
+            id: id, version: version, role: .asr, engine: "sherpaonnx", runtime: .onnx,
             displayName: "GigaAM", description: "", sizeBytes: modelBytes + tokensBytes, languages: ["ru"],
             files: files, quantization: "int8", minChip: .m2, minRAMGB: 8, recommendedFor: []
         )
-        let manifest = ModelManifestFile(
-            schemaVersion: ModelManifestFile.supportedSchemaVersion, descriptor: descriptor
-        )
+        let manifest = ModelManifestFile(schemaVersion: schemaVersion, descriptor: descriptor)
         try DomainJSON.encode(manifest).write(to: manifestURL)
-        // Сам манифест обязан разбираться — иначе тест проверял бы ветку «манифест не читается».
-        _ = try DomainJSON.decode(ModelManifestFile.self, from: Data(contentsOf: manifestURL))
+        // Манифест поддерживаемой версии обязан разбираться — иначе тест проверял бы ветку «манифест
+        // не читается». Чужую версию разбор отвергает — её тест и проверяет (MEE-514).
+        if schemaVersion == ModelManifestFile.supportedSchemaVersion {
+            _ = try DomainJSON.decode(ModelManifestFile.self, from: Data(contentsOf: manifestURL))
+        }
     }
 
     func makeEngine(factoryFailure: Error? = nil) -> GigaAMEngine {

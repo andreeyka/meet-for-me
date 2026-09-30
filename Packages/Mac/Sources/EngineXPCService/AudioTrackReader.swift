@@ -101,8 +101,12 @@ public enum AudioTrackReader {
 
     /// Диапазон `[fromMs; toMs)` ВРЕМЕНИ В ФАЙЛЕ (кадр 0 = 0 мс), а не шкалы записи: вход порта
     /// `GigaAMAudioSource` (MEE-504). Сводится к вырезке `AudioSlice` со сдвигом на `offsetMs`
-    /// (инв. 16) — та же формула кадров, та же обрезка конца по концу файла. Диапазон, который
-    /// `AudioSlice` не принимает (`fromMs < 0`, `toMs <= fromMs`), — `unsupportedRequest`.
+    /// (инв. 16) — та же формула кадров, та же обрезка конца по концу файла. Негодный диапазон —
+    /// `unsupportedRequest`, но отвергают его два разных места: `fromMs < 0` и `toMs <= fromMs`
+    /// (как и конец за концом файла, не оставивший ни одного кадра) — `frameRange` после открытия
+    /// файла, поэтому нет файла — раньше `audioUnreadable`; сам `AudioSlice.init` проверяет только
+    /// целость границ после сдвига (C-001 §0.4, `requireInt`), его отказ здесь переводится в тот же
+    /// `unsupportedRequest`.
     public static func read(_ ref: AudioRef, fromMs: Int, toMs: Int) throws -> [Float] {
         let slice: AudioSlice
         do {
