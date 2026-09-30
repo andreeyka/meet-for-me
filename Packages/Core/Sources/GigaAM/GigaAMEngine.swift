@@ -6,6 +6,23 @@
 //  окнами до 30 с, `ChunkCutter` выбирает место разреза, каждый кусок идёт в `GigaAMRecognizer`,
 //  `TokenAssembler` собирает слова и сегменты, `ClusterAssignment` назначает кластер (инвариант 18).
 //  Каналы обрабатываются один за другим, каждый своим потоком кусков.
+//
+//  ПОТОК (MEE-504, замечание ревью (б)). Распознавание синхронно и занимает поток кооперативного
+//  пула на всё время `transcribe` (час записи ≈ 70 с при RTF 0,02). Между кусками — `Task.yield()`:
+//  кусок держит поток ~0,3–0,6 с, после него планировщик может отдать поток другим задачам процесса
+//  (отмена, `ping`, прогресс по XPC). Отдельный поток не заводится: в процессе сервиса одна работа
+//  `transcribe` за раз (C-012), а пул кооперативных потоков — по числу ядер; ценой было бы ручное
+//  мостование отмены и ошибок из потока в `async` без выигрыша для этого процесса.
+//
+//  ФАЙЛ МОДЕЛИ НЕ ТОЙ ДЛИНЫ (MEE-504, замечание ревью (а)). onnxruntime на обрезанном или
+//  испорченном `.onnx` бросает C++-исключение (`Ort::Exception: Protobuf parsing failed`), sherpa-onnx
+//  его не ловит, Swift его не ловит тоже — процесс сервиса завершается `std::terminate`. До фабрики
+//  распознавателя длины файлов модели сверяются с `files[].sizeBytes` из `.manifest.json` каталога
+//  модели (C-014 §2.1: пишет `model-manager` после сверки sha256). Не совпала — `modelMissing`: модели
+//  в пригодном виде нет, её нужно скачать заново. Нет манифеста или он не читается — сверки нет
+//  (каталог, собранный вручную; отказ манифеста — забота `model-manager`, не движка). Испорченное
+//  содержимое той же длины эта проверка не ловит: sha256 на 305 МиБ при каждом `transcribe` —
+//  отдельное решение (вопрос в MEE-504).
 
 import DomainCore
 import EngineKit
@@ -17,6 +34,8 @@ public final class GigaAMEngine: TranscriptionEngine {
     /// Файлы модели в `ModelBundle.directoryURL` (имена локальные, `files[].name` каталога, C-014).
     public static let modelFileName = "model.int8.onnx"
     public static let tokensFileName = "tokens.txt"
+    /// Манифест каталога модели (C-014 §2.1), пишет `model-manager` после сверки файлов.
+    public static let manifestFileName = ".manifest.json"
 
     static let language = "ru"
 
@@ -45,9 +64,10 @@ public final class GigaAMEngine: TranscriptionEngine {
         let recordingId = try requireSingleRecording(request.audio)
         try requireLanguage(request.language)
         try requireModelFiles(request.asrModel)
+        try requireManifestSizes(request.asrModel)
         let recognizer = try makeRecognizer(request.asrModel)
         progress(.started(stage: .asr))
-        let drafts = try recognizeAll(request.audio, with: recognizer, progress: progress)
+        let drafts = try await recognizeAll(request.audio, with: recognizer, progress: progress)
         let transcript = try buildTranscript(drafts, request: request, recordingId: recordingId)
         progress(.finished(stage: .asr))
         return transcript
@@ -81,6 +101,22 @@ public final class GigaAMEngine: TranscriptionEngine {
         }
     }
 
+    /// Длины `model.int8.onnx` и `tokens.txt` — как в `.manifest.json` (шапка, «Файл модели не той
+    /// длины»). Ссылка сверяется по файлу, на который указывает.
+    private func requireManifestSizes(_ model: ModelBundle) throws {
+        let directory = model.directoryURL
+        guard let data = try? Data(contentsOf: directory.appendingPathComponent(Self.manifestFileName)),
+              let manifest = try? DomainJSON.decode(ModelManifestFile.self, from: data) else { return }
+        let checked: Set = [Self.modelFileName, Self.tokensFileName]
+        for file in manifest.descriptor.files where checked.contains(file.name) {
+            let path = directory.appendingPathComponent(file.name).resolvingSymlinksInPath().path
+            let size = (try? FileManager.default.attributesOfItem(atPath: path))?[.size] as? NSNumber
+            guard size?.int64Value == file.sizeBytes else {
+                throw EngineError.modelMissing(modelId: model.modelId, version: model.version)
+            }
+        }
+    }
+
     private func makeRecognizer(_ model: ModelBundle) throws -> any GigaAMRecognizer {
         do {
             return try recognizerFactory.makeRecognizer(modelDirectory: model.directoryURL)
@@ -96,12 +132,12 @@ public final class GigaAMEngine: TranscriptionEngine {
     private func recognizeAll(
         _ audio: [AudioRef], with recognizer: any GigaAMRecognizer,
         progress: @Sendable @escaping (EngineProgress) -> Void
-    ) throws -> [OrderedDraft] {
+    ) async throws -> [OrderedDraft] {
         let durations = try audio.map { ref in try translated { try audioSource.durationMs(of: ref) } }
         var tracker = ProgressTracker(totalMs: durations.reduce(0, +), report: progress)
         var drafts: [OrderedDraft] = []
         for (order, ref) in audio.enumerated() {
-            let channelDrafts = try recognizeChannel(
+            let channelDrafts = try await recognizeChannel(
                 ref, durationMs: durations[order], recognizer: recognizer, tracker: &tracker
             )
             let base = drafts.count
@@ -114,7 +150,7 @@ public final class GigaAMEngine: TranscriptionEngine {
 
     private func recognizeChannel(
         _ audio: AudioRef, durationMs: Int, recognizer: any GigaAMRecognizer, tracker: inout ProgressTracker
-    ) throws -> [SegmentDraft] {
+    ) async throws -> [SegmentDraft] {
         var drafts: [SegmentDraft] = []
         var positionMs = 0
         while positionMs < durationMs {
@@ -133,6 +169,7 @@ public final class GigaAMEngine: TranscriptionEngine {
             }
             positionMs += chunkMs
             tracker.advance(byMs: chunkMs)
+            await Task.yield()
         }
         return drafts
     }
