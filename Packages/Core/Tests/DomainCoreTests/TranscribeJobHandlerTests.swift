@@ -85,10 +85,8 @@ final class TranscribeJobHandlerTests: XCTestCase {
         )
         let outcome = await run(error)
         assertPermanentFailure(outcome)
-        // MEE-489 C: текст несёт recordingId, как у `modelsNotReady` — «\(recordingId): \(message)».
-        XCTAssertEqual(
-            outcome, .permanentFailure(error: "\(TranscriptFixtures.oneOnOne.recordingId): записи нет")
-        )
+        // MEE-506: строка очереди — `message` без `recordingId` (UUID уходил пользователю).
+        XCTAssertEqual(outcome, .permanentFailure(error: "записи нет"))
     }
 
     // MARK: - C-012 v11 (IR-145): обработчик сохраняет транскрипт

@@ -169,8 +169,7 @@ extension AppFacadeImpl {
     /// используют вовсе. Неизвестный источник (нет записи в `ConnectorRepository`) —
     /// `permissionKind == nil`: тип определить не из чего.
     func wrap(_ error: CalendarError) async -> AppFacadeError {
-        let description = String(describing: error)
-        let name = description.split(separator: "(", maxSplits: 1).first.map(String.init) ?? description
+        let code = UnderlyingErrorText.jobErrorCode("calendar", error)
         var permissionKind: PermissionKind?
         if case .authorizationRequired(let sourceId) = error {
             let record = try? await connectorRecord(for: sourceId)
@@ -184,7 +183,7 @@ extension AppFacadeImpl {
         var message: String?
         if case .timeout(_, let seconds) = error { message = "Календарь не ответил за \(seconds) с" }
         return .underlying(UnderlyingErrorText.view(
-            code: "calendar.\(name)", message: permissionKind.map(AppFacadeError.permissionMissingText) ?? message,
+            code: code, message: permissionKind.map(AppFacadeError.permissionMissingText) ?? message,
             suggestion: permissionKind.map(AppFacadeError.permissionSuggestion), permissionKind: permissionKind
         ))
     }

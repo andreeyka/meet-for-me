@@ -185,10 +185,10 @@ enum UnderlyingErrorText {
 
 extension UnderlyingErrorText {
 
-    /// Строка отказа задачи (`JobOutcome.error`) для ошибки источника §3.1 — код
-    /// `<префикс>.<имя case>` без значений (MEE-498): ни описания значения Swift, ни
-    /// идентификаторов в очередь не пишется. Имя случая — срезом до первой `(`, тот же приём,
-    /// что `wrap(_: CaptureError)`.
+    /// Код §3.1 `<префикс>.<имя case>` без значений: имя случая — срезом `String(describing:)`
+    /// до первой `(`. Одно выражение на оба пути (MEE-506): строка отказа задачи
+    /// (`JobOutcome.error`, MEE-498 — ни описания значения Swift, ни идентификаторов в очередь
+    /// не пишется) и `code` синхронных `wrap` фасада (`CalendarError`, `CaptureError`, `ruleView`).
     static func jobErrorCode(_ prefix: String, _ error: Error) -> String {
         let description = String(describing: error)
         let name = description.split(separator: "(", maxSplits: 1).first.map(String.init) ?? description

@@ -72,24 +72,26 @@ public struct TranscribeJobHandler: JobHandler {
     }
 
     /// C-012 §4 дословно: `TranscriptionServiceError` → `JobOutcome`, одна строка — один исход.
+    /// Строка очереди (`JobOutcome.error`, MEE-506): код §3.1 C-016 `engine.<case>` без значений
+    /// (`jobErrorCode`), не описание значения Swift, — у случаев без текста для человека и у
+    /// `modelsNotReady`: его `message` у адаптера — `"\(error)"` каталога моделей (описание
+    /// Swift), а у кода есть текст и совет словаря. У `serviceUnavailable`, `invalidRequest`,
+    /// `recordingNotReady` — сам `message`, без идентификатора записи. Строка уходит
+    /// пользователю дословно (инв. 31 C-016) через `jobFailureDetail`.
     private static func outcome(for error: TranscriptionServiceError, attempts: Int) -> JobOutcome {
         switch error {
-        case .serviceCrashed:
-            return .retry(after: 30, error: "serviceCrashed")
+        case .serviceCrashed, .timedOut:
+            return .retry(after: 30, error: UnderlyingErrorText.jobErrorCode("engine", error))
         case .serviceUnavailable(let message):
             return .retry(after: 30, error: message)
-        case .timedOut(let seconds):
-            return .retry(after: 30, error: "timedOut(\(seconds))")
-        case .modelsNotReady(let profileId, let message):
-            return .retry(after: modelsNotReadyDelay(attempts: attempts), error: "\(profileId): \(message)")
-        case .protocolVersionMismatch(let client, let service):
-            return .permanentFailure(error: "protocolVersionMismatch(client: \(client), service: \(service))")
-        case .messageTooLarge(let bytes):
-            return .permanentFailure(error: "messageTooLarge(\(bytes))")
-        case .invalidRequest(let message):
+        case .modelsNotReady:
+            return .retry(
+                after: modelsNotReadyDelay(attempts: attempts), error: UnderlyingErrorText.jobErrorCode("engine", error)
+            )
+        case .protocolVersionMismatch, .messageTooLarge:
+            return .permanentFailure(error: UnderlyingErrorText.jobErrorCode("engine", error))
+        case .invalidRequest(let message), .recordingNotReady(_, let message):
             return .permanentFailure(error: message)
-        case .recordingNotReady(let recordingId, let message):
-            return .permanentFailure(error: "\(recordingId): \(message)")
         case .engineFailure(let code, let message):
             return outcomeForEngineFailure(code: code, message: message)
         case .cancelled:

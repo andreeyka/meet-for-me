@@ -109,8 +109,6 @@ extension AppFacadeImpl {
     /// один случай не вызван состоянием системного права, инв. 23).
     /// `message` — текст для человека по коду (`UnderlyingErrorText`, MEE-494) либо переданный.
     static func ruleView(prefix: String, error: Error, message: String? = nil) -> AppErrorView {
-        let description = String(describing: error)
-        let name = description.split(separator: "(", maxSplits: 1).first.map(String.init) ?? description
-        return UnderlyingErrorText.view(code: "\(prefix).\(name)", message: message)
+        UnderlyingErrorText.view(code: UnderlyingErrorText.jobErrorCode(prefix, error), message: message)
     }
 }

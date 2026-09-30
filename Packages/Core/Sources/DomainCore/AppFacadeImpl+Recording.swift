@@ -161,12 +161,11 @@ extension AppFacadeImpl {
     /// «Тестам на равенство они не подлежат, и критерии на них не пишутся») — только его
     /// наличие для этих двух кейсов.
     func wrap(_ error: CaptureError) -> AppFacadeError {
-        let description = String(describing: error)
-        let name = description.split(separator: "(", maxSplits: 1).first.map(String.init) ?? description
+        let code = UnderlyingErrorText.jobErrorCode("capture", error)
         var permissionKind: PermissionKind?
         // MEE-494: текст для человека по коду (§3.1), а не `String(describing:)`.
-        var message = UnderlyingErrorText.message("capture.\(name)")
-        var recoverySuggestion = UnderlyingErrorText.suggestion("capture.\(name)")
+        var message = UnderlyingErrorText.message(code)
+        var recoverySuggestion = UnderlyingErrorText.suggestion(code)
         switch error {
         case .microphoneDenied:
             permissionKind = .microphone
@@ -184,7 +183,7 @@ extension AppFacadeImpl {
             recoverySuggestion = AppFacadeError.permissionSuggestion(permissionKind)
         }
         return .underlying(AppErrorView(
-            code: "capture.\(name)", message: message,
+            code: code, message: message,
             recoverySuggestion: recoverySuggestion, permissionKind: permissionKind
         ))
     }
