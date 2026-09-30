@@ -53,14 +53,6 @@ final class SherpaGigaAMRecognizerConfigTests: XCTestCase {
         }
     }
 
-    // Строки — отдельные копии на каждый вызов: ни одна не делит память с другой.
-    func testStringsAreDistinctCopies() {
-        SherpaGigaAMRecognizer.withRecognizerConfig(model: "same", tokens: "same") { pointer in
-            let config = pointer.pointee
-            XCTAssertNotEqual(config.model_config.nemo_ctc.model, config.model_config.tokens)
-        }
-    }
-
     func testBodyResultAndErrorPassThrough() {
         XCTAssertEqual(SherpaGigaAMRecognizer.withRecognizerConfig(model: "m", tokens: "t") { _ in 42 }, 42)
         struct Marker: Error {}

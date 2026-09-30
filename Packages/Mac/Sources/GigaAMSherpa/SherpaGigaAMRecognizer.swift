@@ -13,8 +13,9 @@
 //  Только C API (IR-156, MEE-512): Swift-обёртки пакета sherpa-onnx в сборке нет — `Package.swift`
 //  подключает статический XCFramework `SherpaOnnxC` напрямую. Конфигурацию собирает
 //  `withRecognizerConfig` C-структурами; значения полей те же, что ставила обёртка
-//  (`sherpaOnnxOfflineRecognizerConfig` и соседи sherpa-onnx 1.13.8), остальные — нули, которые
-//  C API сам заменяет своими умолчаниями.
+//  (`sherpaOnnxOfflineRecognizerConfig` и соседи sherpa-onnx 1.13.8), остальные — нули. Нулевые
+//  строки и числа C API заменяет своими умолчаниями; булевы поля чужих моделей копирует как есть
+//  (нуль — `false`), на `nemo_ctc` они не влияют.
 
 import Foundation
 import GigaAM
@@ -112,11 +113,11 @@ public final class SherpaGigaAMRecognizer: GigaAMRecognizer, @unchecked Sendable
     /// `SherpaOnnxCreateOfflineRecognizer` копирует их к себе, указатели за `body` не уходят.
     /// Числа, отличные от нуля, — умолчания обёртки sherpa-onnx 1.13.8 (`modeling_unit`,
     /// `max_active_paths`, `hotwords_score`, `lm_config.scale`), чтобы поведение не менялось.
-    static func withRecognizerConfig<Result>(
+    static func withRecognizerConfig<Value>(
         model: String,
         tokens: String,
-        _ body: (UnsafePointer<SherpaOnnxOfflineRecognizerConfig>) throws -> Result
-    ) rethrows -> Result {
+        _ body: (UnsafePointer<SherpaOnnxOfflineRecognizerConfig>) throws -> Value
+    ) rethrows -> Value {
         var owned: [UnsafeMutablePointer<CChar>] = []
         defer { owned.forEach { free($0) } }
         func cString(_ value: String) -> UnsafePointer<CChar> {
