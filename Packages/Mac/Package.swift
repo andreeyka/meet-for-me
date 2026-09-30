@@ -22,9 +22,15 @@ let package = Package(
         .library(name: "EngineXPCClient", targets: ["EngineXPCClient"]),
         .library(name: "EngineXPCService", targets: ["EngineXPCService"]),
         .library(name: "SecretStoreKeychain", targets: ["SecretStoreKeychain"]),
+        .library(name: "GigaAMSherpa", targets: ["GigaAMSherpa"]),
     ],
     dependencies: [
         .package(path: "../Core"),
+        // IR-152 (MEE-486, п. 1), MEE-503: рантайм распознавания модуля gigaam. Нужен только
+        // таргету `GigaAMSherpa`; версия точная — onnxruntime-libs 1.28.2 приходит транзитивно.
+        // ~168 МиБ бинарных XCFramework резолвятся при каждой сборке этого пакета; в CI —
+        // кэш `~/Library/Caches/org.swift.swiftpm` (ci.yml). В `Packages/Core` не попадает.
+        .package(url: "https://github.com/k2-fsa/sherpa-onnx", exact: "1.13.8"),
     ],
     targets: [
         .target(name: "Capture", dependencies: [.product(name: "DomainCore", package: "Core")]),
@@ -85,6 +91,15 @@ let package = Package(
             name: "SecretStoreKeychain",
             dependencies: [.product(name: "CalendarHub", package: "Core")]
         ),
+        // IR-152 (MEE-486), MEE-503: адаптер модуля gigaam — `GigaAMRecognizer` поверх sherpa-onnx.
+        // Единственный таргет репозитория, которому разрешён `import SherpaOnnx` (docs/module-map.md).
+        .target(
+            name: "GigaAMSherpa",
+            dependencies: [
+                .product(name: "GigaAM", package: "Core"),
+                .product(name: "sherpa-onnx", package: "sherpa-onnx"),
+            ]
+        ),
 
         .testTarget(
             name: "CaptureTests",
@@ -122,6 +137,11 @@ let package = Package(
                 .product(name: "DomainTestKit", package: "Core"),
                 .product(name: "EngineKit", package: "Core"),
             ]
+        ),
+        // Тест с моделью включается `GIGAAM_MODEL_DIR` (иначе XCTSkip) — модель лежит только на Mac РП.
+        .testTarget(
+            name: "GigaAMSherpaTests",
+            dependencies: ["GigaAMSherpa", .product(name: "GigaAM", package: "Core")]
         ),
     ]
 )

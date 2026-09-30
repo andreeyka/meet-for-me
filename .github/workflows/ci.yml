@@ -371,6 +371,21 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
+      # IR-152 (MEE-486, п. 1), MEE-503: `Packages/Mac` зависит от sherpa-onnx `exact: "1.13.8"` —
+      # каждая сборка резолвит 10 бинарных архивов (~168 МиБ) и клон репозитория пакета. Кэш —
+      # общий каталог SwiftPM (`artifacts`, `repositories`), ключ — хеш `Packages/Mac/Package.resolved`.
+      # `Package.resolved` в репозитории не хранится (ни один), поэтому до сборки хешировать нечего:
+      # восстановление и сохранение разнесены. Восстановление берёт последний кэш по префиксу,
+      # сохранение (шаг «Кэш SwiftPM · сохранение» в конце работы) пишет его под хешем файла,
+      # который написала сама сборка; при точном совпадении ключа не пишет ничего.
+      - name: Кэш SwiftPM · восстановление
+        id: swiftpm-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/Library/Caches/org.swift.swiftpm
+          key: swiftpm-macos-14-${{ github.sha }}
+          restore-keys: swiftpm-macos-14-
+
       # Линтера в образе macos-14 нет, поэтому он ставится явно. Раньше на его
       # отсутствие была ветка «шаг пропущен», и шаг зеленел, ничего не проверив:
       # .swiftlint.yml выглядел барьером, не будучи им. Теперь возможных исходов
@@ -427,6 +442,14 @@ jobs:
         shell: bash
         env:
           PYTHONIOENCODING: utf-8
+          # MEE-503 (IR-156, MEE-507): пакет sherpa-onnx 1.13.8 несёт статический и разделяемый
+          # `SherpaOnnxC.framework` под одним именем. SwiftPM 5.10 копирует бинарники ВСЕХ
+          # таргетов графа в `.build/debug` через `Set` (`addBinaryDependencyCommands`), и при
+          # случайном порядке хеширования иногда побеждает разделяемый — тестовый бандл
+          # `Packages/Mac` тогда не грузится (`@rpath/libonnxruntime.dylib` не найден, `swift test`
+          # выходит с 1 без вывода; 4 из 8 прогонов PR). Детерминированное хеширование делает
+          # выбор постоянным; это обход, не исправление — вопрос вынесен в IR-156 (MEE-507).
+          SWIFT_DETERMINISTIC_HASHING: "1"
         run: |
           set -o pipefail
           log="$RUNNER_TEMP/symbol-graph.log"
@@ -566,6 +589,8 @@ jobs:
           # 35919377429) этот шаг занимает 18–21 с; 300 с — более чем
           # пятнадцатикратный запас.
           TEST_TIMEOUT_SECONDS: "300"
+          # MEE-503: см. тот же ключ у шага «Символьный граф» — довод там.
+          SWIFT_DETERMINISTIC_HASHING: "1"
         # Подстраховка снаружи скрипта — тот же довод, что у Core (Linux).
         timeout-minutes: 7
         run: *run-swift-test-with-timeout
@@ -662,3 +687,16 @@ jobs:
           ) 2>&1 | tee "$log" || status=$?
           bash .github/scripts/annotate.sh "DomainTestKit вне App · бандл" "$status" "$log" || true
           exit $status
+
+      # Пара к «Кэш SwiftPM · восстановление» (MEE-503). Ключ — хеш `Packages/Mac/Package.resolved`,
+      # который написала сборка выше: версии sherpa-onnx, onnxruntime-libs и GRDB. Не пишется, если
+      # файла нет (сборка не дошла до резолва) или восстановлен кэш ровно с этим ключом.
+      - name: Кэш SwiftPM · сохранение
+        if: >-
+          ${{ !cancelled() && hashFiles('Packages/Mac/Package.resolved') != ''
+          && steps.swiftpm-cache.outputs.cache-matched-key
+          != format('swiftpm-macos-14-{0}', hashFiles('Packages/Mac/Package.resolved')) }}
+        uses: actions/cache/save@v4
+        with:
+          path: ~/Library/Caches/org.swift.swiftpm
+          key: swiftpm-macos-14-${{ hashFiles('Packages/Mac/Package.resolved') }}
