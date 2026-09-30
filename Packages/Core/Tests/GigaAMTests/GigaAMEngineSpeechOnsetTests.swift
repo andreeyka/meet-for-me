@@ -46,7 +46,9 @@ final class GigaAMEngineSpeechOnsetTests: GigaAMEngineTestCase {
             if source.isSilent(atMs: position) {
                 startedInSilence += 1
                 let speech = (position / 4_700) * 4_700 + 400
-                XCTAssertTrue((speech - 20...speech).contains(segment.startMs), "кусок с \(position): \(segment.startMs)")
+                XCTAssertTrue(
+                    (speech - 20...speech).contains(segment.startMs), "кусок с \(position): \(segment.startMs)"
+                )
             } else {
                 XCTAssertEqual(segment.startMs, position)
             }
