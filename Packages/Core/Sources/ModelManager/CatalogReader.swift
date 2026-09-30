@@ -20,7 +20,7 @@ enum CatalogReader {
     }
 
     static func manifest(from data: Data) throws -> ModelManifestFile {
-        try decode(ModelManifestFile.self, from: data, name: ".manifest.json")
+        try decode(ModelManifestFile.self, from: data, name: ModelManifestFile.fileName)
     }
 
     static func validate(_ file: ModelCatalogFile) throws {

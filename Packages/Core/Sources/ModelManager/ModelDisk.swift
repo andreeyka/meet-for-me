@@ -6,10 +6,10 @@
 //  включая `.part` и `.manifest.json`, измеренная по диску, а не взятая из манифеста.
 //  Одна величина на три места: `diskUsage`, `paused(bytesOnDisk:)`, числитель `fraction`.
 
+import DomainCore
 import Foundation
 
 enum ModelDisk {
-    static let manifestName = ".manifest.json"
     static let partSuffix = ".part"
 
     static func partURL(in directory: URL, name: String) -> URL {
@@ -21,7 +21,7 @@ enum ModelDisk {
     }
 
     static func manifestURL(in directory: URL) -> URL {
-        directory.appendingPathComponent(manifestName)
+        directory.appendingPathComponent(ModelManifestFile.fileName)
     }
 
     /// Длина обычного файла; `nil` — файла нет.

@@ -29,7 +29,11 @@
 //  модели в пригодном виде нет, её нужно скачать заново (module-map v1.23, «Файлы модели»; C-011
 //  «Поведение»). Так же отвечает движок на каталог без `.manifest.json`, с нечитаемым манифестом или
 //  с манифестом без записи об одном из двух файлов: проверить длину нечем — модель не загружается
-//  (в Z6 обрезанный файл без манифеста давал `serviceCrashed`). Подробности — имя файла, ожидаемая и
+//  (в Z6 обрезанный файл без манифеста давал `serviceCrashed`). Манифест с чужим `schemaVersion` —
+//  тоже `modelMissing`: по C-014 §2.1 такая модель получает `error(manifestInvalid)` и не используется,
+//  а `ModelManifestFile` отвергает чужую версию первым действием разбора (инв. 15). Манифест другой
+//  модели — `descriptor.id`/`version` не совпали с `ModelBundle` — тоже `modelMissing`: длины из него
+//  к этому каталогу не относятся (MEE-514). Подробности — имя файла, ожидаемая и
 //  найденная длина — идут в журнал сервиса замыканием `log` (в `Core` нет `os`, как в `ModelManager`),
 //  в `EngineError` — только `modelId` и `version`. Испорченное содержимое той же длины эта проверка не
 //  ловит: sha256 на 305 МиБ при каждом `transcribe` — вне Среза 1.
@@ -48,9 +52,6 @@ public final class GigaAMEngine: TranscriptionEngine {
     /// Файлы модели в `ModelBundle.directoryURL` (имена локальные, `files[].name` каталога, C-014).
     public static let modelFileName = "model.int8.onnx"
     public static let tokensFileName = "tokens.txt"
-    /// Манифест каталога модели (C-014 §2.1), пишет `model-manager` после сверки файлов.
-    public static let manifestFileName = ".manifest.json"
-
     static let language = "ru"
 
     private let audioSource: any GigaAMAudioSource
@@ -123,26 +124,33 @@ public final class GigaAMEngine: TranscriptionEngine {
     }
 
     /// Длины `model.int8.onnx` и `tokens.txt` — как в `.manifest.json` (шапка, «Файл модели не той
-    /// длины»). Нет манифеста, он не читается или в нём нет записи о файле — тоже `modelMissing`. Ссылка
-    /// сверяется по файлу, на который указывает.
+    /// длины»). Нет манифеста, он не читается (в том числе чужой `schemaVersion`), он о другой модели
+    /// или в нём нет записи о файле — тоже `modelMissing`. Ссылка сверяется по файлу, на который указывает.
     private func requireManifestSizes(_ model: ModelBundle) throws {
         let directory = model.directoryURL
         let missing = EngineError.modelMissing(modelId: model.modelId, version: model.version)
         let subject = "modelId=\(model.modelId) version=\(model.version)"
-        guard let data = try? Data(contentsOf: directory.appendingPathComponent(Self.manifestFileName)) else {
-            log("modelMissing \(subject): нет \(Self.manifestFileName) в каталоге модели, длины сверить нечем")
+        let manifestName = ModelManifestFile.fileName
+        guard let data = try? Data(contentsOf: directory.appendingPathComponent(manifestName)) else {
+            log("modelMissing \(subject): нет \(manifestName) в каталоге модели, длины сверить нечем")
             throw missing
         }
         let manifest: ModelManifestFile
         do {
             manifest = try DomainJSON.decode(ModelManifestFile.self, from: data)
         } catch {
-            log("modelMissing \(subject): \(Self.manifestFileName) не читается: \(error)")
+            log("modelMissing \(subject): \(manifestName) не читается: \(error)")
+            throw missing
+        }
+        let descriptor = manifest.descriptor
+        guard descriptor.id == model.modelId, descriptor.version == model.version else {
+            log("modelMissing \(subject): \(manifestName) описывает другую модель — "
+                + "id=\(descriptor.id) version=\(descriptor.version)")
             throw missing
         }
         for name in [Self.modelFileName, Self.tokensFileName] {
-            guard let file = manifest.descriptor.files.first(where: { $0.name == name }) else {
-                log("modelMissing \(subject): в \(Self.manifestFileName) нет записи о файле \(name)")
+            guard let file = descriptor.files.first(where: { $0.name == name }) else {
+                log("modelMissing \(subject): в \(manifestName) нет записи о файле \(name)")
                 throw missing
             }
             let path = directory.appendingPathComponent(name).resolvingSymlinksInPath().path
@@ -201,9 +209,7 @@ public final class GigaAMEngine: TranscriptionEngine {
             let samples = Array(window.prefix(length))
             let chunk = try translated { try recognizer.recognize(samples: samples) }
             try Self.checkCancelled()
-            let onsetMs = SpeechOnset.speechOnsetMs(
-                samples: samples, secondTokenMs: TokenAssembler.secondTokenMs(in: chunk)
-            )
+            let onsetMs = Self.chunkOnsetMs(samples: samples, chunk: chunk)
             drafts += try translated {
                 try TokenAssembler.assemble(
                     chunk, shiftMs: positionMs + audio.offsetMs, chunkDurationMs: chunkMs, channel: audio.channel,
@@ -215,6 +221,13 @@ public final class GigaAMEngine: TranscriptionEngine {
             await Task.yield()
         }
         return drafts
+    }
+
+    /// Начало энергии в куске (`SpeechOnset`). Кусок без токенов-слов (пустой или из одних знаков
+    /// препинания) метки для подмены не несёт — энергия не считается, `nil` (MEE-514).
+    static func chunkOnsetMs(samples: [Float], chunk: RecognizedChunk) -> Int? {
+        guard TokenAssembler.hasWordToken(in: chunk) else { return nil }
+        return SpeechOnset.speechOnsetMs(samples: samples, secondTokenMs: TokenAssembler.secondTokenMs(in: chunk))
     }
 
     // MARK: - Сборка результата

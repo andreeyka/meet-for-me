@@ -3,6 +3,8 @@
 //  onnxruntime на обрезанном `.onnx` завершает процесс сервиса `std::terminate`).
 //  MEE-513 (IR-157, критерии 5 и 6): нет `.manifest.json`, он не читается или в нём нет записи о файле —
 //  тоже `modelMissing` до фабрики; причина — строкой в журнал `log`, не в `EngineError`.
+//  MEE-514: манифест с чужим `schemaVersion` (C-014 §2.1: такая модель не используется) и манифест другой
+//  модели (`descriptor.id`/`version` ≠ `ModelBundle`) — тоже `modelMissing` до фабрики и до аудио.
 
 import DomainCore
 import DomainTestKit
@@ -64,6 +66,36 @@ final class GigaAMEngineModelFileTests: GigaAMEngineTestCase {
         XCTAssertEqual(factory.makeCount, 0)
     }
 
+    /// C-014 §2.1: `.manifest.json` с чужим `schemaVersion` — модель не используется (инв. 15: отказ целиком).
+    func testManifestWithForeignSchemaVersionIsModelMissingBeforeFactoryAndAudio() async throws {
+        source.durations[recordingId] = 3_000
+        for foreign in [0, ModelManifestFile.supportedSchemaVersion + 1, 99] {
+            try writeManifest(modelBytes: 1, tokensBytes: 1, schemaVersion: foreign)
+            await assertEngineError(expected, try request([try audioRef(.system)]), engine: engine)
+        }
+        XCTAssertEqual(factory.makeCount, 0)
+        XCTAssertEqual(source.requestCount, 0)
+        XCTAssertEqual(engineLog.lines.count, 3)
+        for line in engineLog.lines {
+            XCTAssertTrue(line.contains("schemaVersion"), line)
+        }
+    }
+
+    /// Манифест другой модели: длины из него к этому каталогу не относятся.
+    func testManifestOfAnotherModelIsModelMissingBeforeFactoryAndAudio() async throws {
+        source.durations[recordingId] = 3_000
+        for (id, version) in [("gigaam-v2-ctc", "3.0.0"), ("gigaam-v3-e2e-ctc-int8", "3.0.1")] {
+            try writeManifest(modelBytes: 1, tokensBytes: 1, id: id, version: version)
+            await assertEngineError(expected, try request([try audioRef(.system)]), engine: engine)
+        }
+        XCTAssertEqual(factory.makeCount, 0)
+        XCTAssertEqual(source.requestCount, 0)
+        let lines = engineLog.lines
+        XCTAssertEqual(lines.count, 2)
+        XCTAssertTrue(lines[0].contains("id=gigaam-v2-ctc"), lines[0])
+        XCTAssertTrue(lines[1].contains("version=3.0.1"), lines[1])
+    }
+
     // Критерий 6: подробности — в журнал, в ошибку только modelId и version
     func testReasonGoesToLogNotToError() async throws {
         source.durations[recordingId] = 3_000
@@ -76,7 +108,7 @@ final class GigaAMEngineModelFileTests: GigaAMEngineTestCase {
         XCTAssertTrue(lines[0].contains(GigaAMEngine.modelFileName), lines[0])
         XCTAssertTrue(lines[0].contains("319869121"), lines[0])
         XCTAssertTrue(lines[0].contains("найдено 1"), lines[0])
-        XCTAssertTrue(lines[1].contains(GigaAMEngine.manifestFileName), lines[1])
+        XCTAssertTrue(lines[1].contains(ModelManifestFile.fileName), lines[1])
         for line in lines {
             XCTAssertTrue(line.contains("gigaam-v3-e2e-ctc-int8") && line.contains("3.0.0"), line)
         }
