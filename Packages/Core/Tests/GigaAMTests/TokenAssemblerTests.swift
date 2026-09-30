@@ -15,7 +15,9 @@ final class TokenAssemblerTests: XCTestCase {
     private func assemble(
         _ recognized: RecognizedChunk, shiftMs: Int = 0, durationMs: Int = 30_000
     ) throws -> [SegmentDraft] {
-        try TokenAssembler.assemble(recognized, shiftMs: shiftMs, chunkDurationMs: durationMs, channel: .mic)
+        try TokenAssembler.assemble(
+            recognized, shiftMs: shiftMs, chunkDurationMs: durationMs, channel: .mic, speechOnsetMs: nil
+        )
     }
 
     private var helloWorld: RecognizedChunk {

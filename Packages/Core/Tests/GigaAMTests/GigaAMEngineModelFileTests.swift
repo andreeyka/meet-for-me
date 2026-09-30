@@ -1,6 +1,8 @@
 //  GigaAMEngineModelFileTests — MEE-504 (Z6), замечание ревью (а): файл модели, чья длина не
 //  совпала с `files[].sizeBytes` `.manifest.json`, — `modelMissing` ДО фабрики распознавателя (иначе
 //  onnxruntime на обрезанном `.onnx` завершает процесс сервиса `std::terminate`).
+//  MEE-513 (IR-157, критерии 5 и 6): нет `.manifest.json`, он не читается или в нём нет записи о файле —
+//  тоже `modelMissing` до фабрики; причина — строкой в журнал `log`, не в `EngineError`.
 
 import DomainCore
 import DomainTestKit
@@ -43,40 +45,53 @@ final class GigaAMEngineModelFileTests: GigaAMEngineTestCase {
         XCTAssertEqual(factory.makeCount, 1)
     }
 
-    func testWithoutManifestOrWithUnreadableManifestNoSizeCheck() async throws {
+    func testWithoutManifestOrWithUnreadableManifestIsModelMissingBeforeFactory() async throws {
+        source.durations[recordingId] = 3_000
+        try FileManager.default.removeItem(at: manifestURL)
+        await assertEngineError(expected, try request([try audioRef(.system)]), engine: engine)
+        for broken in ["{", "{}", "[]", ""] {
+            try Data(broken.utf8).write(to: manifestURL)
+            await assertEngineError(expected, try request([try audioRef(.system)]), engine: engine)
+        }
+        XCTAssertEqual(factory.makeCount, 0)
+        XCTAssertEqual(source.requestCount, 0)
+    }
+
+    func testManifestWithoutEntryForModelFileIsModelMissing() async throws {
+        source.durations[recordingId] = 3_000
+        try writeManifest(modelBytes: 1, tokensBytes: 1, names: ["other.onnx", GigaAMEngine.tokensFileName])
+        await assertEngineError(expected, try request([try audioRef(.system)]), engine: engine)
+        XCTAssertEqual(factory.makeCount, 0)
+    }
+
+    // Критерий 6: подробности — в журнал, в ошибку только modelId и version
+    func testReasonGoesToLogNotToError() async throws {
+        source.durations[recordingId] = 3_000
+        try writeManifest(modelBytes: 319_869_121, tokensBytes: 1)
+        await assertEngineError(expected, try request([try audioRef(.system)]), engine: engine)
+        try FileManager.default.removeItem(at: manifestURL)
+        await assertEngineError(expected, try request([try audioRef(.system)]), engine: engine)
+        let lines = engineLog.lines
+        XCTAssertEqual(lines.count, 2)
+        XCTAssertTrue(lines[0].contains(GigaAMEngine.modelFileName), lines[0])
+        XCTAssertTrue(lines[0].contains("319869121"), lines[0])
+        XCTAssertTrue(lines[0].contains("найдено 1"), lines[0])
+        XCTAssertTrue(lines[1].contains(GigaAMEngine.manifestFileName), lines[1])
+        for line in lines {
+            XCTAssertTrue(line.contains("gigaam-v3-e2e-ctc-int8") && line.contains("3.0.0"), line)
+        }
+    }
+
+    func testCompleteDirectoryDoesNotLog() async throws {
         source.durations[recordingId] = 3_000
         _ = try await run(try request([try audioRef(.system)]), engine: engine)
-        try Data("{".utf8).write(to: manifestURL)
-        _ = try await run(try request([try audioRef(.system)]), engine: engine)
-        XCTAssertEqual(factory.makeCount, 2)
+        XCTAssertEqual(engineLog.lines, [])
     }
 
     // MARK: - Опоры
 
     private lazy var factory = CountingFactory(recognizer: recognizer)
-    private lazy var engine = GigaAMEngine(audioSource: source, recognizerFactory: factory)
-
-    private var manifestURL: URL { modelDirectory.appendingPathComponent(GigaAMEngine.manifestFileName) }
-
-    private func writeManifest(modelBytes: Int64, tokensBytes: Int64) throws {
-        let url = URL(string: "https://example.invalid/model")!
-        let hash = String(repeating: "0", count: 64)
-        let files = [
-            ModelFile(name: GigaAMEngine.modelFileName, url: url, sha256: hash, sizeBytes: modelBytes),
-            ModelFile(name: GigaAMEngine.tokensFileName, url: url, sha256: hash, sizeBytes: tokensBytes)
-        ]
-        let descriptor = ModelDescriptor(
-            id: "gigaam-v3-e2e-ctc-int8", version: "3.0.0", role: .asr, engine: "sherpaonnx", runtime: .onnx,
-            displayName: "GigaAM", description: "", sizeBytes: modelBytes + tokensBytes, languages: ["ru"],
-            files: files, quantization: "int8", minChip: .m2, minRAMGB: 8, recommendedFor: []
-        )
-        let manifest = ModelManifestFile(
-            schemaVersion: ModelManifestFile.supportedSchemaVersion, descriptor: descriptor
-        )
-        try DomainJSON.encode(manifest).write(to: manifestURL)
-        // Сам манифест обязан разбираться — иначе тест проверял бы ветку «манифест не читается».
-        _ = try DomainJSON.decode(ModelManifestFile.self, from: Data(contentsOf: manifestURL))
-    }
+    private lazy var engine = makeEngine(factory: factory)
 
     private func assertEngineError(
         _ expected: EngineError, _ request: TranscriptionRequest, engine: GigaAMEngine,

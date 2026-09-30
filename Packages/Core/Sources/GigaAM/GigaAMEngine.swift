@@ -21,15 +21,22 @@
 //  `transcribe` за раз (C-012), а пул кооперативных потоков — по числу ядер; ценой было бы ручное
 //  мостование отмены и ошибок из потока в `async` без выигрыша для этого процесса.
 //
-//  ФАЙЛ МОДЕЛИ НЕ ТОЙ ДЛИНЫ (MEE-504, замечание ревью (а)). onnxruntime на обрезанном или
-//  испорченном `.onnx` бросает C++-исключение (`Ort::Exception: Protobuf parsing failed`), sherpa-onnx
+//  ФАЙЛ МОДЕЛИ НЕ ТОЙ ДЛИНЫ (MEE-504, замечание ревью (а); IR-157, MEE-513). onnxruntime на обрезанном
+//  или испорченном `.onnx` бросает C++-исключение (`Ort::Exception: Protobuf parsing failed`), sherpa-onnx
 //  его не ловит, Swift его не ловит тоже — процесс сервиса завершается `std::terminate`. До фабрики
-//  распознавателя длины файлов модели сверяются с `files[].sizeBytes` из `.manifest.json` каталога
-//  модели (C-014 §2.1: пишет `model-manager` после сверки sha256). Не совпала — `modelMissing`: модели
-//  в пригодном виде нет, её нужно скачать заново. Нет манифеста или он не читается — сверки нет
-//  (каталог, собранный вручную; отказ манифеста — забота `model-manager`, не движка). Испорченное
-//  содержимое той же длины эта проверка не ловит: sha256 на 305 МиБ при каждом `transcribe` —
-//  отдельное решение (вопрос в MEE-504).
+//  распознавателя длины `model.int8.onnx` и `tokens.txt` сверяются с `files[].sizeBytes` из `.manifest.json`
+//  каталога модели (C-014 §2.1: пишет `model-manager` после сверки sha256). Не совпала — `modelMissing`:
+//  модели в пригодном виде нет, её нужно скачать заново (module-map v1.23, «Файлы модели»; C-011
+//  «Поведение»). Так же отвечает движок на каталог без `.manifest.json`, с нечитаемым манифестом или
+//  с манифестом без записи об одном из двух файлов: проверить длину нечем — модель не загружается
+//  (в Z6 обрезанный файл без манифеста давал `serviceCrashed`). Подробности — имя файла, ожидаемая и
+//  найденная длина — идут в журнал сервиса замыканием `log` (в `Core` нет `os`, как в `ModelManager`),
+//  в `EngineError` — только `modelId` и `version`. Испорченное содержимое той же длины эта проверка не
+//  ловит: sha256 на 305 МиБ при каждом `transcribe` — вне Среза 1.
+//
+//  МЕТКА ПЕРВОГО СЛОВА КУСКА (IR-157, MEE-513). sherpa-onnx ставит первому токену куска кадр 0, поэтому
+//  `recognizeChannel` считает начало энергии (`SpeechOnset`) по тому же PCM, что получил распознаватель,
+//  и передаёт его `TokenAssembler` — для каждого куска, включая первый кусок дорожки.
 
 import DomainCore
 import EngineKit
@@ -49,15 +56,20 @@ public final class GigaAMEngine: TranscriptionEngine {
     private let audioSource: any GigaAMAudioSource
     private let recognizerFactory: any GigaAMRecognizerFactory
     private let clock: @Sendable () -> Date
+    private let log: @Sendable (String) -> Void
 
+    /// - Parameter log: журнал сервиса — причина `modelMissing` при проверке каталога модели (файл,
+    ///   ожидаемая и найденная длина). В `Core` нет `os`: `os.Logger` подставляет точка входа сервиса.
     public init(
         audioSource: any GigaAMAudioSource,
         recognizerFactory: any GigaAMRecognizerFactory,
-        clock: @escaping @Sendable () -> Date = { Date() }
+        clock: @escaping @Sendable () -> Date = { Date() },
+        log: @escaping @Sendable (String) -> Void
     ) {
         self.audioSource = audioSource
         self.recognizerFactory = recognizerFactory
         self.clock = clock
+        self.log = log
     }
 
     public var engineId: String { Self.engineId }
@@ -111,17 +123,34 @@ public final class GigaAMEngine: TranscriptionEngine {
     }
 
     /// Длины `model.int8.onnx` и `tokens.txt` — как в `.manifest.json` (шапка, «Файл модели не той
-    /// длины»). Ссылка сверяется по файлу, на который указывает.
+    /// длины»). Нет манифеста, он не читается или в нём нет записи о файле — тоже `modelMissing`. Ссылка
+    /// сверяется по файлу, на который указывает.
     private func requireManifestSizes(_ model: ModelBundle) throws {
         let directory = model.directoryURL
-        guard let data = try? Data(contentsOf: directory.appendingPathComponent(Self.manifestFileName)),
-              let manifest = try? DomainJSON.decode(ModelManifestFile.self, from: data) else { return }
-        let checked: Set = [Self.modelFileName, Self.tokensFileName]
-        for file in manifest.descriptor.files where checked.contains(file.name) {
-            let path = directory.appendingPathComponent(file.name).resolvingSymlinksInPath().path
-            let size = (try? FileManager.default.attributesOfItem(atPath: path))?[.size] as? NSNumber
-            guard size?.int64Value == file.sizeBytes else {
-                throw EngineError.modelMissing(modelId: model.modelId, version: model.version)
+        let missing = EngineError.modelMissing(modelId: model.modelId, version: model.version)
+        let subject = "modelId=\(model.modelId) version=\(model.version)"
+        guard let data = try? Data(contentsOf: directory.appendingPathComponent(Self.manifestFileName)) else {
+            log("modelMissing \(subject): нет \(Self.manifestFileName) в каталоге модели, длины сверить нечем")
+            throw missing
+        }
+        let manifest: ModelManifestFile
+        do {
+            manifest = try DomainJSON.decode(ModelManifestFile.self, from: data)
+        } catch {
+            log("modelMissing \(subject): \(Self.manifestFileName) не читается: \(error)")
+            throw missing
+        }
+        for name in [Self.modelFileName, Self.tokensFileName] {
+            guard let file = manifest.descriptor.files.first(where: { $0.name == name }) else {
+                log("modelMissing \(subject): в \(Self.manifestFileName) нет записи о файле \(name)")
+                throw missing
+            }
+            let path = directory.appendingPathComponent(name).resolvingSymlinksInPath().path
+            let size = ((try? FileManager.default.attributesOfItem(atPath: path))?[.size] as? NSNumber)?.int64Value
+            guard size == file.sizeBytes else {
+                let found = size.map(String.init) ?? "не прочитана"
+                log("modelMissing \(subject): файл \(name) — ожидалось \(file.sizeBytes) байт, найдено \(found)")
+                throw missing
             }
         }
     }
@@ -169,11 +198,16 @@ public final class GigaAMEngine: TranscriptionEngine {
             let length = ChunkCutter.cutLength(window: window, isLast: endMs == durationMs)
             let chunkMs = length * 1_000 / ChunkCutter.sampleRate
             guard chunkMs > 0 else { break }
-            let chunk = try translated { try recognizer.recognize(samples: Array(window.prefix(length))) }
+            let samples = Array(window.prefix(length))
+            let chunk = try translated { try recognizer.recognize(samples: samples) }
             try Self.checkCancelled()
+            let onsetMs = SpeechOnset.speechOnsetMs(
+                samples: samples, secondTokenMs: TokenAssembler.secondTokenMs(in: chunk)
+            )
             drafts += try translated {
                 try TokenAssembler.assemble(
-                    chunk, shiftMs: positionMs + audio.offsetMs, chunkDurationMs: chunkMs, channel: audio.channel
+                    chunk, shiftMs: positionMs + audio.offsetMs, chunkDurationMs: chunkMs, channel: audio.channel,
+                    speechOnsetMs: onsetMs
                 )
             }
             positionMs += chunkMs
