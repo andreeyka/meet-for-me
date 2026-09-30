@@ -103,7 +103,8 @@ final class GigaAMEngineTests: GigaAMEngineTestCase {
         let mic = try audioRef(.mic)
         let first = try await run(try request([system, mic]))
         XCTAssertEqual(first.segments.map(\.channel), [.system, .mic])
-        XCTAssertEqual(first.segments.map(\.startMs), [0, 0])
+        // источник начинается с 400 мс тишины: начало первого слова — по энергии (IR-157, MEE-513)
+        XCTAssertEqual(first.segments.map(\.startMs), [400, 400])
         let second = try await run(try request([mic, system]))
         XCTAssertEqual(second.segments.map(\.channel), [.mic, .system])
     }
@@ -112,7 +113,8 @@ final class GigaAMEngineTests: GigaAMEngineTestCase {
         source.durations[recordingId] = 5_000
         let mic = try audioRef(.mic, offsetMs: 1_500)
         let transcript = try await run(try request([mic]))
-        XCTAssertEqual(transcript.segments.first?.startMs, 1_500)
+        // 1 500 мс сдвига + 400 мс тишины в начале источника (начало энергии, IR-157)
+        XCTAssertEqual(transcript.segments.first?.startMs, 1_900)
     }
 
     // Критерий 11
