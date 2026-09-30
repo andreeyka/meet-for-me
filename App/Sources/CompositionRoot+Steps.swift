@@ -14,6 +14,7 @@ import DomainCore
 import EngineXPCClient
 import Foundation
 import ModelManager
+import os
 import Permissions
 import SecretStoreKeychain
 import Storage
@@ -178,7 +179,16 @@ extension CompositionRoot {
     /// MEE-480 (C-012 v12 §1.1): запись и путь к дорожкам клиент берёт из того же хранилища
     /// и той же раскладки `FileLayout`, что получает фасад (`makeFacade` выше): вторая
     /// раскладка разошлась бы с первой в пути к файлу.
+    ///
+    /// MEE-511 (IR-155; module-map, domain-core, «Журнал»): причину `app.internalError` обработчики
+    /// пишут в замыкание `log`; здесь оно — `os.Logger`. `DomainCore` журнала не знает (сборка на
+    /// Linux). Строка несёт тип и описание ошибки и идентификатор задачи, без текста транскрипта и
+    /// названий встреч, поэтому `privacy: .public` — иначе причина в Console скрыта.
     static func registerHandlers(_ partial: PartialGraph, facade: AppFacadeImpl) async {
+        let jobLog = Logger(subsystem: "meetforme.domain-core", category: "jobs")
+        let logInternalError: @Sendable (String) -> Void = { line in
+            jobLog.error("\(line, privacy: .public)")
+        }
         let storage = partial.context.storage
         let fileLayout = partial.context.fileLayout
         let engineClient = EngineXPCClient(
@@ -189,7 +199,9 @@ extension CompositionRoot {
         )
         await registerOrCrash(TranscodeJobHandler(), into: partial.jobQueue)
         await registerOrCrash(
-            TranscribeJobHandler(port: engineClient, transcripts: storage.transcriptRepository()),
+            TranscribeJobHandler(
+                port: engineClient, transcripts: storage.transcriptRepository(), log: logInternalError
+            ),
             into: partial.jobQueue
         )
         await registerOrCrash(DiarizeJobHandler(), into: partial.jobQueue)
@@ -200,7 +212,8 @@ extension CompositionRoot {
                 meetings: storage.meetingRepository(),
                 persons: storage.personRepository(),
                 speakerProfiles: storage.speakerProfileRepository(),
-                appFacade: facade
+                appFacade: facade,
+                log: logInternalError
             ),
             into: partial.jobQueue
         )
